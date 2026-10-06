@@ -1,0 +1,5 @@
+# Binaires de compilation Cargo
+/target
+
+# Secrets et configuration locale
+.env

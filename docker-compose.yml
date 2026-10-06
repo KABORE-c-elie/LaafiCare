@@ -1,0 +1,25 @@
+# PostgreSQL de développement local — jamais utilisé en production.
+services:
+  db:
+    image: postgres:18-alpine
+    container_name: laaficare-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: laaficare
+      POSTGRES_PASSWORD: MOT_DE_PASSE_RETIRE
+      POSTGRES_DB: laaficare
+    ports:
+      # Exposé uniquement sur la machine locale, pas sur le réseau.
+      # 5433 côté hôte : le 5432 est pris par le conteneur d'un autre projet.
+      - "127.0.0.1:5433:5432"
+    volumes:
+      # PostgreSQL 18+ : le volume se monte sur /var/lib/postgresql (plus /data).
+      - laaficare_pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U laaficare -d laaficare"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  laaficare_pgdata:

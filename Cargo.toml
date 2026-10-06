@@ -1,0 +1,29 @@
+[package]
+name = "laaficare-backend"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+argon2 = "0.6.0"
+axum = "0.8.9"
+axum-extra = { version = "0.12.6", default-features = false, features = ["typed-header"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+dotenvy = "0.15.7"
+jsonwebtoken = { version = "11.1.0", default-features = false, features = ["rust_crypto"] }
+rand = "0.10.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "migrate", "macros"] }
+thiserror = "2.0.20"
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"
+# Normalisation NFC des mots de passe avant hachage (décision N1, NIST SP
+# 800-63B rév. 4 §3.1.1.2). Déjà présente dans le projet via sqlx-postgres
+# (stringprep), à la même version : la déclarer ne compile rien de nouveau.
+unicode-normalization = "0.1.25"
+# Fonctionnalité serde (décision A4) : Uuid lisible et écrit en JSON et dans
+# les URL (Path). Cargo fusionne les fonctionnalités : sqlx::types::Uuid est
+# le même type (une seule version d'uuid dans Cargo.lock).
+uuid = { version = "1.26.1", features = ["serde"] }
