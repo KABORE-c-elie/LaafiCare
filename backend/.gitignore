@@ -1,0 +1,27 @@
+# Binaires de compilation Cargo. Cargo.lock reste suivi : pour une
+# application (et non une bibliothèque), la doc Cargo recommande de le
+# versionner, pour que chaque compilation utilise exactement les mêmes
+# versions de dépendances.
+/target
+
+# Sauvegardes laissées par rustfmt (modèle de .gitignore de `cargo new`).
+**/*.rs.bk
+
+# Secrets et configuration locale : DATABASE_URL, secret JWT, et bientôt
+# la clé de chiffrement des secrets TOTP. Jamais dans le dépôt, même
+# privé : un dépôt se clone, se partage et garde tout son historique.
+.env
+.env.*
+
+# Réglages personnels de Claude Code (permissions accordées sur cette
+# machine). La doc Claude Code prévoit que settings.local.json ne soit pas
+# versionné ; un futur .claude/settings.json partagé, lui, le serait.
+.claude/settings.local.json
+
+# Éditeurs et systèmes d'exploitation
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store

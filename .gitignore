@@ -1,21 +1,13 @@
-# Binaires de compilation Cargo. Cargo.lock reste suivi : pour une
-# application (et non une bibliothèque), la doc Cargo recommande de le
-# versionner, pour que chaque compilation utilise exactement les mêmes
-# versions de dépendances.
-/target
+# Racine du dépôt LaafiCare (CLAUDE.md, docs, backend, et plus tard les
+# frontends). Chaque sous-projet garde son propre .gitignore pour ses
+# fichiers de compilation (ex. backend/.gitignore pour backend/target) :
+# Git applique un .gitignore au dossier qui le contient.
 
-# Sauvegardes laissées par rustfmt (modèle de .gitignore de `cargo new`).
-**/*.rs.bk
-
-# Secrets et configuration locale : DATABASE_URL, secret JWT, et bientôt
-# la clé de chiffrement des secrets TOTP. Jamais dans le dépôt, même
-# privé : un dépôt se clone, se partage et garde tout son historique.
+# Secrets, où qu'ils soient : jamais dans le dépôt, même privé.
 .env
 .env.*
 
-# Réglages personnels de Claude Code (permissions accordées sur cette
-# machine). La doc Claude Code prévoit que settings.local.json ne soit pas
-# versionné ; un futur .claude/settings.json partagé, lui, le serait.
+# Réglages personnels de Claude Code, à tous les niveaux.
 .claude/settings.local.json
 
 # Éditeurs et systèmes d'exploitation
@@ -25,3 +17,5 @@
 Thumbs.db
 desktop.ini
 .DS_Store
+# Fichiers de verrou temporaires de Word pendant l'ouverture d'un .docx.
+~$*

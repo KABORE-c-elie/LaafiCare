@@ -1,0 +1,376 @@
+<?xml version="1.0" ?>
+<mxfile host="app.diagrams.net" modified="2026-01-01T00:00:00.000Z" agent="LaafiCare" version="24.0.0">
+  <diagram name="Vue d'ensemble" id="overview">
+    <mxGraphModel dx="900" dy="700" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="700" pageHeight="950" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="boundary" style="rounded=8;whiteSpace=wrap;html=1;verticalAlign=top;fillColor=none;strokeColor=#666666;fontSize=14;fontStyle=1;align=center;spacingTop=10;" parent="1" vertex="1" value="LaafiCare — Système connecté via le NIP patient">
+          <mxGeometry x="200" y="150" width="300" height="730" as="geometry"/>
+        </mxCell>
+        <mxCell id="a_patient" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1" value="Patient">
+          <mxGeometry x="40" y="200" width="40" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="a_medecin" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1" value="Médecin /
+Sage-femme">
+          <mxGeometry x="40" y="340" width="40" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="a_pharma" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1" value="Pharmacien">
+          <mxGeometry x="40" y="480" width="40" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="a_bio" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1" value="Biologiste">
+          <mxGeometry x="40" y="620" width="40" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="a_assur" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1" value="Agent
+Assurance">
+          <mxGeometry x="40" y="760" width="40" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="m_patient" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="App Mobile
+Patient">
+          <mxGeometry x="250" y="210" width="180" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="m_hopital" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="App Web
+Hôpital">
+          <mxGeometry x="250" y="350" width="180" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="m_pharma" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="App Web
+Pharmacie">
+          <mxGeometry x="250" y="490" width="180" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="m_labo" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="App Web
+Laboratoire">
+          <mxGeometry x="250" y="630" width="180" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="m_assur" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="App Web
+Assurance">
+          <mxGeometry x="250" y="770" width="180" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge0" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="a_patient" target="m_patient" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge1" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="a_medecin" target="m_hopital" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge2" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="a_pharma" target="m_pharma" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge3" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="a_bio" target="m_labo" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge4" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="a_assur" target="m_assur" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="App Mobile Patient" id="patient">
+    <mxGraphModel dx="900" dy="700" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="750" pageHeight="600" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="boundary" style="rounded=8;whiteSpace=wrap;html=1;verticalAlign=top;fillColor=none;strokeColor=#666666;fontSize=14;fontStyle=1;align=center;spacingTop=10;" parent="1" vertex="1" value="App mobile patient">
+          <mxGeometry x="180" y="50" width="460" height="480" as="geometry"/>
+        </mxCell>
+        <mxCell id="ap_patient" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1" value="Patient">
+          <mxGeometry x="40" y="280" width="40" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="p_dossier" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Consulter
+dossier médical">
+          <mxGeometry x="220" y="90" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="p_medoc" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Localiser
+médicament
+disponible">
+          <mxGeometry x="430" y="90" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="p_resultats" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Voir résultats
+biologiques
+validés">
+          <mxGeometry x="220" y="200" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="p_assurance" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Suivre ses droits
+d'assurance">
+          <mxGeometry x="430" y="200" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="p_prenatal" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Suivi prénatal —
+auto-questionnaire">
+          <mxGeometry x="220" y="310" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="p_offline" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Fonctionner
+hors connexion">
+          <mxGeometry x="430" y="310" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="p_alerte" style="ellipse;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1" value="Signaler un signe
+de danger">
+          <mxGeometry x="220" y="420" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge0" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="ap_patient" target="p_dossier" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge1" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="ap_patient" target="p_medoc" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge2" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="ap_patient" target="p_resultats" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge3" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="ap_patient" target="p_assurance" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge4" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="ap_patient" target="p_prenatal" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge5" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="ap_patient" target="p_offline" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge6" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="ap_patient" target="p_alerte" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="App Web Hôpital" id="hopital">
+    <mxGraphModel dx="900" dy="700" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="750" pageHeight="600" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="boundary" style="rounded=8;whiteSpace=wrap;html=1;verticalAlign=top;fillColor=none;strokeColor=#666666;fontSize=14;fontStyle=1;align=center;spacingTop=10;" parent="1" vertex="1" value="App web hôpital">
+          <mxGeometry x="180" y="40" width="460" height="490" as="geometry"/>
+        </mxCell>
+        <mxCell id="ah_medecin" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1" value="Médecin">
+          <mxGeometry x="40" y="140" width="40" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="ah_sagefemme" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1" value="Sage-femme /
+Gynécologue">
+          <mxGeometry x="40" y="400" width="40" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="h_dossier" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Consulter dossier
+via NIP">
+          <mxGeometry x="220" y="80" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="h_ordo" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Prescrire une
+ordonnance">
+          <mxGeometry x="430" y="80" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="h_analyse" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Prescrire une
+analyse biologique">
+          <mxGeometry x="220" y="190" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="h_ref" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Référencer un
+patient">
+          <mxGeometry x="430" y="190" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="h_cpn" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" parent="1" vertex="1" value="Suivre une
+consultation CPN">
+          <mxGeometry x="220" y="320" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="h_naissance" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" parent="1" vertex="1" value="Enregistrer une
+naissance (NIP bébé)">
+          <mxGeometry x="430" y="320" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="h_alerte" style="ellipse;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1" value="Recevoir alerte signe
+de danger">
+          <mxGeometry x="220" y="430" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge0" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="ah_medecin" target="h_dossier" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge1" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="ah_medecin" target="h_ordo" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge2" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="ah_medecin" target="h_analyse" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge3" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="ah_medecin" target="h_ref" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge4" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="ah_sagefemme" target="h_cpn" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge5" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="ah_sagefemme" target="h_naissance" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge6" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="ah_sagefemme" target="h_alerte" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="App Web Pharmacie" id="pharmacie">
+    <mxGraphModel dx="900" dy="700" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="750" pageHeight="500" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="boundary" style="rounded=8;whiteSpace=wrap;html=1;verticalAlign=top;fillColor=none;strokeColor=#666666;fontSize=14;fontStyle=1;align=center;spacingTop=10;" parent="1" vertex="1" value="App web pharmacie">
+          <mxGeometry x="180" y="40" width="460" height="400" as="geometry"/>
+        </mxCell>
+        <mxCell id="aph_pharma" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1" value="Pharmacien">
+          <mxGeometry x="40" y="220" width="40" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="ph_delivrer" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Délivrer via scan
+du NIP">
+          <mxGeometry x="220" y="80" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="ph_allergie" style="ellipse;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1" value="Vérifier allergie —
+alerte bloquante">
+          <mxGeometry x="430" y="80" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="ph_dci" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Substituer par DCI
+si rupture">
+          <mxGeometry x="220" y="190" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="ph_contact" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Contacter le
+médecin prescripteur">
+          <mxGeometry x="430" y="190" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="ph_stock" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Gérer le stock —
+alerte de seuil">
+          <mxGeometry x="220" y="300" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="ph_inventaire" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Inventaire express —
+corrige les écarts">
+          <mxGeometry x="430" y="300" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge0" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="aph_pharma" target="ph_delivrer" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge1" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="aph_pharma" target="ph_allergie" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge2" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="aph_pharma" target="ph_dci" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge3" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="aph_pharma" target="ph_contact" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge4" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="aph_pharma" target="ph_stock" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge5" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="aph_pharma" target="ph_inventaire" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="App Web Laboratoire" id="laboratoire">
+    <mxGraphModel dx="900" dy="700" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="780" pageHeight="500" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="boundary" style="rounded=8;whiteSpace=wrap;html=1;verticalAlign=top;fillColor=none;strokeColor=#666666;fontSize=14;fontStyle=1;align=center;spacingTop=10;" parent="1" vertex="1" value="App web laboratoire">
+          <mxGeometry x="190" y="40" width="480" height="400" as="geometry"/>
+        </mxCell>
+        <mxCell id="al_bio" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1" value="Biologiste">
+          <mxGeometry x="40" y="220" width="40" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="l_demande" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Recevoir demande —
+bulletin auto-complété">
+          <mxGeometry x="220" y="80" width="190" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="l_saisie" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Saisir résultat —
+validation technique">
+          <mxGeometry x="440" y="80" width="190" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="l_validation" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Valider résultat —
+validation biologique">
+          <mxGeometry x="220" y="190" width="190" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="l_liberer" style="ellipse;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1" value="Libérer résultat —
+examens sensibles">
+          <mxGeometry x="440" y="190" width="190" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="l_reactifs" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Gérer réactifs —
+alerte de seuil">
+          <mxGeometry x="220" y="300" width="190" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="l_transmettre" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Transmettre —
+sans export PDF">
+          <mxGeometry x="440" y="300" width="190" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge0" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="al_bio" target="l_demande" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge1" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="al_bio" target="l_saisie" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge2" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="al_bio" target="l_validation" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge3" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="al_bio" target="l_liberer" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge4" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="al_bio" target="l_reactifs" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge5" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="al_bio" target="l_transmettre" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge6" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="l_saisie" target="l_validation" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge7" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="l_validation" target="l_liberer" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="App Web Assurance" id="assurance">
+    <mxGraphModel dx="900" dy="700" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="780" pageHeight="500" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="boundary" style="rounded=8;whiteSpace=wrap;html=1;verticalAlign=top;fillColor=none;strokeColor=#666666;fontSize=14;fontStyle=1;align=center;spacingTop=10;" parent="1" vertex="1" value="App web assurance">
+          <mxGeometry x="190" y="40" width="480" height="400" as="geometry"/>
+        </mxCell>
+        <mxCell id="aas_agent" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1" value="Agent
+d'assurance">
+          <mxGeometry x="40" y="220" width="40" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="as_generer" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Générer demande —
+automatique depuis l'acte">
+          <mxGeometry x="220" y="80" width="190" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="as_traiter" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Traiter dossier —
+cible : moins de 72h">
+          <mxGeometry x="450" y="80" width="190" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="as_contrat" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Gérer contrat —
+bénéficiaires, plafond">
+          <mxGeometry x="220" y="190" width="190" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="as_suspension" style="ellipse;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1" value="Notifier suspension —
+alerte immédiate">
+          <mxGeometry x="450" y="190" width="190" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="as_calcul" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Calculer prise en
+charge et reste à payer">
+          <mxGeometry x="220" y="300" width="190" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="as_paiement" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1" value="Encaisser reste à payer —
+Orange / Moov Money">
+          <mxGeometry x="450" y="300" width="190" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge0" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="aas_agent" target="as_generer" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge1" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="aas_agent" target="as_traiter" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge2" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="aas_agent" target="as_contrat" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge3" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="aas_agent" target="as_suspension" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge4" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="aas_agent" target="as_calcul" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge5" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="aas_agent" target="as_paiement" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge6" style="endArrow=none;html=1;strokeColor=#666666;" parent="1" edge="1" source="as_generer" target="as_traiter" value="">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
