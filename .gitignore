@@ -6,6 +6,16 @@
 # Secrets, où qu'ils soient : jamais dans le dépôt, même privé.
 .env
 .env.*
+# Exception : modèle sans aucun secret, aux valeurs volontairement
+# inutilisables (doc Git, gitignore : « ! » réinclut un fichier exclu par un
+# motif précédent).
+!.env.example
+
+# Documents qui ne doivent jamais être suivis : le mémoire MUNASEB (droits
+# d'auteur) et les entretiens (données personnelles des personnes
+# interrogées). Les textes réglementaires publics restent suivis.
+docs/Memoire_Soutenance1.docx
+docs/entretiens/
 
 # Réglages personnels de Claude Code, à tous les niveaux.
 .claude/settings.local.json

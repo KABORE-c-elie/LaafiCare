@@ -115,9 +115,12 @@ CREATE TABLE piece_justificative (
     -- - Listes explicites au lieu de `\s` : la doc (9.7.3.2) dit que
     --   l'appartenance d'un caractère non ASCII à [[:space:]] dépend de la
     --   collation et « can vary across platforms ».
-    -- - Échappements `\uXXXX` / `\UXXXXXXXX` (doc 9.7.3.3, « always taken
-    --   as ordinary characters » entre crochets) : aucun caractère invisible
-    --   dans ce fichier ; chaque caractère est listé un par un, sans plage.
+    -- - Échappements longs `\UXXXXXXXX` (doc 9.7.3.3, « always taken as
+    --   ordinary characters » entre crochets) : aucun caractère invisible ou
+    --   trompeur dans ce fichier, qu'un éditeur pourrait modifier sans que
+    --   personne le voie ; chaque caractère est listé un par un, sans plage.
+    --   Pas la forme courte `\uXXXX` : certains outils d'édition la
+    --   remplacent d'office par le caractère lui-même.
     --   Les listes sont coupées en plusieurs chaînes : deux chaînes
     --   séparées par un retour à la ligne sont concaténées (doc 4.1.2.1).
     --
@@ -132,13 +135,13 @@ CREATE TABLE piece_justificative (
                                regexp_replace(
                                    regexp_replace(
                                        upper(numero COLLATE "C"),
-                                       '[\u0009\u000A\u000B\u000C\u000D \u0085  '
-                                       '           '
-                                       '    　]',
+                                       '[\U00000009\U0000000A\U0000000B\U0000000C\U0000000D\U00000020\U00000085\U000000A0\U00001680'
+                                       '\U00002000\U00002001\U00002002\U00002003\U00002004\U00002005\U00002006\U00002007\U00002008\U00002009\U0000200A'
+                                       '\U00002028\U00002029\U0000202F\U0000205F\U00003000]',
                                        '', 'g'),
-                                   '[֊־᐀᠆‐‑‒–—―'
-                                   '⁓⁻₋−⸗⸚⸺⸻⹀⹝'
-                                   '〜〰゠︱︲﹘﹣－\U00010D6E\U00010EAD]',
+                                   '[\U0000058A\U000005BE\U00001400\U00001806\U00002010\U00002011\U00002012\U00002013\U00002014\U00002015'
+                                   '\U00002053\U0000207B\U0000208B\U00002212\U00002E17\U00002E1A\U00002E3A\U00002E3B\U00002E40\U00002E5D'
+                                   '\U0000301C\U00003030\U000030A0\U0000FE31\U0000FE32\U0000FE58\U0000FE63\U0000FF0D\U00010D6E\U00010EAD]',
                                    '-', 'g'),
                                '^N[°ºO.]', '')
                        ) STORED,

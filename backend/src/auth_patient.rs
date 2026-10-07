@@ -20,7 +20,7 @@ use sqlx::types::Uuid;
 
 use crate::jwt::JwtService;
 use crate::mot_de_passe::RegleMotDePasse;
-use crate::verrouillage::{self, ErreurConnexion};
+use crate::verrouillage::{self, ErreurConnexion, Verification};
 use crate::{mot_de_passe, nip, otp, telephone};
 
 #[derive(Debug, thiserror::Error)]
@@ -288,12 +288,20 @@ pub async fn se_connecter(
     .fetch_optional(pool)
     .await?;
 
-    verrouillage::verifier(pool, compte.map(|(compte_id, _)| compte_id), mot_de_passe_saisi)
+    let verification = verrouillage::verifier(pool, compte.map(|(compte_id, _)| compte_id), mot_de_passe_saisi)
         .await
         .map_err(|erreur| match erreur {
             ErreurConnexion::IdentifiantsInvalides => ErreurAuthPatient::IdentifiantsInvalides,
             ErreurConnexion::Interne(detail) => ErreurAuthPatient::Interne(detail),
         })?;
+
+    // Décision V2 : jamais de jeton complet sans le code TOTP. Le jeton
+    // intermédiaire qui mène à la saisie du code arrive à l'étape 3.6 ;
+    // d'ici là, aucune route ne permet d'activer un TOTP, ce cas ne peut
+    // donc pas se produire, mais il est refusé par sécurité.
+    if let Verification::SecondFacteurRequis(_) = verification {
+        return Err(ErreurAuthPatient::IdentifiantsInvalides);
+    }
 
     // `verifier` n'accepte qu'un compte existant : `compte` est forcément
     // présent ici.

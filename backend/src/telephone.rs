@@ -23,8 +23,9 @@ pub struct TelephoneInvalide;
 /// Caractères de la propriété Unicode *Dash* (Unicode 18.0.0,
 /// `PropList.txt`, 31 points de code) : toutes les sortes de tirets qu'un
 /// clavier de téléphone peut insérer, pas seulement le tiret simple
-/// (décision T2).
-fn est_tiret(c: char) -> bool {
+/// (décision T2). Publique : le test `caracteres_migrations` s'en sert
+/// aussi, pour ne pas tenir une seconde copie de la liste.
+pub fn est_tiret(c: char) -> bool {
     matches!(
         c,
         '\u{002D}'

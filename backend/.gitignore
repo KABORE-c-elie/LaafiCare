@@ -12,6 +12,11 @@
 # privé : un dépôt se clone, se partage et garde tout son historique.
 .env
 .env.*
+# Exception : modèle sans aucun secret, aux valeurs volontairement
+# inutilisables. Répétée ici : ce fichier l'emporte sur le .gitignore racine
+# pour le dossier backend (doc Git, gitignore : le fichier le plus proche a
+# priorité).
+!.env.example
 
 # Réglages personnels de Claude Code (permissions accordées sur cette
 # machine). La doc Claude Code prévoit que settings.local.json ne soit pas

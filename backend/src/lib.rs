@@ -18,4 +18,5 @@ pub mod notification;
 pub mod otp;
 pub mod sms;
 pub mod telephone;
+pub mod totp;
 pub mod verrouillage;

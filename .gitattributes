@@ -1,0 +1,12 @@
+# Migrations SQL toujours en LF, quel que soit core.autocrlf : SQLx garde
+# l'empreinte de chaque migration appliquée, fins de ligne comprises. Une
+# migration extraite en CRLF sur une autre machine aurait une autre
+# empreinte, et le serveur refuserait de démarrer (section 13 du CLAUDE.md).
+#
+# Doc Git, gitattributes : « eol » réglé à « lf » garde dans le répertoire
+# de travail les fins de ligne de l'index, et active « text » s'il n'est pas
+# précisé ; quand « eol » est précisé, core.autocrlf ne s'applique plus.
+# Motif relatif au dossier de ce fichier, règles de .gitignore : « * » ne
+# traverse pas les « / », seuls les fichiers directement dans
+# backend/migrations sont visés.
+backend/migrations/*.sql text eol=lf

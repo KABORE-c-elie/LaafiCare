@@ -9,6 +9,10 @@ pub struct Config {
     pub database_url: String,
     pub server_port: u16,
     pub jwt_secret: String,
+    /// Clé AES-256 du chiffrement des secrets TOTP (décision Z4), distincte
+    /// du secret JWT. Sa perte rend tous les TOTP inutilisables : en
+    /// production, elle est sauvegardée à part (section 14).
+    pub totp_cle_chiffrement: [u8; 32],
 }
 
 // `thiserror` (déjà dans le Cargo.toml) : chaque variante porte le message
@@ -29,6 +33,10 @@ pub enum ConfigError {
     // comme dans l'exemple officiel du crate `jsonwebtoken`).
     #[error("JWT_SECRET trop court : {0} caractères, 32 minimum (RFC 7518 §3.2, HS256)")]
     SecretJwtTropCourt(usize),
+
+    // La valeur n'est jamais reprise dans le message : c'est une clé.
+    #[error("TOTP_CLE_CHIFFREMENT invalide : 64 caractères hexadécimaux attendus (32 octets, AES-256)")]
+    CleTotpInvalide,
 }
 
 impl Config {
@@ -38,11 +46,13 @@ impl Config {
         let database_url = lire("DATABASE_URL")?;
         let server_port = parse_port(&lire("SERVER_PORT")?)?;
         let jwt_secret = valider_secret_jwt(lire("JWT_SECRET")?)?;
+        let totp_cle_chiffrement = decoder_cle_totp(&lire("TOTP_CLE_CHIFFREMENT")?)?;
 
         Ok(Config {
             database_url,
             server_port,
             jwt_secret,
+            totp_cle_chiffrement,
         })
     }
 }
@@ -74,9 +84,43 @@ fn valider_secret_jwt(valeur: String) -> Result<String, ConfigError> {
     Ok(valeur)
 }
 
+// Décision X4 : 64 caractères hexadécimaux, décodés avec la bibliothèque
+// standard, sans nouvelle dépendance. Les caractères sont vérifiés un par un
+// avant `from_str_radix`, qui accepterait un « + » initial (doc
+// `u8::from_str_radix`).
+fn decoder_cle_totp(valeur: &str) -> Result<[u8; 32], ConfigError> {
+    let octets = valeur.as_bytes();
+    if octets.len() != 64 || !octets.iter().all(u8::is_ascii_hexdigit) {
+        return Err(ConfigError::CleTotpInvalide);
+    }
+    let mut cle = [0u8; 32];
+    for (octet, paire) in cle.iter_mut().zip(octets.chunks_exact(2)) {
+        // Toujours de l'ASCII hexadécimal ici : ni l'UTF-8 ni la conversion
+        // ne peuvent échouer.
+        let paire = std::str::from_utf8(paire).map_err(|_| ConfigError::CleTotpInvalide)?;
+        *octet = u8::from_str_radix(paire, 16).map_err(|_| ConfigError::CleTotpInvalide)?;
+    }
+    Ok(cle)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cle_totp_hexadecimale_decodee() {
+        let cle = decoder_cle_totp(&"0aFf".repeat(16)).unwrap();
+        assert_eq!(cle[0], 0x0a);
+        assert_eq!(cle[1], 0xff);
+        assert_eq!(cle[31], 0xff);
+    }
+
+    #[test]
+    fn cle_totp_invalide_refusee() {
+        for valeur in ["ab".repeat(31), "ab".repeat(33), format!("+{}", "a".repeat(63)), "zz".repeat(32)] {
+            assert!(matches!(decoder_cle_totp(&valeur), Err(ConfigError::CleTotpInvalide)), "{valeur}");
+        }
+    }
 
     #[test]
     fn port_valide() {

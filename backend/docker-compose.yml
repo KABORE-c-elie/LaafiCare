@@ -6,7 +6,13 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: laaficare
-      POSTGRES_PASSWORD: MOT_DE_PASSE_RETIRE
+      # Lu dans backend/.env (non suivi par Git), à côté de ce fichier : doc
+      # Docker Compose, « Variable interpolation ». « :? » arrête Compose
+      # avec ce message si la variable est absente ou vide. Seule cette
+      # variable entre dans le conteneur, pas tout le .env (JWT, clé TOTP).
+      # Attention : l'image postgres n'applique ce mot de passe qu'à la
+      # création du volume ; le changer ensuite ne change pas celui de la base.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?définir POSTGRES_PASSWORD dans backend/.env (voir .env.example)}
       POSTGRES_DB: laaficare
     ports:
       # Exposé uniquement sur la machine locale, pas sur le réseau.
