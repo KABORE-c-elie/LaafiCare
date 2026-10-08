@@ -171,9 +171,11 @@ Un *test* est un petit programme qui vérifie automatiquement qu'une règle est 
 
 ```
 cargo test                                   # tests sans base de données
-cargo test -- --include-ignored              # tous les tests, PostgreSQL démarré
-cargo test --lib -- --include-ignored totp   # seulement ceux dont le nom contient « totp »
+cargo test --no-fail-fast -- --include-ignored   # tous les tests, PostgreSQL démarré
+cargo test --lib -- --include-ignored totp        # seulement ceux dont le nom contient « totp »
 ```
+
+`--no-fail-fast` fait tourner tous les groupes de tests même quand l'un d'eux échoue ; sans lui, Cargo s'arrête au premier groupe en échec et les suivants ne sont jamais lancés.
 
 Les tests qui utilisent la base créent chacun une base temporaire, supprimée ensuite : la base de développement n'est jamais touchée.
 

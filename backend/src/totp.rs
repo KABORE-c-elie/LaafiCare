@@ -19,6 +19,7 @@ use rand::random_range;
 use sqlx::PgPool;
 use sqlx::types::Uuid;
 use totp_rs::{Algorithm, Builder, Secret, Totp};
+use zeroize::Zeroizing;
 
 use crate::mot_de_passe;
 use crate::verrouillage::{self, ErreurConnexion};
@@ -85,13 +86,26 @@ fn chiffrer_secret(cle: &[u8; 32], compte_id: Uuid, secret: &[u8]) -> Result<(Ve
 
 /// Un échec ici (clé changée, ligne recopiée d'un autre compte, donnée
 /// altérée) est une erreur du serveur, jamais une erreur de saisie.
+///
+/// Le texte clair n'est jamais passé à `Secret::from(Vec<u8>)` : celle-ci
+/// appelle `into_boxed_slice`, qui réalloue quand la capacité dépasse la
+/// longueur — c'est le cas ici, `decrypt` ayant retiré l'étiquette de
+/// 16 octets — et l'ancien bloc serait libéré sans être effacé. Doc
+/// `zeroize` 1.9.0 : son effacement d'un `Vec` « cannot guarantee copies of
+/// the data were not previously made by buffer reallocation ». Le clair
+/// reste donc dans un `Zeroizing` (toute la capacité effacée à la sortie,
+/// erreur comprise), et `Secret` reçoit une copie allouée à la taille exacte
+/// (`Box::from(&[u8])`), qu'il efface lui-même (fonctionnalité zeroize de
+/// totp-rs).
 fn dechiffrer_secret(cle: &[u8; 32], compte_id: Uuid, chiffre: &[u8], nonce: &[u8]) -> Result<Secret, ErreurTotp> {
     let chiffreur = Aes256Gcm::new_from_slice(cle).map_err(interne)?;
     let nonce = Nonce::<Aes256Gcm>::try_from(nonce).map_err(interne)?;
-    let clair = chiffreur
-        .decrypt(&nonce, Payload { msg: chiffre, aad: compte_id.as_bytes() })
-        .map_err(interne)?;
-    Ok(Secret::from(clair))
+    let clair = Zeroizing::new(
+        chiffreur
+            .decrypt(&nonce, Payload { msg: chiffre, aad: compte_id.as_bytes() })
+            .map_err(interne)?,
+    );
+    Ok(Secret::new(Box::from(clair.as_slice())))
 }
 
 fn verifier_version_cle(version_cle: i16) -> Result<(), ErreurTotp> {

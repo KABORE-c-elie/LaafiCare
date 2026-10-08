@@ -97,7 +97,7 @@ Fichier : [`otp.rs`](../backend/src/otp.rs). Source : NIST SP 800-63B.
 | Quelle taille de secret ? | 160 bits, tirés au hasard par un générateur cryptographique (taille recommandée par la RFC 4226). |
 | Et si l'horloge du téléphone dérive ? | Le code précédent et le suivant sont aussi acceptés, soit une marge d'environ 90 secondes. |
 | Un code peut-il resservir ? | Non. Le serveur retient la période du dernier code accepté et refuse tout code de cette période ou d'une précédente, même encore valable. |
-| Le secret est-il protégé ? | Il est **chiffré** en base (AES-256-GCM), avec une clé qui n'est pas dans la base. Le chiffrement est lié au compte : un secret recopié sur un autre compte ne se déchiffre pas. |
+| Le secret est-il protégé ? | Il est **chiffré** en base (AES-256-GCM), avec une clé qui n'est pas dans la base. Le chiffrement est lié au compte : un secret recopié sur un autre compte ne se déchiffre pas. Une fois déchiffré pour vérifier un code, le secret est **effacé de la mémoire** du serveur dès qu'il ne sert plus (bibliothèque `zeroize`). |
 | Que voit l'application d'authentification ? | « LaafiCare » et « Patient », « Professionnel » ou « Administrateur ». Aucun nom ni numéro : ces données pourraient finir dans une sauvegarde en ligne du téléphone. |
 | Et sans le téléphone ? | **10 codes de secours**, donnés une seule fois à l'activation, chacun utilisable une seule fois. Ils sont hachés avec Argon2id, comme un mot de passe. |
 | Activation | Elle demande le mot de passe, et ne devient effective qu'après un premier code correct. |

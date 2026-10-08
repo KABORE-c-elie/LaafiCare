@@ -37,3 +37,17 @@ unicode-normalization = "0.1.25"
 # les URL (Path). Cargo fusionne les fonctionnalités : sqlx::types::Uuid est
 # le même type (une seule version d'uuid dans Cargo.lock).
 uuid = { version = "1.26.1", features = ["serde"] }
+# Effacement du secret TOTP déchiffré (totp.rs, `dechiffrer_secret`), là où
+# la fonctionnalité zeroize de totp-rs ne suffit pas. Déjà présente via
+# aes-gcm et totp-rs, à la même version : la déclarer ne compile rien de
+# nouveau.
+zeroize = "1.9.0"
+
+# Tests en développement : Argon2id (m=19456, t=2, p=1) est très lent sans
+# optimisation. On optimise seulement la crate argon2 (Cargo Book,
+# « Profiles → Overrides »). Les paramètres de hachage ne changent pas, ni le
+# profil de production (`release`, déjà optimisé). Mesuré le 2026-10-08 :
+# tests de la bibliothèque de 101,7 s à 23,3 s ; optimiser aussi blake2
+# n'apporte rien.
+[profile.dev.package.argon2]
+opt-level = 3
