@@ -92,37 +92,47 @@ Toutes consomment la même API Rust/Axum. Le NIP (QR Code) est la clé d'interop
 
 ## 6. Modèle de données — résumé (détail complet dans les diagrammes .drawio du dépôt)
 
-**Hiérarchie `Utilisateur`** (héritage réel, pas un champ `role` générique) — **11 sous-classes, chacune avec son propre compte d'inscription/connexion (aucune délégation entre rôles) :**
-`Utilisateur` (id, nom, prénom, email, téléphone, motDePasseHash, dateCreation)
-→ `Patient` (nip, dateNaissance, sexe, groupeSanguin, adresse)
-→ `Medecin` (numeroOrdre, spécialité, structure)
-→ `Medecin` porte le champ `specialite` (généraliste, gynécologue, etc.) — les spécialités ne sont jamais des classes séparées
-→ `Pharmacien` (numeroOrdre, structure)
-→ `Biologiste` (numeroOrdre, structure)
-→ `AgentAssurance` (assureur)
-→ `Administrateur` (niveauAcces)
-→ `Infirmier` (numeroOrdre, structure, specialite) — actions propres : **exécute des prescriptions** (prélèvement, administration de médicaments, pansements). **La sage-femme est une spécialité d'Infirmier, pas une classe séparée** (décision actée — mêmes fonctions qu'un infirmier, appliquées aux femmes enceintes ; détail et impact sur BF-08 dans l'encadré ci-dessous).
-→ `AgentAccueil` (structure) — inscription patient, vérification identité, gestion administrative de l'assurance
-→ `Major` (structure) — délégué des infirmiers ET des salles : embauche/licenciement d'un infirmier, gestion des salles. Rôle hospitalier, **distinct** de `MajorLaboratoire` ci-dessous.
-→ `ChefDeService` (structure) — délégué des médecins, les gère.
-→ `Directeur` (structure) — pilote l'hôpital dans son ensemble, rapports, pas d'acte médical.
-→ `MajorLaboratoire` (structure) — **statut à confirmer**, et **distinct du `Major` hospitalier** malgré le même mot dans les entretiens (celui-ci gère le stock de réactifs, pas des infirmiers/salles). Ses actions recoupent presque entièrement celles de `Biologiste` + autorité sur le stock. Vérifier avant implémentation si une sous-classe séparée est justifiée ou si un attribut `responsableStock: bool` sur `Biologiste` suffirait.
+**Identité, comptes et rôles d'affectation (révisé le 2026-10-07, Q5 — le détail est en section 14).** Il n'y a plus de hiérarchie de sous-classes de `Utilisateur`. Le modèle est :
+- `utilisateur` : l'identité (nom, prénom, téléphone unique, email) ;
+- `compte` : un compte par type (`patient`, `professionnel`, `administrateur_laaficare`), chacun avec son mot de passe et son verrouillage ;
+- `patient` : NIP (16 chiffres, Luhn), date et lieu de naissance ; `sexe`, `groupeSanguin`, `adresse` à venir ;
+- `affectation` : compte professionnel + structure + **rôle**. Les métiers ci-dessous sont des **valeurs de ce rôle**, jamais des classes ni des comptes séparés. Une personne peut avoir plusieurs affectations.
+
+**Les rôles d'affectation et leurs actions** (liste fermée dans la migration 0012) :
+- `medecin` — examine, diagnostique, dossier médical, prescrit examens et traitements ; déclare une grossesse à risque (BF-08). Spécialités (généraliste, gynécologue…) : jamais des rôles séparés.
+- `infirmier` — **exécute des prescriptions** (prélèvement, administration de médicaments, pansements). **La sage-femme est une spécialité d'infirmier**, pas un rôle séparé : mêmes fonctions, appliquées aux femmes enceintes (impact sur BF-08 dans l'encadré ci-dessous).
+- `pharmacien`, `biologiste`.
+- `agent_accueil` — inscription patient, vérification identité, gestion administrative de l'assurance.
+- `major` — délégué des infirmiers et des salles : invite et désactive les infirmiers (§14), gère les salles. Rôle hospitalier, **distinct** du « major de laboratoire » ci-dessous.
+- `chef_de_service` — délégué des médecins : invite et désactive les médecins (§14).
+- `directeur` — pilote l'hôpital, rapports, pas d'acte médical.
+- `responsable` — crée et gère la structure, invite à tout rôle permis (§14).
+- `agent_assurance_munaseb` — un seul rôle d'agent en V1, sans sous-rôles (§12).
+- L'**administrateur LaafiCare** n'est pas un rôle d'affectation : c'est un compte `administrateur_laaficare`, avec second facteur obligatoire et profil (CNIB).
+
+**Points encore ouverts sur les rôles :**
+- **Où ranger le numéro d'ordre et la spécialité** (médecin, infirmier, pharmacien, biologiste) : rien n'est prévu dans les migrations. Ils **appartiennent à la personne, pas à l'affectation** (Q10, 2026-10-07) : un médecin garde son numéro d'ordre d'un établissement à l'autre. À décider avec le futur **profil professionnel**.
+- **Création d'un compte pour un autre** (Q11, 2026-10-07 ; cas « Inscrire un patient » de l'agent d'accueil, encore « à préciser ») : l'inscription normale se fait par le patient lui-même, avec un code SMS sur son téléphone (§11). Cas à couvrir : patient sans téléphone, nouveau-né (NIP à la naissance, BF-09), urgence (patient inconscient ou non identifié). Question de fond : **qui a le droit de créer un compte pour un autre**, et comment la personne en reprend ensuite le contrôle.
+- **Major de laboratoire** : rôle séparé, ou simple autorité sur le stock de réactifs pour un biologiste ? Ses actions recoupent presque entièrement celles du biologiste. À redemander au porteur avant de coder ce rôle.
 
 **`AideSoignant`** (nettoyer le patient, préparer le matériel, nourrir le patient) **existe dans l'organisation hospitalière mais n'a PAS de compte LaafiCare en V1** — décision actée, hors périmètre applicatif, aucune sous-classe à créer.
 
-**Hiérarchie clinique confirmée par recherche terrain du porteur (pas une hypothèse) :** trois niveaux fonctionnels dans un hôpital — Médecin (examine, diagnostique, dossier médical, prescrit examens et traitements), Infirmier (exécute les prescriptions), AideSoignant (soins de confort, hors périmètre app). Les spécialités (Gynécologue, Sage-femme, etc.) sont des valeurs du champ `specialite` à l'intérieur de ces niveaux, jamais des classes séparées. L'encadrement (Major, ChefDeService, Directeur) est un axe orthogonal — pouvoir hiérarchique/administratif, pas un niveau clinique.
+**Hiérarchie clinique confirmée par recherche terrain du porteur (pas une hypothèse) :** trois niveaux fonctionnels dans un hôpital — médecin (examine, diagnostique, dossier médical, prescrit examens et traitements), infirmier (exécute les prescriptions), aide-soignant (soins de confort, hors périmètre app). Les spécialités (gynécologue, sage-femme, etc.) restent à l'intérieur de ces niveaux. L'encadrement (major, chef de service, directeur) est un axe orthogonal — pouvoir hiérarchique/administratif, pas un niveau clinique.
 
-**Principe multi-rôles (décision actée, jamais encore reportée nulle part avant cette édition) :** une même personne peut cumuler plusieurs rôles sur des comptes distincts — un médecin peut aussi être patient de LaafiCare (il tombe malade comme n'importe qui). Conséquence sur le modèle : le téléphone reste **unique globalement** au niveau de l'identité (`utilisateur`), mais `utilisateur` n'est plus "une ligne = un rôle exclusif". Chaque table de rôle (`patient`, `medecin`, `infirmier`, etc.) référence `utilisateur_id` en clé étrangère, sans empêcher qu'un même `utilisateur_id` apparaisse dans plusieurs tables de rôle simultanément. Ce n'est donc plus un héritage strict à clé primaire/étrangère partagée entre toutes les sous-classes — c'est une identité centrale (`utilisateur`) avec des rôles rattachés, potentiellement plusieurs par identité. **Conséquence directe sur BF-01 (Section II du CDC) : la formulation "chaque compte doit être rattaché à un rôle unique" est fausse et doit être corrigée** — un compte (une identité) peut porter plusieurs rôles, chacun avec ses propres droits. La mécanique de connexion (quel rôle "actif" après authentification si plusieurs existent) reste à définir plus tard, pas bloquant pour le sprint en cours (Patient/AgentAssurance). **⚠️ Révisé le 2026-09-27/29, voir section 14** : une identité porte des comptes séparés (patient, professionnel, administrateur), chacun avec son mot de passe et son verrouillage ; les rôles professionnels passent sur des *affectations* (compte professionnel + structure + rôle) ; le « rôle actif » est résolu par le choix de l'affectation après connexion.
+**Principe multi-rôles :** une même personne peut être patient et professionnel (un médecin tombe malade comme n'importe qui), et professionnel dans plusieurs structures ou avec plusieurs rôles dans la même. Le téléphone est **unique globalement**, sur l'identité. Le « rôle actif » est l'affectation choisie après la connexion professionnelle (§14). **Conséquence sur BF-01 (Section II du CDC) : la formulation « chaque compte doit être rattaché à un rôle unique » est fausse et doit être corrigée.**
+
+**Les actes des modules à venir sont liés à une affectation** (qui, et dans quel établissement), et au patient par son identifiant interne ; le NIP reste un identifiant unique, utilisé pour la recherche (Q1, Q2 du 2026-10-07). Une affectation ne s'efface jamais (§14). L'établissement d'un acte se déduit de son affectation : ni `Consultation` ni `Delivrance` ne portent de `structure_id` (Q9). Leurs identifiants seront des UUID v7, comme toutes les tables codées (Q8).
 
 **⚠️ Correction encore à reporter dans le CDC (Section II, BF-08) — pas encore faite dans le document Word :** le texte actuel attribue à la sage-femme le pouvoir de "déclarer une grossesse à risque" en autonomie. C'est incohérent avec sa reclassification en spécialité d'Infirmier (exécution, pas décision diagnostique). Correction à faire : la sage-femme enregistre les mesures de la visite CPN et exécute les traitements prescrits (fer/acide folique, TPI, VAT) ; l'alerte tension ≥140mmHg reste un déclenchement automatique du système sur la valeur saisie (inchangé, ce n'est pas un jugement humain) ; la déclaration formelle d'une grossesse à risque redevient un acte du Médecin/Gynécologue.
 
-**20 entités "métier" au total** (hors les 4 nouvelles sous-classes de rôle qui s'ajoutent à la hiérarchie Utilisateur), dont : `DossierMedical`, `Allergie`, `Antecedent`, `Structure`, `Consultation`, `Ordonnance`, `LignePrescription`, `Medicament`, `StockMedicament`, `Delivrance`, `DemandeAnalyse`, `ResultatAnalyse`, `Grossesse`, `VisiteCPN`, `Naissance`, `Referencement`, `ContratAssurance`, `DemandeRemboursement`.
+**Entités « métier » des modules à venir** : `DossierMedical`, `Allergie`, `Antecedent`, `Consultation`, `Ordonnance`, `LignePrescription`, `Medicament`, `StockMedicament`, `Delivrance`, `DemandeAnalyse`, `ResultatAnalyse`, `Grossesse`, `VisiteCPN`, `Naissance`, `Referencement`. Déjà codées : `Structure` (migration 0012) et, pour l'assurance, le module MUNASEB (contrat, périodes, tarifs, partenaires, demandes, historique, notifications ; migrations 0006 à 0010). Diagrammes à jour : `docs/diagrammes/LaafiCare_Modele_Donnees.drawio` (classes et MLD) et `LaafiCare_Cas_Utilisation.drawio`.
 
 **Règles non négociables du modèle :**
 - Les allergies s'affichent toujours en priorité, en rouge, dès l'ouverture du dossier
 - Un résultat biologique n'est jamais visible avant validation biologique finale (double validation : technicien puis biologiste)
 - Les résultats d'examens sensibles sont **bloqués automatiquement** — libération manuelle obligatoire par le biologiste après entretien avec le patient (jamais de notification push/SMS automatique pour ces résultats)
 - Une tension artérielle systolique ≥ 140 mmHg lors d'une CPN déclenche une alerte automatique
+- **Alertes de signe de danger (Q12, 2026-10-07)** : il n'y a pas de soignant attitré. L'alerte est déclenchée **par le système**, de deux façons : (1) l'infirmier (spécialité sage-femme) saisit une TA systolique ≥ 140 mmHg lors d'une visite CPN ; (2) la patiente signale, dans le questionnaire de son application, l'un des **12 signes de danger du carnet national** — l'application lui dit alors **immédiatement de se rendre dans un centre de santé**, avec un texte **repris du carnet national, sans rien inventer**. L'alerte s'affiche ensuite pour **tout infirmier ou médecin qui ouvre le dossier**, jusqu'à ce que **le médecin qui la traite**, constatant qu'il n'y a plus de danger, la **marque comme traitée** ; qui l'a marquée et quand sont enregistrés, et cette trace **ne peut plus être modifiée**.
 - Aucun export PDF ni impression de résultat biologique depuis la plateforme
 
 ---
@@ -180,6 +190,11 @@ Ne jamais présenter le projet comme ayant déjà eu un prototype ou une version
 **Aucune décision technique ne se prend sans validation explicite du porteur** — pas seulement les dépendances, mais tout choix ayant plusieurs options raisonnables : nom de champ, structure d'erreur, format de réponse API, stratégie de test, organisation des modules, etc. Avant d'écrire un fichier impliquant un tel choix, présenter les options (1 à 3, avec une recommandation si pertinent) et attendre une réponse. Ne jamais enchaîner deux fichiers sans validation entre les deux.
 
 **Toute modification de fichier passe par l'outil d'édition, jamais par un script Python, `sed` ou une redirection shell** (règle ajoutée le 2026-09-27). Sinon, le porteur ne voit pas les changements ligne par ligne et ne peut pas les refuser. Un gros changement se découpe en plusieurs éditions plutôt que d'être écrit par un script. Les scripts restent permis pour lire ou analyser (extraire un `.docx`, calculer un NIP de test), jamais pour écrire dans le projet.
+
+**Exceptions à l'écriture par l'outil d'édition (2026-10-06 et 2026-10-08)** : certains fichiers sont copiés dans le dépôt **par une commande**, sur autorisation du porteur, parce que l'outil d'édition ne peut pas les écrire fidèlement :
+- les **documents binaires** (`docs/cdc/*.docx`, `*.pdf`) : les modifications de texte se font avec l'outil d'édition sur une copie du XML dans le dossier temporaire, puis le fichier reconstruit est copié ;
+- les **diagrammes générés** (`docs/diagrammes/*.drawio`) : l'outil d'édition supprime des espaces et a déjà cassé leur XML. Les brouillons sont produits et vérifiés dans le dossier temporaire (XML valide, aucun texte ni lien perdu, rendu PNG examiné), puis copiés.
+Dans les deux cas, on **compare les empreintes SHA-256** de la copie et du brouillon et on montre le résultat au porteur, qui contrôle ensuite le fichier lui-même avant le commit.
 
 **Branches et commits (règles ajoutées le 2026-10-07)** — dépôt `https://github.com/KABORE-c-elie/LaafiCare.git` (privé), recréé après le nettoyage de l'historique :
 - **Tout le travail se fait sur `dev`.** Avant chaque commit, vérifier qu'on est bien sur `dev` (`git branch --show-current`).
@@ -401,7 +416,7 @@ Champ du modèle `Patient` : `lieuNaissance` (obligatoire à l'inscription, avec
 - Rôles : liste fermée (responsable, directeur, chef de service, major, médecin, infirmier dont sage-femme, agent d'accueil, pharmacien, biologiste, agent MUNASEB). Les rôles permis dépendent du type de structure (liste fermée dans le code) ; dans cette itération, seule la ligne `munaseb` → `responsable`, `agent_assurance_munaseb` est utilisable.
 - Connexion professionnelle : email + mot de passe, puis **choix de l'affectation** ; le jeton porte l'affectation active. Changer de structure donne un nouveau jeton, sans mot de passe.
 - Deux familles d'extracteurs : *gérer sa demande* (responsable d'une structure non validée : brouillon, pièces, soumission, suivi) et *exercer* (à chaque requête : compte actif et bonne `version_jeton`, affectation active, structure validée, licence en cours).
-- **Désactivation** : elle porte sur l'affectation, jamais sur le compte, et jamais de suppression. Celui qui peut inviter à un rôle peut le désactiver. Le dernier responsable actif d'une structure ne peut pas être désactivé.
+- **Désactivation** : elle porte sur l'affectation, jamais sur le compte, et jamais de suppression. **Garanti par la base (Q1, 2026-10-07, migration 0012)** : `DELETE` et `TRUNCATE` refusés par triggers ; une seule modification permise, la clôture `active` → `desactivee` (date et auteur exigés par les CHECK) ; toutes les autres colonnes figées (comparaison d'un bloc avec `to_jsonb`) ; pas de réactivation, une personne qui revient reçoit une nouvelle affectation. Aucune clé étrangère vers ou depuis `affectation` n'a de `ON DELETE CASCADE`. Raison : les actes des modules futurs seront rattachés à une affectation (qui, dans quel établissement). Celui qui peut inviter à un rôle peut le désactiver. Le dernier responsable actif d'une structure ne peut pas être désactivé.
 
 **Structures et licence**
 - **N'importe quel patient peut créer sa structure** et en devient responsable. S'il n'a pas encore de compte professionnel, il le crée à ce moment (email + mot de passe professionnel) ; s'il en a un, son mot de passe professionnel est demandé.

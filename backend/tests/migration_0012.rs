@@ -372,3 +372,121 @@ async fn une_invitation_acceptee_reference_son_affectation(pool: PgPool) {
     let erreur = accepter(autre_invitation, Some(affectation_id)).await.unwrap_err();
     assert_eq!(contrainte(erreur), "invitation_affectation_id_key");
 }
+
+/// Q1 (2026-10-07) : une affectation ne se supprime jamais, ni directement
+/// ni par ricochet, et ne se modifie qu'une fois, pour sa clôture.
+#[sqlx::test]
+#[ignore]
+async fn une_affectation_ne_se_supprime_ni_ne_se_reactive(pool: PgPool) {
+    let responsable = creer_compte(&pool, "+22670100016", "professionnel").await;
+    let professionnel = creer_compte(&pool, "+22670100017", "professionnel").await;
+    let structure_id = inserer_structure(&pool, responsable, "munaseb").await.unwrap();
+    // Une seconde structure, cible de la tentative de changement de structure.
+    inserer_structure(&pool, professionnel, "clinique").await.unwrap();
+
+    let affecter = || {
+        sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO affectation (compte_id, structure_id, role) VALUES ($1, $2, 'agent_assurance_munaseb') RETURNING id",
+        )
+        .bind(professionnel)
+        .bind(structure_id)
+        .fetch_one(&pool)
+    };
+    let affectation_id = affecter().await.unwrap();
+    let modifier = |requete: &'static str| sqlx::query(requete).bind(affectation_id).execute(&pool);
+    let message = |erreur: sqlx::Error| erreur.to_string();
+
+    // 1. Suppression directe.
+    let erreur = modifier("DELETE FROM affectation WHERE id = $1").await.unwrap_err();
+    assert!(message(erreur).contains("jamais supprimée"));
+
+    // 2. Troncature : sans CASCADE, PostgreSQL refuse déjà (clé étrangère
+    //    depuis invitation) ; avec CASCADE, le trigger refuse.
+    assert!(sqlx::query("TRUNCATE affectation").execute(&pool).await.is_err());
+    let erreur = sqlx::query("TRUNCATE affectation CASCADE").execute(&pool).await.unwrap_err();
+    assert!(message(erreur).contains("jamais supprimée"));
+
+    // 3. Sur une affectation active, aucune autre colonne ne change.
+    for requete in [
+        "UPDATE affectation SET role = 'responsable' WHERE id = $1",
+        "UPDATE affectation SET date_creation = date_creation - interval '1 day' WHERE id = $1",
+        "UPDATE affectation SET structure_id = (SELECT id FROM structure WHERE type_structure = 'clinique') WHERE id = $1",
+        "UPDATE affectation SET compte_id = (SELECT id FROM compte WHERE id <> affectation.compte_id AND type_compte = 'professionnel' LIMIT 1) WHERE id = $1",
+    ] {
+        let erreur = modifier(requete).await.unwrap_err();
+        assert!(message(erreur).contains("seule la clôture"), "{requete}");
+    }
+
+    // 5. Clôture sans auteur : le trigger la laisse passer, un CHECK refuse.
+    //    Elle viole les deux CHECK de la clôture à la fois ; PostgreSQL ne
+    //    signale que l'un d'eux.
+    let erreur = modifier("UPDATE affectation SET statut = 'desactivee', desactivee_le = now() WHERE id = $1")
+        .await
+        .unwrap_err();
+    let refusee_par = contrainte(erreur);
+    assert!(
+        ["affectation_desactivation_tracee", "affectation_desactivation_complete"].contains(&refusee_par.as_str()),
+        "{refusee_par}"
+    );
+
+    // 4. Clôture complète : acceptée.
+    sqlx::query(
+        "UPDATE affectation SET statut = 'desactivee', desactivee_le = now(), desactivee_par_compte_id = $2 WHERE id = $1",
+    )
+    .bind(affectation_id)
+    .bind(responsable)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // 6 et 7. Ni réactivation, ni correction de la clôture.
+    for requete in [
+        "UPDATE affectation SET statut = 'active', desactivee_le = NULL, desactivee_par_compte_id = NULL WHERE id = $1",
+        "UPDATE affectation SET desactivee_le = desactivee_le - interval '1 day' WHERE id = $1",
+    ] {
+        let erreur = modifier(requete).await.unwrap_err();
+        assert!(message(erreur).contains("seule la clôture"), "{requete}");
+    }
+
+    // 8. La personne revient : une nouvelle affectation, même rôle.
+    affecter().await.unwrap();
+    let periodes: i64 = sqlx::query_scalar("SELECT count(*) FROM affectation WHERE compte_id = $1")
+        .bind(professionnel)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(periodes, 2);
+
+    // 9. Suppressions par ricochet : refusées par les clés étrangères
+    //    (NO ACTION), ou par les triggers pour TRUNCATE ... CASCADE.
+    let erreur = sqlx::query("DELETE FROM structure WHERE id = $1")
+        .bind(structure_id)
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    assert_eq!(contrainte(erreur), "affectation_structure_id_fkey");
+
+    // Un compte que seule une affectation retient (les deux autres ont créé
+    // une structure, qui les retient aussi).
+    let invite = creer_compte(&pool, "+22670100018", "professionnel").await;
+    sqlx::query("INSERT INTO affectation (compte_id, structure_id, role) VALUES ($1, $2, 'responsable')")
+        .bind(invite)
+        .bind(structure_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let erreur = sqlx::query("DELETE FROM compte WHERE id = $1")
+        .bind(invite)
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    assert_eq!(contrainte(erreur), "affectation_compte_professionnel");
+
+    let erreur = sqlx::query("TRUNCATE structure CASCADE").execute(&pool).await.unwrap_err();
+    assert!(message(erreur).contains("jamais"), "TRUNCATE structure CASCADE");
+    let restantes: i64 = sqlx::query_scalar("SELECT count(*) FROM affectation")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(restantes, 3);
+}

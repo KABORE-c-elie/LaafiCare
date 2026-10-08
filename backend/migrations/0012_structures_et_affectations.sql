@@ -287,6 +287,55 @@ CREATE UNIQUE INDEX affectation_une_active_par_role
 
 CREATE INDEX affectation_structure_idx ON affectation (structure_id);
 
+-- Une affectation ne s'efface jamais (section 14, Q1 du 2026-10-07) : les
+-- actes des modules futurs y seront rattachés (qui, dans quel
+-- établissement). Même mécanisme que decision_structure (doc PostgreSQL
+-- 18, CREATE TRIGGER : TRUNCATE ne déclenche pas les triggers ligne par
+-- ligne, d'où un second trigger FOR EACH STATEMENT). Aucune clé étrangère
+-- vers ou depuis affectation n'a de ON DELETE CASCADE : supprimer une
+-- structure ou un compte qui porte une affectation est refusé (NO ACTION,
+-- doc 5.5.5).
+CREATE FUNCTION affectation_non_supprimable() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'affectation : une affectation n''est jamais supprimée (%)', TG_OP;
+END;
+$$;
+
+CREATE TRIGGER affectation_sans_suppression
+    BEFORE DELETE ON affectation
+    FOR EACH ROW EXECUTE FUNCTION affectation_non_supprimable();
+
+CREATE TRIGGER affectation_sans_troncature
+    BEFORE TRUNCATE ON affectation
+    FOR EACH STATEMENT EXECUTE FUNCTION affectation_non_supprimable();
+
+-- Une seule modification permise : la clôture, active vers desactivee (M7 :
+-- pas de réactivation ; une personne qui revient reçoit une nouvelle
+-- affectation, et l'historique garde toutes les périodes). Toutes les
+-- autres colonnes sont comparées d'un bloc (to_jsonb, doc 9.16), moins les
+-- trois de la clôture : une colonne ajoutée plus tard sera protégée sans
+-- changer ce trigger. La date et l'auteur de la clôture sont exigés par les
+-- CHECK affectation_desactivation_tracee et affectation_desactivation_complete.
+CREATE FUNCTION affectation_seule_cloture() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.statut <> 'active'
+       OR NEW.statut <> 'desactivee'
+       OR to_jsonb(NEW) - 'statut' - 'desactivee_le' - 'desactivee_par_compte_id'
+          IS DISTINCT FROM
+          to_jsonb(OLD) - 'statut' - 'desactivee_le' - 'desactivee_par_compte_id'
+    THEN
+        RAISE EXCEPTION 'affectation : seule la clôture (active vers desactivee) est permise';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER affectation_seule_modification_cloture
+    BEFORE UPDATE ON affectation
+    FOR EACH ROW EXECUTE FUNCTION affectation_seule_cloture();
+
 -- ---------------------------------------------------------------------
 -- Invitations, enregistrées au numéro sans rien chercher (section 14).
 -- Soit à un rôle dans une structure, soit à devenir administrateur

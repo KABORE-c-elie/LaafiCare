@@ -16,6 +16,10 @@
 # interrogées). Les textes réglementaires publics restent suivis.
 docs/Memoire_Soutenance1.docx
 docs/entretiens/
+# Diagramme de classes du système MUNASEB tiré du mémoire (Q6, 2026-10-07) :
+# gardé sur le disque du porteur comme source, jamais suivi. Les classes
+# retenues par LaafiCare sont dans le diagramme de classes principal.
+docs/diagrammes/diagramme_classes_munaseb oki11.drawio
 
 # Réglages personnels de Claude Code, à tous les niveaux.
 .claude/settings.local.json
