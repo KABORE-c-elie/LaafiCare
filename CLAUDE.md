@@ -191,6 +191,12 @@ Ne jamais présenter le projet comme ayant déjà eu un prototype ou une version
 
 **Toute modification de fichier passe par l'outil d'édition, jamais par un script Python, `sed` ou une redirection shell** (règle ajoutée le 2026-09-27). Sinon, le porteur ne voit pas les changements ligne par ligne et ne peut pas les refuser. Un gros changement se découpe en plusieurs éditions plutôt que d'être écrit par un script. Les scripts restent permis pour lire ou analyser (extraire un `.docx`, calculer un NIP de test), jamais pour écrire dans le projet.
 
+**Dossiers de travail et périmètre (règles ajoutées le 2026-10-08)** — le dépôt a trois dossiers de travail reliés (`git worktree`), chacun avec son propre Claude Code :
+- `LaafiCare` (ce dossier), branche **`dev`** : **seulement `backend/` et `docs/`** (et les fichiers de la racine : `CLAUDE.md`, `README.md`, `.gitignore`, `.gitattributes`) ;
+- `..\LaafiCare-web`, branche **`web`** : le front-end Angular, dans `web/` ;
+- `..\LaafiCare-mobile`, branche **`mobile`** : l'application Flutter, dans `mobile/`.
+Depuis ce dossier, **ne jamais toucher aux dossiers `web/` et `mobile/`, ni aux branches `web` et `mobile`** (pas de commit, de fusion, de checkout ni de modification). **Le porteur fusionne lui-même** `web` et `mobile` dans `dev`. `docs/api.md` est le contrat entre le backend et les deux front-ends : toute modification d'une route le met à jour dans la même étape.
+
 **Exceptions à l'écriture par l'outil d'édition (2026-10-06 et 2026-10-08)** : certains fichiers sont copiés dans le dépôt **par une commande**, sur autorisation du porteur, parce que l'outil d'édition ne peut pas les écrire fidèlement :
 - les **documents binaires** (`docs/cdc/*.docx`, `*.pdf`) : les modifications de texte se font avec l'outil d'édition sur une copie du XML dans le dossier temporaire, puis le fichier reconstruit est copié ;
 - les **diagrammes générés** (`docs/diagrammes/*.drawio`) : l'outil d'édition supprime des espaces et a déjà cassé leur XML. Les brouillons sont produits et vérifiés dans le dossier temporaire (XML valide, aucun texte ni lien perdu, rendu PNG examiné), puis copiés.

@@ -119,7 +119,7 @@ Le projet a commencé par une phase de cadrage : un cahier des charges et des di
 | Diagrammes | réalisés ; diagramme de classes et modèle relationnel à régénérer |
 | Maquettes | deux premiers écrans mobiles |
 | **Serveur : patients** | inscription par SMS, connexion, mot de passe oublié, verrouillage, NIP |
-| **Serveur : MUNASEB** | contrats et périodes d'adhésion, demandes de remboursement de bout en bout (création, prise en charge, validation, rejet, paiement), notifications, historique |
+| **Serveur : MUNASEB** | contrats et périodes d'adhésion, demandes de remboursement de bout en bout (création, prise en charge, validation, rejet, paiement), notifications, historique ; **routes des agents hors service** jusqu'aux étapes 3.6 et 3.9 (elles reposent encore sur l'ancien compte agent, supprimé lors du passage aux comptes séparés) |
 | **Serveur : comptes et établissements** | structure de la base en place (comptes séparés, établissements, pièces justificatives, affectations, invitations) |
 | **Serveur : second facteur** | fait : chiffrement du secret, activation, codes, codes de secours |
 | Serveur : connexion professionnelle | **prochaine étape** (étape 3.6) |
@@ -183,7 +183,7 @@ Les tests qui utilisent la base créent chacun une base temporaire, supprimée e
 
 - [`docs/securite.md`](docs/securite.md) : chaque choix de sécurité, sa source et son fichier.
 - [`docs/modele-donnees.md`](docs/modele-donnees.md) : les tables et leurs règles.
-- [`docs/api.md`](docs/api.md) : les routes du serveur, avec des exemples.
+- [`docs/api.md`](docs/api.md) : les routes du serveur, avec des exemples ; c'est le contrat sur lequel s'appuient les applications web et mobile.
 - [`docs/points-ouverts.md`](docs/points-ouverts.md) : les décisions encore à prendre.
 - [`docs/glossaire.md`](docs/glossaire.md) : les termes techniques et médicaux.
 - [`CLAUDE.md`](CLAUDE.md) : le journal détaillé de toutes les décisions du projet.
