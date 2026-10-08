@@ -179,7 +179,7 @@ cargo test --lib -- --include-ignored totp        # seulement ceux dont le nom c
 
 Les tests qui utilisent la base créent chacun une base temporaire, supprimée ensuite : la base de développement n'est jamais touchée.
 
-**Échecs attendus pour l'instant** : trois tests échouent, `auth_professionnel`, `auth_agent_assurance_munaseb` et `extracteur_jwt`. Ils correspondent à l'ancienne connexion professionnelle, réécrite à l'étape 3.6. Tout autre échec est un vrai problème.
+**Échecs attendus pour l'instant** : deux tests échouent, `auth_professionnel` (ancienne connexion professionnelle, réécrite à l'étape 3.6) et `extracteur_jwt` (ancien contrôle de l'agent MUNASEB, réécrit à l'étape 3.9). Tout autre échec est un vrai problème.
 
 ## 7. Pour aller plus loin
 

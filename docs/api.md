@@ -27,23 +27,38 @@ Les routes protégées attendent l'en-tête :
 Authorization: Bearer <jeton>
 ```
 
-Le jeton est un JWT signé en HS256, **valable 24 heures**. Il contient :
+Le jeton est un JWT signé en HS256. Il contient :
 
 | Champ | Contenu |
 |---|---|
-| `sub` | identifiant de l'utilisateur (`utilisateur.id`) |
-| `role` | `patient` ou `agent_assurance_munaseb` (aujourd'hui) |
+| `sub` | identifiant du **compte** (patient, professionnel ou administrateur) |
+| `aud` | sorte de jeton (tableau ci-dessous) |
+| `ver` | version du jeton du compte : un jeton émis avant une réinitialisation du mot de passe ou une bascule sera refusé |
+| `aff` | affectation active (structure et rôle), seulement pour `laaficare:professionnel_en_exercice` |
 | `iat`, `exp` | date d'émission et d'expiration (secondes depuis 1970) |
 
-Les applications ne doivent **pas** lire le contenu du jeton pour décider de ce qu'elles affichent : elles le gardent et le renvoient tel quel. Sa forme va changer à l'étape 3.6 (voir section 4).
+Il existe **huit sortes de jetons**. Chaque route n'en accepte qu'une : un jeton d'une autre sorte est refusé en 401 `jeton_invalide`, même s'il est encore valable.
+
+| Sorte (`aud`) | Sert à | Durée | État |
+|---|---|---|---|
+| `laaficare:patient` | routes du patient | 24 h | émis par l'inscription et la connexion patient |
+| `laaficare:professionnel_sans_affectation` | lister ses affectations, en activer une | 24 h | prévu (étape 3.6) |
+| `laaficare:professionnel_en_exercice` | routes métier (remboursements MUNASEB…) | 24 h | attendu par les routes MUNASEB ; émis à l'étape 3.9 |
+| `laaficare:administrateur` | routes de l'équipe LaafiCare | 24 h | prévu (étape 3.6) |
+| `laaficare:second_facteur_patient`, `…_professionnel`, `…_administrateur` | saisir le code du second facteur, après un mot de passe correct | 5 min | prévu (étape 3.6) |
+| `laaficare:reenrolement_administrateur` | activer un nouveau second facteur, rien d'autre | 10 min | prévu (étape 3.6) |
+
+Aucune tolérance après l'expiration : un jeton expiré d'une seconde est refusé.
+
+Les applications ne doivent **pas** lire le contenu du jeton pour décider de ce qu'elles affichent : elles le gardent et le renvoient tel quel.
 
 Refus d'une route protégée (RFC 6750) :
 
 | Code HTTP | `code` | Cas | En-tête renvoyé |
 |---|---|---|---|
 | 401 | `authentification_requise` | en-tête `Authorization` absent ou mal formé | `WWW-Authenticate: Bearer` |
-| 401 | `jeton_invalide` | signature fausse, jeton expiré ou illisible | `WWW-Authenticate: Bearer error="invalid_token"` |
-| 403 | `acces_refuse` | jeton valide mais mauvais rôle, ou droit retiré depuis l'émission | — |
+| 401 | `jeton_invalide` | signature fausse, jeton expiré ou illisible, ou **jeton d'une autre sorte** que celle attendue par la route | `WWW-Authenticate: Bearer error="invalid_token"` |
+| 403 | `acces_refuse` | jeton de la bonne sorte, mais droit retiré depuis l'émission (ex. affectation désactivée) | — |
 | 500 | `erreur_interne` | panne pendant la vérification | — |
 
 Les messages restent volontairement vagues : ils n'aident pas à deviner pourquoi un jeton est refusé.
@@ -114,16 +129,15 @@ Résumé :
 | POST | `/api/patients/inscription` | tout le monde | fonctionne |
 | POST | `/api/patients/connexion` | tout le monde | fonctionne |
 | POST | `/api/patients/mot-de-passe/reinitialiser` | tout le monde | fonctionne |
-| POST | `/api/assurance-munaseb/connexion` | agent MUNASEB | **hors service** |
-| POST | `/api/assurance-munaseb/remboursements/simuler-acte` | jeton agent MUNASEB | **hors service** |
-| GET | `/api/assurance-munaseb/remboursements` | jeton agent MUNASEB | **hors service** |
-| GET | `/api/assurance-munaseb/remboursements/{id}` | jeton agent MUNASEB | **hors service** |
-| POST | `/api/assurance-munaseb/remboursements/{id}/prendre-en-charge` | jeton agent MUNASEB | **hors service** |
-| POST | `/api/assurance-munaseb/remboursements/{id}/valider` | jeton agent MUNASEB | **hors service** |
-| POST | `/api/assurance-munaseb/remboursements/{id}/rejeter` | jeton agent MUNASEB | **hors service** |
-| POST | `/api/assurance-munaseb/remboursements/{id}/payer` | jeton agent MUNASEB | **hors service** |
+| POST | `/api/assurance-munaseb/remboursements/simuler-acte` | jeton en exercice, agent MUNASEB | **hors service** |
+| GET | `/api/assurance-munaseb/remboursements` | jeton en exercice, agent MUNASEB | **hors service** |
+| GET | `/api/assurance-munaseb/remboursements/{id}` | jeton en exercice, agent MUNASEB | **hors service** |
+| POST | `/api/assurance-munaseb/remboursements/{id}/prendre-en-charge` | jeton en exercice, agent MUNASEB | **hors service** |
+| POST | `/api/assurance-munaseb/remboursements/{id}/valider` | jeton en exercice, agent MUNASEB | **hors service** |
+| POST | `/api/assurance-munaseb/remboursements/{id}/rejeter` | jeton en exercice, agent MUNASEB | **hors service** |
+| POST | `/api/assurance-munaseb/remboursements/{id}/payer` | jeton en exercice, agent MUNASEB | **hors service** |
 
-> **Routes MUNASEB hors service.** Elles vérifient le compte agent dans la table `agent_assurance_munaseb`, supprimée par la migration 0011 (passage aux comptes séparés et aux affectations, section 14 du CLAUDE.md). La connexion agent et toute route qui exige un jeton agent répondent donc aujourd'hui `500 erreur_interne`. Elles seront rebranchées sur les affectations aux étapes 3.6 et 3.9 : la connexion changera (section 4), mais les chemins, corps et réponses des remboursements décrits ci-dessous devraient rester les mêmes, à confirmer à l'étape 3.9. Leur description sert donc de référence pour l'écran agent.
+> **Routes MUNASEB hors service.** L'ancienne connexion agent (`POST /api/assurance-munaseb/connexion`) est **supprimée** : un agent se connectera par la connexion professionnelle, puis choisira son affectation (étapes 3.6 et 3.9, section 4). Les routes de remboursement attendent déjà un jeton `laaficare:professionnel_en_exercice` ; tout autre jeton est refusé en 401. Avec un jeton de la bonne sorte, elles répondent encore `500 erreur_interne` : elles vérifient le compte agent dans une table supprimée par la migration 0011. Elles seront rebranchées sur les affectations à l'étape 3.9. Les chemins, corps et réponses des remboursements décrits ci-dessous devraient rester les mêmes ; leur description sert de référence pour l'écran agent.
 
 ### 2.1 Infrastructure
 
@@ -199,7 +213,7 @@ Crée le compte patient, attribue le NIP et ouvre la session.
 
 | Code | `code` | Cas |
 |---|---|---|
-| 201 | — | compte créé ; corps `{"jeton": "<JWT>"}`, rôle `patient` |
+| 201 | — | compte créé ; corps `{"jeton": "<JWT>"}`, jeton `laaficare:patient` |
 | 422 | `telephone_invalide` | format du numéro non reconnu |
 | 422 | `mot_de_passe_non_conforme` | + `regles_non_respectees` (voir 1.5) |
 | 401 | `code_invalide` | code OTP faux, expiré ou déjà utilisé |
@@ -222,7 +236,7 @@ Crée le compte patient, attribue le NIP et ouvre la session.
 
 | Code | `code` | Cas |
 |---|---|---|
-| 200 | — | corps `{"jeton": "<JWT>"}`, rôle `patient` |
+| 200 | — | corps `{"jeton": "<JWT>"}`, jeton `laaficare:patient` |
 | 401 | `identifiants_invalides` | tous les refus (voir ci-dessous) |
 | 422 | `telephone_invalide` | format du numéro non reconnu |
 | 500 | `erreur_interne` | panne |
@@ -256,13 +270,9 @@ Crée le compte patient, attribue le NIP et ouvre la session.
 
 ### 2.3 Agent MUNASEB (hors service, voir l'encadré plus haut)
 
-#### 2.3.1 `POST /api/assurance-munaseb/connexion`
+#### 2.3.1 Connexion de l'agent
 
-Sera **remplacée** par la connexion professionnelle (section 4). Décrite pour mémoire.
-
-- **Corps** : `{"email": "...", "mot_de_passe": "..."}`
-- **Réponses** : 200 `{"jeton": "<JWT>"}` (rôle `agent_assurance_munaseb`) ; 401 `identifiants_invalides` ; 423 `compte_verrouille` ; 500 `erreur_interne`.
-- Le 423 est **obsolète** (décision L1 du 2026-10-02 : un compte verrouillé répond 401 `identifiants_invalides`, comme un compte inconnu). Il disparaîtra avec cette route.
+L'ancienne route `POST /api/assurance-munaseb/connexion` est **supprimée** (2026-10-08), avec son code `423 compte_verrouille`. L'agent passera par la connexion professionnelle (section 4.1), puis par le choix de son affectation (section 4.4).
 
 #### 2.3.2 Valeurs utilisées par les routes de remboursement
 
@@ -440,7 +450,6 @@ Toutes : jeton agent MUNASEB ; l'agent qui agit est enregistré dans l'historiqu
 | `telephone_inconnu` | 404 | réinitialisation |
 | `mot_de_passe_non_conforme` | 422 | inscription, réinitialisation |
 | `identifiants_invalides` | 401 | connexions |
-| `compte_verrouille` | 423 | connexion agent (obsolète) |
 | `montant_invalide`, `nip_invalide`, `partenaire_suspendu`, `non_couvert`, `en_carence` | 422 | simuler-acte |
 | `patient_inconnu`, `partenaire_inconnu` | 404 | simuler-acte |
 | `reference_acte_deja_utilisee` | 409 | simuler-acte |

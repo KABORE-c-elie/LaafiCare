@@ -18,7 +18,7 @@ use chrono::NaiveDate;
 use sqlx::PgPool;
 use sqlx::types::Uuid;
 
-use crate::jwt::JwtService;
+use crate::jwt::{JwtService, SorteJeton};
 use crate::mot_de_passe::RegleMotDePasse;
 use crate::verrouillage::{self, ErreurConnexion, Verification};
 use crate::{mot_de_passe, nip, otp, telephone};
@@ -198,11 +198,16 @@ pub async fn creer_compte(
         .execute(&mut *tx)
         .await?;
 
-    sqlx::query("INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'patient', $2)")
-        .bind(utilisateur_id)
-        .bind(&hash)
-        .execute(&mut *tx)
-        .await?;
+    // `version_jeton` relue plutôt que supposée à 0 : le jeton porte la
+    // valeur réelle de la base (décision C2).
+    let (compte_id, version_jeton): (Uuid, i32) = sqlx::query_as(
+        "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'patient', $2) \
+         RETURNING id, version_jeton",
+    )
+    .bind(utilisateur_id)
+    .bind(&hash)
+    .fetch_one(&mut *tx)
+    .await?;
 
     sqlx::query(
         "INSERT INTO patient (utilisateur_id, nip, date_naissance, lieu_naissance) VALUES ($1, $2, $3, $4)",
@@ -216,7 +221,7 @@ pub async fn creer_compte(
 
     tx.commit().await?;
 
-    jwt.emettre(&utilisateur_id.to_string(), "patient")
+    jwt.emettre(SorteJeton::Patient, compte_id, version_jeton, None)
         .map_err(|e| ErreurAuthPatient::Interne(e.to_string()))
 }
 
@@ -280,8 +285,8 @@ pub async fn se_connecter(
     // Un format invalide ne correspond à aucun compte possible : le dire
     // ne révèle rien (décision T3), inutile de vérifier un faux hachage.
     let telephone = telephone::normaliser(telephone_saisi)?;
-    let compte: Option<(Uuid, Uuid)> = sqlx::query_as(
-        "SELECT c.id, c.utilisateur_id FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
+    let compte: Option<(Uuid, i32)> = sqlx::query_as(
+        "SELECT c.id, c.version_jeton FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
          WHERE u.telephone = $1 AND c.type_compte = 'patient'",
     )
     .bind(&telephone)
@@ -305,10 +310,10 @@ pub async fn se_connecter(
 
     // `verifier` n'accepte qu'un compte existant : `compte` est forcément
     // présent ici.
-    let (_, utilisateur_id) =
+    let (compte_id, version_jeton) =
         compte.ok_or_else(|| ErreurAuthPatient::Interne("compte vérifié introuvable".into()))?;
 
-    jwt.emettre(&utilisateur_id.to_string(), "patient")
+    jwt.emettre(SorteJeton::Patient, compte_id, version_jeton, None)
         .map_err(|e| ErreurAuthPatient::Interne(e.to_string()))
 }
 
@@ -390,16 +395,18 @@ mod tests {
             .await
             .unwrap();
 
-        // --- succès : jeton patient pour cette identité ---
+        // --- succès : jeton patient pour ce compte ---
         let jeton = se_connecter(&pool, &jwt, telephone, bon).await.unwrap();
-        let claims = jwt.verifier(&jeton).unwrap();
-        assert_eq!(claims.role, "patient");
-        let utilisateur_id: Uuid = sqlx::query_scalar("SELECT id FROM utilisateur WHERE telephone = $1")
-            .bind(telephone)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(claims.sub, utilisateur_id.to_string());
+        let claims = jwt.verifier(&jeton, SorteJeton::Patient).unwrap();
+        let (compte_id, version_jeton): (Uuid, i32) = sqlx::query_as(
+            "SELECT c.id, c.version_jeton FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
+             WHERE u.telephone = $1 AND c.type_compte = 'patient'",
+        )
+        .bind(telephone)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!((claims.sub, claims.ver, claims.aff), (compte_id, version_jeton, None));
 
         // --- le même numéro saisi sous d'autres formes (décision C3) ---
         for saisie in ["70 01 60 01", "70-01-60-01", "70.01.60.01", "00226 70016001", "226 70 01 60 01"] {
@@ -435,24 +442,20 @@ mod tests {
 
         // --- réinitialisation par OTP : nouveau mot de passe, verrouillage
         // levé, version de jeton augmentée (C2) ---
-        let version_avant: i32 = sqlx::query_scalar(
-            "SELECT version_jeton FROM compte WHERE utilisateur_id = $1 AND type_compte = 'patient'",
-        )
-        .bind(utilisateur_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let version_avant: i32 = sqlx::query_scalar("SELECT version_jeton FROM compte WHERE id = $1")
+            .bind(compte_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         let (code_reinit, _) = demander_otp(&pool, telephone).await.unwrap();
         reinitialiser_mot_de_passe(&pool, telephone, &code_reinit, "Nouveau-mdp-2").await.unwrap();
         se_connecter(&pool, &jwt, telephone, "Nouveau-mdp-2").await.unwrap();
         assert!(refuse(se_connecter(&pool, &jwt, telephone, bon).await), "l'ancien mot de passe ne marche plus");
-        let version_apres: i32 = sqlx::query_scalar(
-            "SELECT version_jeton FROM compte WHERE utilisateur_id = $1 AND type_compte = 'patient'",
-        )
-        .bind(utilisateur_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let version_apres: i32 = sqlx::query_scalar("SELECT version_jeton FROM compte WHERE id = $1")
+            .bind(compte_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(version_apres, version_avant + 1);
 
         // --- mot de passe non conforme : toutes les règles listées ---
