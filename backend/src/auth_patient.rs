@@ -34,6 +34,14 @@ pub enum ErreurAuthPatient {
     #[error("code invalide ou expiré")]
     CodeInvalide,
 
+    /// Limite de l'OTP atteinte (O5, O6) : trop de demandes de code
+    /// (`reessayer_dans_secs` = délai d'attente, en-tête `Retry-After`), ou
+    /// dernier essai du code en cours épuisé (`None` : il faut demander un
+    /// nouveau code). Ne dit rien d'un compte : les limites s'appliquent à
+    /// tout numéro, inscrit ou non (O4).
+    #[error("trop de demandes, réessayer plus tard")]
+    TropDeDemandes { reessayer_dans_secs: Option<u64> },
+
     /// `creer_compte` uniquement : un compte patient existait déjà pour ce
     /// téléphone au moment de la vérification de l'OTP.
     #[error("un compte existe déjà pour ce numéro")]
@@ -64,6 +72,27 @@ pub enum ErreurAuthPatient {
 impl From<telephone::TelephoneInvalide> for ErreurAuthPatient {
     fn from(_: telephone::TelephoneInvalide) -> Self {
         ErreurAuthPatient::TelephoneInvalide
+    }
+}
+
+impl From<otp::ErreurDemandeOtp> for ErreurAuthPatient {
+    fn from(erreur: otp::ErreurDemandeOtp) -> Self {
+        match erreur {
+            otp::ErreurDemandeOtp::TropDeDemandes { reessayer_dans_secs } => {
+                ErreurAuthPatient::TropDeDemandes { reessayer_dans_secs: Some(reessayer_dans_secs) }
+            }
+            otp::ErreurDemandeOtp::Base(erreur) => ErreurAuthPatient::Interne(erreur.to_string()),
+        }
+    }
+}
+
+/// Résultat d'une vérification d'OTP traduit pour les flux patient :
+/// `Valide` passe, les deux autres deviennent une erreur.
+async fn verifier_otp(pool: &PgPool, utilisateur_id: Uuid, code_otp: &str) -> Result<(), ErreurAuthPatient> {
+    match otp::verifier(pool, utilisateur_id, code_otp).await? {
+        otp::VerificationOtp::Valide => Ok(()),
+        otp::VerificationOtp::Invalide => Err(ErreurAuthPatient::CodeInvalide),
+        otp::VerificationOtp::EssaisEpuises => Err(ErreurAuthPatient::TropDeDemandes { reessayer_dans_secs: None }),
     }
 }
 
@@ -176,9 +205,7 @@ pub async fn creer_compte(
     // OTP vérifié AVANT de regarder si le compte existe déjà : sinon un
     // appelant sans code valide pourrait sonder n'importe quel numéro pour
     // savoir s'il est déjà inscrit, sans jamais prouver qu'il le contrôle.
-    if !otp::verifier(pool, utilisateur_id, code_otp).await? {
-        return Err(ErreurAuthPatient::CodeInvalide);
-    }
+    verifier_otp(pool, utilisateur_id, code_otp).await?;
 
     if compte_patient.is_some() {
         return Err(ErreurAuthPatient::TelephoneDejaUtilise);
@@ -242,9 +269,7 @@ pub async fn reinitialiser_mot_de_passe(
 
     // Même ordre que `creer_compte`, même raison : prouver le contrôle du
     // numéro avant de révéler quoi que ce soit sur l'état du compte.
-    if !otp::verifier(pool, utilisateur_id, code_otp).await? {
-        return Err(ErreurAuthPatient::CodeInvalide);
-    }
+    verifier_otp(pool, utilisateur_id, code_otp).await?;
 
     let compte_id = compte_patient.ok_or(ErreurAuthPatient::TelephoneInconnu)?;
 
@@ -321,6 +346,16 @@ pub async fn se_connecter(
 mod tests {
     use super::*;
 
+    /// Simule une minute écoulée avant de redemander un code pour un même
+    /// numéro : sans cela, le délai de 60 s entre deux envois (O1, otp.rs)
+    /// refuserait la demande.
+    async fn laisser_passer_une_minute(pool: &PgPool) {
+        sqlx::query("UPDATE envoi_otp SET envoye_le = envoye_le - interval '61 seconds'")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
     // Base temporaire par test, jamais la base de développement : voir
     // « Tests et environnement », section 12 du CLAUDE.md.
     #[sqlx::test]
@@ -355,6 +390,7 @@ mod tests {
         ), "le code déjà utilisé ne doit pas être réutilisable (règle NIST, otp.rs)");
 
         // --- mot de passe oublié, sur le compte qu'on vient de créer ---
+        laisser_passer_une_minute(&pool).await;
         let (code2, _) = demander_otp(&pool, telephone).await.unwrap();
 
         assert!(matches!(
@@ -364,6 +400,7 @@ mod tests {
         // code2 vient d'être consommé par l'appel ci-dessus (vérifié avec
         // succès avant l'échec métier) : il en faut un nouveau, comme un
         // vrai client redemanderait pour le bon flux.
+        laisser_passer_une_minute(&pool).await;
         let (code2b, _) = demander_otp(&pool, telephone).await.unwrap();
 
         reinitialiser_mot_de_passe(&pool, telephone, &code2b, "Nouveau-mdp-2")
@@ -413,6 +450,7 @@ mod tests {
             se_connecter(&pool, &jwt, saisie, bon).await.unwrap_or_else(|e| panic!("{saisie:?} : {e:?}"));
         }
         // L'OTP renvoie le numéro normalisé, vers lequel part le SMS.
+        laisser_passer_une_minute(&pool).await;
         let (_, normalise) = demander_otp(&pool, "70 01 60 01").await.unwrap();
         assert_eq!(normalise, telephone);
         // Format invalide : erreur distincte, qui ne dit rien d'un compte (T3).
@@ -447,6 +485,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
+        laisser_passer_une_minute(&pool).await;
         let (code_reinit, _) = demander_otp(&pool, telephone).await.unwrap();
         reinitialiser_mot_de_passe(&pool, telephone, &code_reinit, "Nouveau-mdp-2").await.unwrap();
         se_connecter(&pool, &jwt, telephone, "Nouveau-mdp-2").await.unwrap();
@@ -459,6 +498,7 @@ mod tests {
         assert_eq!(version_apres, version_avant + 1);
 
         // --- mot de passe non conforme : toutes les règles listées ---
+        laisser_passer_une_minute(&pool).await;
         let (code_faible, _) = demander_otp(&pool, telephone).await.unwrap();
         match reinitialiser_mot_de_passe(&pool, telephone, &code_faible, "abc").await {
             Err(ErreurAuthPatient::MotDePasseNonConforme(regles)) => assert_eq!(

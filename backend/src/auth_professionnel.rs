@@ -1,8 +1,8 @@
 //! `AuthProfessionnelService` (section 11 du CLAUDE.md) : identifiant
 //! `email` + `motDePasseHash` (Argon2id) + verrouillage 5 tentatives / 15
-//! min (BF-01), plus la récupération de mot de passe (deux voies au choix
-//! de la personne : OTP ou lien par email -- section 11, révision
-//! 2026-09-23).
+//! min (BF-01). **Fichier à réécrire à l'étape 3.6.2** sur la table
+//! `compte` (migration 0011) : il lit encore des colonnes retirées de
+//! `utilisateur`, son test en base échoue (échec attendu).
 //!
 //! **`se_connecter` ne connaît aucun rôle.** Ce service vérifie une
 //! identité (`utilisateur`) seule -- il n'existe encore aucune table de
@@ -14,26 +14,19 @@
 //! à l'avance. Bâtir `AuthProfessionnelService` avant `AgentAssurance` n'a
 //! de sens que si ce découplage est respecté.
 //!
-//! **Voie de récupération par OTP** : implémentée ici, réutilise `otp.rs`
-//! tel quel (jamais exclusif au Patient). **Voie par email (lien de
-//! réinitialisation)** : décision actée mais **non implémentée dans ce
-//! fichier** -- aucune dépendance d'envoi d'email n'a encore été choisie
-//! (section 13 : à présenter avec sources officielles avant tout ajout au
-//! Cargo.toml, pas fait ici). Choisir entre les deux voies revient à la
-//! personne au moment de la demande, pas imposé par le système.
+//! **Récupération du mot de passe** : par email uniquement (décisions R1 à
+//! R9, étape 3.12). La récupération par OTP a été supprimée le 2026-10-08 :
+//! l'OTP ne sert plus qu'au compte patient (section 14).
 
 use chrono::{DateTime, Duration, Utc};
 use sqlx::PgPool;
 use sqlx::types::Uuid;
 
-use crate::{mot_de_passe, otp};
+use crate::mot_de_passe;
 
 // BF-01, section 11 du CLAUDE.md -- pas une valeur arbitraire de bibliothèque.
 const MAX_TENTATIVES: i16 = 5;
 const DUREE_VERROUILLAGE_MIN: i64 = 15;
-
-// Constante unique de `mot_de_passe.rs` (décision W2).
-use crate::mot_de_passe::LONGUEUR_MOT_DE_PASSE_MIN;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ErreurAuthProfessionnel {
@@ -46,12 +39,6 @@ pub enum ErreurAuthProfessionnel {
 
     #[error("compte verrouillé, réessayer plus tard")]
     CompteVerrouille,
-
-    #[error("code invalide ou expiré")]
-    CodeInvalide,
-
-    #[error("mot de passe trop court : {0} caractères, {LONGUEUR_MOT_DE_PASSE_MIN} minimum")]
-    MotDePasseTropCourt(usize),
 
     #[error("erreur interne : {0}")]
     Interne(String),
@@ -128,73 +115,6 @@ pub async fn se_connecter(
     Ok(utilisateur_id)
 }
 
-/// Demande un OTP de récupération pour un email. `Ok(None)` si l'email est
-/// inconnu -- **volontairement pas une erreur distincte** : l'appelant
-/// (future route HTTP) doit répondre de façon identique dans les deux cas
-/// (email existant ou non), pour ne pas révéler quels emails sont
-/// enregistrés. Renvoie aussi le téléphone associé : c'est l'appelant qui
-/// envoie le SMS (`SmsSender`), ce module reste indépendant du canal.
-pub async fn demander_otp_recuperation(
-    pool: &PgPool,
-    email: &str,
-) -> Result<Option<(String, String)>, ErreurAuthProfessionnel> {
-    let ligne: Option<(Uuid, String)> =
-        sqlx::query_as("SELECT id, telephone FROM utilisateur WHERE lower(email) = lower($1)")
-            .bind(email)
-            .fetch_optional(pool)
-            .await?;
-
-    let Some((utilisateur_id, telephone)) = ligne else {
-        return Ok(None);
-    };
-
-    let code = otp::generer_et_enregistrer(pool, utilisateur_id).await?;
-    Ok(Some((code, telephone)))
-}
-
-/// Réinitialise le mot de passe après validation de l'OTP de récupération.
-/// Efface aussi tout verrouillage en cours : prouver le contrôle du
-/// téléphone est un motif légitime de déblocage.
-pub async fn reinitialiser_via_otp(
-    pool: &PgPool,
-    email: &str,
-    code_otp: &str,
-    nouveau_mot_de_passe: &str,
-) -> Result<(), ErreurAuthProfessionnel> {
-    if mot_de_passe::longueur(nouveau_mot_de_passe) < LONGUEUR_MOT_DE_PASSE_MIN {
-        return Err(ErreurAuthProfessionnel::MotDePasseTropCourt(
-            mot_de_passe::longueur(nouveau_mot_de_passe),
-        ));
-    }
-
-    let ligne: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM utilisateur WHERE lower(email) = lower($1)")
-            .bind(email)
-            .fetch_optional(pool)
-            .await?;
-    // Aucune ligne : aucun OTP n'a pu être généré pour cet email
-    // (otp::generer_et_enregistrer exige un utilisateur_id existant), donc
-    // code_otp ne peut de toute façon pas être valide.
-    let (utilisateur_id,) = ligne.ok_or(ErreurAuthProfessionnel::CodeInvalide)?;
-
-    if !otp::verifier(pool, utilisateur_id, code_otp).await? {
-        return Err(ErreurAuthProfessionnel::CodeInvalide);
-    }
-
-    let hash = mot_de_passe::hacher(nouveau_mot_de_passe)
-        .map_err(|e| ErreurAuthProfessionnel::Interne(e.to_string()))?;
-
-    sqlx::query(
-        "UPDATE utilisateur SET mot_de_passe_hash = $1, tentatives_echouees = 0, verrouille_jusqua = NULL WHERE id = $2",
-    )
-    .bind(&hash)
-    .bind(utilisateur_id)
-    .execute(pool)
-    .await?;
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,6 +128,8 @@ mod tests {
     async fn se_connecter_et_recuperation_en_base(pool: PgPool) {
         let email = "test.auth.pro@example.org";
         let telephone = "+22670002002";
+        // Échoue dès cette insertion (colonne `mot_de_passe_hash` retirée
+        // par la migration 0011) : test réécrit à l'étape 3.6.2.
         let hash = mot_de_passe::hacher("motdepasseinitial123").unwrap();
 
         let utilisateur_id: Uuid = sqlx::query_scalar(
@@ -249,23 +171,5 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-
-        // --- récupération par OTP ---
-        assert!(
-            demander_otp_recuperation(&pool, "inconnu@example.org").await.unwrap().is_none(),
-            "email inconnu : aucune information renvoyée"
-        );
-        let (code, telephone_recu) = demander_otp_recuperation(&pool, email).await.unwrap().unwrap();
-        assert_eq!(telephone_recu, telephone);
-
-        assert!(matches!(
-            reinitialiser_via_otp(&pool, email, "000000", "nouveaumdp123").await,
-            Err(ErreurAuthProfessionnel::CodeInvalide)
-        ));
-
-        reinitialiser_via_otp(&pool, email, &code, "nouveaumdp123").await.unwrap();
-        se_connecter(&pool, email, "nouveaumdp123")
-            .await
-            .expect("le nouveau mot de passe doit fonctionner");
     }
 }
