@@ -2,7 +2,7 @@
 
 Ce document décrit les routes de l'API Rust/Axum telles qu'elles sont **codées aujourd'hui**, puis celles qui sont **seulement prévues**. Les applications Angular (web) et Flutter (mobile) s'appuient sur lui. Il est mis à jour avec chaque ajout ou modification d'une route.
 
-État au 2026-10-08, branche `dev`.
+État au 2026-10-09, branche `dev`.
 
 Toutes les valeurs des exemples sont fictives.
 
@@ -81,6 +81,7 @@ Toute réponse d'erreur, sans exception, a cette forme :
 | `transition_invalide` | `statut_actuel` | statut actuel de la demande |
 
 - `erreur_interne` (500) ne donne jamais de détail : il reste dans les journaux du serveur.
+- `trop_de_demandes` (429) peut s'accompagner de l'**en-tête** `Retry-After` (nombre de secondes à attendre), jamais d'un champ du corps (voir 2.2.5).
 
 ### 1.4 Erreurs de lecture de la requête
 
@@ -183,12 +184,12 @@ Envoie un code à 6 chiffres par SMS. Sert à l'inscription et au mot de passe o
 |---|---|---|
 | 204 | — | code envoyé (aucun corps) |
 | 422 | `telephone_invalide` | format non reconnu (voir 1.6) |
+| 429 | `trop_de_demandes` | moins de 60 s depuis le dernier code, ou déjà 5 codes dans l'heure ; en-tête `Retry-After` (voir 2.2.5) |
 | 500 | `erreur_interne` | panne |
 
 - Le code est valable **5 minutes**. Une nouvelle demande remplace le code précédent.
-- La réponse est la même que le numéro ait un compte ou non.
+- La réponse est la même que le numéro ait un compte ou non, limites comprises.
 - En développement, aucun SMS ne part : le code s'affiche dans les journaux du serveur.
-- **Pas encore de limite** du nombre de demandes par numéro (point ouvert avant la production).
 
 #### 2.2.2 `POST /api/patients/inscription`
 
@@ -217,11 +218,22 @@ Crée le compte patient, attribue le NIP et ouvre la session.
 | 422 | `telephone_invalide` | format du numéro non reconnu |
 | 422 | `mot_de_passe_non_conforme` | + `regles_non_respectees` (voir 1.5) |
 | 401 | `code_invalide` | code OTP faux, expiré ou déjà utilisé |
+| 429 | `trop_de_demandes` | code faux, et c'était le dernier essai permis : le code est effacé, pas d'en-tête `Retry-After` (voir 2.2.5) |
 | 409 | `telephone_deja_utilise` | un compte existe déjà pour ce numéro |
 | 500 | `erreur_interne` | panne |
 
 - Ordre des contrôles : numéro, puis mot de passe, puis code OTP. Un mot de passe refusé **ne consomme pas** le code : la personne corrige et renvoie la même requête.
 - Le 409 n'arrive qu'après un code OTP correct : seul le titulaire du numéro l'apprend.
+
+**Si la réponse se perd** (coupure réseau, délai dépassé) : le compte a peut-être été créé quand même, et le code OTP est peut-être déjà consommé. L'application ne renvoie pas la même inscription. Elle tente une **connexion** (`POST /api/patients/connexion`, section 2.2.3) avec le même téléphone et le même mot de passe :
+
+| Réponse de la connexion | Ce que fait l'application |
+|---|---|
+| 200 | Le compte existe : la session est ouverte avec ce jeton, l'inscription est terminée. |
+| 401 `identifiants_invalides` | Le compte n'a pas été créé. L'application reprend l'inscription : nouvelle demande de code (`POST /api/patients/otp`, qui peut répondre 429 si le dernier code date de moins de 60 s : attendre le délai de `Retry-After`), puis nouvel envoi du formulaire, qu'elle a gardé. |
+| erreur réseau | L'application réessaie la connexion plus tard ; elle ne renvoie pas l'inscription. |
+
+Aucun changement côté serveur : ce parcours n'utilise que les routes existantes.
 
 #### 2.2.3 `POST /api/patients/connexion`
 
@@ -261,12 +273,34 @@ Crée le compte patient, attribue le NIP et ouvre la session.
 | 422 | `telephone_invalide` | format du numéro non reconnu |
 | 422 | `mot_de_passe_non_conforme` | + `regles_non_respectees` |
 | 401 | `code_invalide` | code OTP faux, expiré ou déjà utilisé |
+| 429 | `trop_de_demandes` | code faux, et c'était le dernier essai permis : le code est effacé, pas d'en-tête `Retry-After` (voir 2.2.5) |
 | 404 | `telephone_inconnu` | aucun compte pour ce numéro (seulement après un code correct) |
 | 500 | `erreur_interne` | panne |
 
 - Effets : le verrouillage est levé, le compteur d'échecs remis à zéro.
 - Aucun jeton n'est renvoyé : la personne se connecte ensuite avec son nouveau mot de passe.
 - La réinitialisation **ne touche jamais au second facteur** (TOTP).
+
+#### 2.2.5 Limites du code OTP et réponse 429
+
+**Les limites**, identiques pour tout numéro, inscrit ou non (la réponse ne révèle donc rien d'un compte) :
+
+| Limite | Valeur | Réponse quand elle est atteinte |
+|---|---|---|
+| Délai entre deux demandes de code pour un même numéro | 60 s | 429 sur `POST /api/patients/otp`, avec `Retry-After` |
+| Demandes de code par numéro | 5 par heure glissante | 429 sur `POST /api/patients/otp`, avec `Retry-After` (temps avant que la plus ancienne des 5 ait plus d'une heure) |
+| Essais sur un code | 5 ; puis, tant qu'aucun code juste n'a été saisi, **1 seul essai** sur chaque nouveau code | 429 sur l'inscription ou la réinitialisation, **sans** `Retry-After` : le code est effacé |
+
+Les échecs s'additionnent d'un code à l'autre et ne reviennent à zéro qu'après un code juste. Le numéro est compté sous sa forme normalisée : « 70 00 00 00 » et « +226 70000000 » comptent ensemble.
+
+**Ce que l'application doit afficher sur un 429 `trop_de_demandes` :**
+
+| Où | En-tête `Retry-After` | Affichage |
+|---|---|---|
+| Demande de code (`POST /api/patients/otp`) | présent : nombre de secondes | Le délai à attendre, par exemple « Vous pourrez demander un nouveau code dans 45 s », avec un compte à rebours. Le bouton « Renvoyer le code » reste désactivé jusqu'à la fin du délai. Au-delà d'une minute, afficher en minutes. |
+| Inscription ou réinitialisation | absent | « Trop d'essais avec ce code. Demandez un nouveau code. » Le champ du code est vidé et l'application propose le bouton « Renvoyer le code ». |
+
+L'application lit la valeur de l'en-tête `Retry-After`, jamais le message `erreur`. Après un 401 `code_invalide`, elle laisse simplement la personne ressaisir le code, ou en redemander un s'il a expiré.
 
 ### 2.3 Agent MUNASEB (hors service, voir l'encadré plus haut)
 
@@ -446,6 +480,7 @@ Toutes : jeton agent MUNASEB ; l'agent qui agit est enregistré dans l'historiqu
 | `parametre_invalide` | 400 | liste des remboursements |
 | `telephone_invalide` | 422 | routes patient |
 | `code_invalide` | 401 | inscription, réinitialisation |
+| `trop_de_demandes` | 429 | demande de code (avec `Retry-After`), inscription et réinitialisation (sans) |
 | `telephone_deja_utilise` | 409 | inscription |
 | `telephone_inconnu` | 404 | réinitialisation |
 | `mot_de_passe_non_conforme` | 422 | inscription, réinitialisation |
