@@ -15,6 +15,7 @@ pub mod mot_de_passe;
 pub mod nip;
 pub mod notification;
 pub mod otp;
+pub mod patient;
 pub mod sms;
 pub mod telephone;
 pub mod totp;

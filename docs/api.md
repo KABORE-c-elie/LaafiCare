@@ -2,7 +2,7 @@
 
 Ce document décrit les routes de l'API Rust/Axum telles qu'elles sont **codées aujourd'hui**, puis celles qui sont **seulement prévues**. Les applications Angular (web) et Flutter (mobile) s'appuient sur lui. Il est mis à jour avec chaque ajout ou modification d'une route.
 
-État au 2026-10-09, branche `dev`.
+État au 2026-10-11, branche `dev`.
 
 Toutes les valeurs des exemples sont fictives.
 
@@ -41,7 +41,7 @@ Il existe **huit sortes de jetons**. Chaque route n'en accepte qu'une : un jeton
 
 | Sorte (`aud`) | Sert à | Durée | État |
 |---|---|---|---|
-| `laaficare:patient` | routes du patient | 24 h | émis par l'inscription et la connexion patient |
+| `laaficare:patient` | routes du patient (`GET /api/patients/moi`) | 24 h | émis par l'inscription et la connexion patient ; refusé après une réinitialisation du mot de passe |
 | `laaficare:professionnel_sans_affectation` | lister ses affectations, en activer une | 24 h | prévu (étape 3.6) |
 | `laaficare:professionnel_en_exercice` | routes métier (remboursements MUNASEB…) | 24 h | attendu par les routes MUNASEB ; émis à l'étape 3.9 |
 | `laaficare:administrateur` | routes de l'équipe LaafiCare | 24 h | prévu (étape 3.6) |
@@ -130,6 +130,7 @@ Résumé :
 | POST | `/api/patients/inscription` | tout le monde | fonctionne |
 | POST | `/api/patients/connexion` | tout le monde | fonctionne |
 | POST | `/api/patients/mot-de-passe/reinitialiser` | tout le monde | fonctionne |
+| GET | `/api/patients/moi` | jeton `laaficare:patient` | fonctionne |
 | POST | `/api/assurance-munaseb/remboursements/simuler-acte` | jeton en exercice, agent MUNASEB | **hors service** |
 | GET | `/api/assurance-munaseb/remboursements` | jeton en exercice, agent MUNASEB | **hors service** |
 | GET | `/api/assurance-munaseb/remboursements/{id}` | jeton en exercice, agent MUNASEB | **hors service** |
@@ -301,6 +302,46 @@ Les échecs s'additionnent d'un code à l'autre et ne reviennent à zéro qu'apr
 | Inscription ou réinitialisation | absent | « Trop d'essais avec ce code. Demandez un nouveau code. » Le champ du code est vidé et l'application propose le bouton « Renvoyer le code ». |
 
 L'application lit la valeur de l'en-tête `Retry-After`, jamais le message `erreur`. Après un 401 `code_invalide`, elle laisse simplement la personne ressaisir le code, ou en redemander un s'il a expiré.
+
+#### 2.2.6 `GET /api/patients/moi`
+
+Profil du patient connecté.
+
+- **Appelant** : jeton `laaficare:patient` (en-tête `Authorization: Bearer <jeton>`).
+- **Corps** : aucun.
+- **Réponse 200** :
+
+```json
+{
+  "compte_id": "0199b8e2-7c41-7a10-9f3e-2b6d1c0e4a55",
+  "nip": "1000000000000008",
+  "nom": "OUEDRAOGO",
+  "prenom": "Awa",
+  "telephone": "+22670000000",
+  "date_naissance": "1995-04-12",
+  "lieu_naissance": "Koudougou"
+}
+```
+
+| Champ | Contenu |
+|---|---|
+| `compte_id` | identifiant du compte patient ; **ne change jamais**. L'application s'en sert pour rattacher ce qu'elle garde sur le téléphone (rappels…). |
+| `nip` | NIP à 16 chiffres |
+| `nom`, `prenom` | toujours remplis |
+| `telephone` | forme normalisée (`+226…`) |
+| `date_naissance` | `AAAA-MM-JJ` |
+| `lieu_naissance` | texte saisi à l'inscription |
+
+- **Erreurs** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 401 | `authentification_requise` | en-tête `Authorization` absent |
+| 401 | `jeton_invalide` | jeton expiré, d'une autre sorte, **émis avant une réinitialisation du mot de passe**, ou compte désactivé |
+| 500 | `erreur_interne` | panne, ou incohérence en base |
+
+- **Révocation** : après une réinitialisation du mot de passe, tous les jetons émis avant elle sont refusés (401 `jeton_invalide`) : l'application renvoie la personne à l'écran de connexion.
+- **Compte verrouillé** (trop d'essais de mot de passe) : un jeton déjà reçu reste valable ; le verrouillage ne bloque que les nouvelles connexions.
 
 ### 2.3 Agent MUNASEB (hors service, voir l'encadré plus haut)
 

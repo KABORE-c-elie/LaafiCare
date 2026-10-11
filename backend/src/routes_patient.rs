@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 use crate::erreur_api::{ErreurApi, JsonApi, ReponseErreur, reponse_erreur, reponse_erreur_interne};
+use crate::extracteur_jwt::PatientAuthentifie;
 use laaficare_backend::auth_patient::{self, ErreurAuthPatient};
+use laaficare_backend::patient::{self, ErreurProfil, ProfilPatient};
 
 // Un seul endroit qui décide du code HTTP et du `code` par variante --
 // section 13, codes HTTP validés avec le porteur avant d'écrire ce
@@ -179,6 +181,20 @@ pub async fn se_connecter(
     Ok(Json(ConnexionReponse { jeton }))
 }
 
+/// `GET /api/patients/moi` -- profil du patient connecté (jeton
+/// `laaficare:patient`, compte actif, version de jeton à jour : voir
+/// `PatientAuthentifie`). Toute incohérence en base est une erreur interne
+/// (décisions M2, M3), le détail restant dans les journaux.
+pub async fn moi(
+    patient: PatientAuthentifie,
+    State(state): State<AppState>,
+) -> Result<Json<ProfilPatient>, ReponseErreur> {
+    patient::profil(&state.db, patient.compte_id)
+        .await
+        .map(Json)
+        .map_err(|ErreurProfil::Interne(detail)| reponse_erreur_interne("profil patient", &detail))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,5 +240,42 @@ mod tests {
         assert_eq!(corps.regles_non_respectees, Some(regles));
         let json = serde_json::to_string(&corps).unwrap();
         assert!(json.contains(r#""regles_non_respectees":["chiffre","caractere_special"]"#), "{json}");
+    }
+
+    // Base temporaire ; données fictives. De l'inscription au profil : le
+    // jeton reçu ouvre `GET /api/patients/moi`, et `compte_id` est son `sub`.
+    #[sqlx::test]
+    #[ignore]
+    async fn profil_du_patient_inscrit(pool: sqlx::PgPool) {
+        use axum::extract::FromRequestParts;
+        use axum::http::{Request, header::AUTHORIZATION};
+        use laaficare_backend::jwt::{JwtService, SorteJeton};
+        use laaficare_backend::sms::SmsSenderConsole;
+        use std::sync::Arc;
+
+        let state = AppState { db: pool, jwt: JwtService::new(&"a".repeat(32)), sms: Arc::new(SmsSenderConsole) };
+        let (code, _) = auth_patient::demander_otp(&state.db, "70 02 20 01").await.unwrap();
+        let naissance = NaiveDate::from_ymd_opt(1995, 4, 12).unwrap();
+        let jeton = auth_patient::creer_compte(
+            &state.db, &state.jwt, "70 02 20 01", &code, "OUEDRAOGO", "Awa", naissance, "Koudougou", "Exemple#2026",
+        )
+        .await
+        .unwrap();
+
+        let mut parts = Request::builder()
+            .header(AUTHORIZATION, format!("Bearer {jeton}"))
+            .body(())
+            .unwrap()
+            .into_parts()
+            .0;
+        let patient = PatientAuthentifie::from_request_parts(&mut parts, &state).await.unwrap();
+        let Json(profil) = moi(patient, State(state.clone())).await.unwrap();
+
+        let sub = state.jwt.verifier(&jeton, SorteJeton::Patient).unwrap().sub;
+        assert_eq!(profil.compte_id, sub);
+        assert_eq!((profil.nom.as_str(), profil.prenom.as_str()), ("OUEDRAOGO", "Awa"));
+        assert_eq!(profil.telephone, "+22670022001");
+        assert_eq!((profil.date_naissance, profil.lieu_naissance.as_str()), (naissance, "Koudougou"));
+        assert_eq!(profil.nip.len(), 16);
     }
 }

@@ -77,6 +77,52 @@ impl IntoResponse for RefusAuthentification {
     }
 }
 
+/// Patient authentifié : jeton `laaficare:patient` valide, et compte patient
+/// toujours actif avec la même `version_jeton` qu'à l'émission du jeton.
+#[derive(Debug)]
+pub struct PatientAuthentifie {
+    /// Identifiant du compte patient (le `sub` du jeton, décision J3).
+    pub compte_id: Uuid,
+}
+
+impl FromRequestParts<AppState> for PatientAuthentifie {
+    type Rejection = RefusAuthentification;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        let TypedHeader(Authorization(bearer)) = parts
+            .extract::<TypedHeader<Authorization<Bearer>>>()
+            .await
+            .map_err(|_| RefusAuthentification::IdentifiantsAbsents)?;
+
+        // Signature HS256, expiration et audience `laaficare:patient`
+        // vérifiées par `jwt.rs` : tout autre sorte de jeton est invalide ici.
+        let claims = state
+            .jwt
+            .verifier(bearer.token(), SorteJeton::Patient)
+            .map_err(|_| RefusAuthentification::JetonInvalide)?;
+
+        // Révocation (décision C2) : un jeton émis avant une réinitialisation
+        // du mot de passe porte une version périmée ; un compte désactivé
+        // perd l'accès tout de suite. Les deux sont des jetons révoqués, donc
+        // invalides (RFC 6750 §3.1 : « expired, revoked, malformed, or
+        // invalid for other reasons »), pas un manque de droits : 401.
+        // Le verrouillage n'est pas regardé : il ne porte que sur les essais
+        // de connexion (BF-01), pas sur un jeton déjà émis.
+        let compte: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM compte \
+             WHERE id = $1 AND type_compte = 'patient' AND statut = 'actif' AND version_jeton = $2",
+        )
+        .bind(claims.sub)
+        .bind(claims.ver)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| RefusAuthentification::Interne(e.to_string()))?;
+        let compte_id = compte.ok_or(RefusAuthentification::JetonInvalide)?;
+
+        Ok(PatientAuthentifie { compte_id })
+    }
+}
+
 /// Agent MUNASEB authentifié : jeton valide, rôle `agent_assurance_munaseb`,
 /// et compte agent toujours présent en base.
 #[derive(Debug)]
@@ -155,6 +201,12 @@ mod tests {
             .map_err(IntoResponse::into_response)
     }
 
+    async fn extraire_patient(state: &AppState, authorization: Option<&str>) -> Result<PatientAuthentifie, Response> {
+        PatientAuthentifie::from_request_parts(&mut parts(authorization), state)
+            .await
+            .map_err(IntoResponse::into_response)
+    }
+
     fn www_authenticate(reponse: &Response) -> Option<&str> {
         reponse.headers().get(WWW_AUTHENTICATE).map(|v| v.to_str().unwrap())
     }
@@ -209,6 +261,67 @@ mod tests {
             assert_eq!(refus.status(), StatusCode::UNAUTHORIZED, "{sorte:?}");
             assert_eq!(www_authenticate(&refus), Some(r#"Bearer error="invalid_token""#));
         }
+
+        // Extracteur patient : sans en-tête, ou avec toute autre sorte de
+        // jeton, refus avant la base.
+        let absent = extraire_patient(&state, None).await.unwrap_err();
+        assert_eq!(absent.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(www_authenticate(&absent), Some("Bearer"));
+        for sorte in SorteJeton::TOUTES {
+            if sorte == SorteJeton::Patient {
+                continue;
+            }
+            let aff = (sorte == SorteJeton::ProfessionnelEnExercice).then_some(Uuid::from_u128(7));
+            let jeton = state.jwt.emettre(sorte, id, 0, aff).unwrap();
+            let refus = extraire_patient(&state, Some(&format!("Bearer {jeton}"))).await.unwrap_err();
+            assert_eq!(refus.status(), StatusCode::UNAUTHORIZED, "{sorte:?}");
+            assert_eq!(www_authenticate(&refus), Some(r#"Bearer error="invalid_token""#));
+        }
+    }
+
+    #[sqlx::test]
+    #[ignore]
+    async fn patient_version_statut_et_verrouillage_en_base(pool: PgPool) {
+        let state = etat(pool);
+        let utilisateur_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('Test', 'Patient', '+22670021001') RETURNING id",
+        )
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+        let compte_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'patient', 'x') RETURNING id",
+        )
+        .bind(utilisateur_id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+        let en_tete = format!("Bearer {}", state.jwt.emettre(SorteJeton::Patient, compte_id, 0, None).unwrap());
+        let modifier = |sql: &'static str| {
+            let db = state.db.clone();
+            async move { sqlx::query(sql).bind(compte_id).execute(&db).await.unwrap() }
+        };
+
+        // Jeton valide : accepté.
+        assert_eq!(extraire_patient(&state, Some(&en_tete)).await.unwrap().compte_id, compte_id);
+
+        // Compte verrouillé : le jeton déjà émis reste accepté (BF-01 ne
+        // porte que sur les essais de connexion).
+        modifier("UPDATE compte SET verrouille_jusqua = now() + interval '15 minutes' WHERE id = $1").await;
+        assert!(extraire_patient(&state, Some(&en_tete)).await.is_ok());
+
+        // Version augmentée (réinitialisation du mot de passe) : refusé.
+        modifier("UPDATE compte SET version_jeton = version_jeton + 1 WHERE id = $1").await;
+        let refus = extraire_patient(&state, Some(&en_tete)).await.unwrap_err();
+        assert_eq!(refus.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(www_authenticate(&refus), Some(r#"Bearer error="invalid_token""#));
+
+        // Un jeton émis avec la nouvelle version passe ; compte désactivé : refusé.
+        let nouveau = format!("Bearer {}", state.jwt.emettre(SorteJeton::Patient, compte_id, 1, None).unwrap());
+        assert!(extraire_patient(&state, Some(&nouveau)).await.is_ok());
+        modifier("UPDATE compte SET statut = 'desactive' WHERE id = $1").await;
+        let refus = extraire_patient(&state, Some(&nouveau)).await.unwrap_err();
+        assert_eq!(refus.status(), StatusCode::UNAUTHORIZED);
     }
 
     // Base temporaire par test, jamais la base de développement : voir

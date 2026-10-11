@@ -150,6 +150,7 @@ async fn main() {
             post(routes_remboursement_munaseb::payer),
         )
         .route("/api/patients/connexion", post(routes_patient::se_connecter))
+        .route("/api/patients/moi", get(routes_patient::moi))
         .route("/api/patients/otp", post(routes_patient::demander_otp))
         .route("/api/patients/inscription", post(routes_patient::creer_compte))
         .route(
