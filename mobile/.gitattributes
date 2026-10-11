@@ -1,0 +1,14 @@
+# Fins de ligne de l'application mobile : LF partout, dans le dépôt et sur le
+# disque, quel que soit core.autocrlf (sous Windows : true). Sans cette règle,
+# Git avertit « LF will be replaced by CRLF » et les fichiers changent de fin
+# de ligne d'une machine à l'autre.
+#
+# Doc Git, gitattributes : « text=auto » laisse Git reconnaître les fichiers
+# texte (les images et autres binaires ne sont pas touchés) ; « eol=lf » garde
+# LF dans le répertoire de travail, et core.autocrlf ne s'applique plus.
+# https://git-scm.com/docs/gitattributes
+* text=auto eol=lf
+
+# Scripts Windows : CRLF obligatoire pour cmd.exe (gradlew.bat, aujourd'hui
+# ignoré, mais recréé par Flutter).
+*.bat text eol=crlf
