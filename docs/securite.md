@@ -79,9 +79,13 @@ Un *OTP* (*one-time password*, mot de passe à usage unique) est un code à **6 
 
 Il n'est **accepté qu'une fois**, puis effacé. Une nouvelle demande remplace l'ancien code.
 
-Le code est enregistré haché (SHA-256), et non avec Argon2id : avec seulement un million de valeurs possibles, un calcul lent n'apporterait rien. La vraie protection est la courte durée de vie et l'usage unique.
+**Les essais sont limités.** Avec un million de codes possibles, des essais illimités permettraient de trouver le bon code en quelques minutes. Un code n'accepte donc que **5 essais** ; ensuite, tant qu'aucun code juste n'a été saisi, chaque nouveau code n'en accepte qu'**un seul**. Les échecs s'additionnent d'un code à l'autre (NIST interdit de les remettre à zéro avec un nouveau code) et ne reviennent à zéro qu'après un code juste. Chaque essai est compté *avant* d'être vérifié, pour que des essais lancés en même temps ne dépassent pas la limite.
 
-Fichier : [`otp.rs`](../backend/src/otp.rs). Source : NIST SP 800-63B.
+**Les envois sont limités** : **60 secondes** au moins entre deux codes pour un même numéro, et **5 codes par heure**. Un SMS coûte de l'argent, et un envoi sans limite permettrait de harceler quelqu'un. Ces limites s'appliquent à tout numéro, inscrit ou non : elles ne révèlent pas si une personne a un compte. La base ne garde la trace des envois qu'une heure (sans le numéro de téléphone) : les plus anciens sont effacés à chaque envoi.
+
+Le code est enregistré haché (SHA-256), et non avec Argon2id : avec seulement un million de valeurs possibles, un calcul lent n'apporterait rien. La vraie protection est la courte durée de vie, l'usage unique et la limite d'essais.
+
+Fichier : [`otp.rs`](../backend/src/otp.rs). Sources : NIST SP 800-63B rév. 4, §3.1.3 (limitation des essais) ; OWASP *Multifactor Authentication Cheat Sheet* (limites par compte, coût des SMS). Les valeurs (60 s, 5 par heure, 5 essais) sont celles du porteur : aucune des deux sources n'en donne.
 
 ## 5. Le second facteur (TOTP)
 

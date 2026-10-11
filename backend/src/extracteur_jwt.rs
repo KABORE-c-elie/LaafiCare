@@ -29,7 +29,7 @@ use sqlx::types::Uuid;
 
 use crate::AppState;
 use crate::erreur_api::reponse_erreur;
-use laaficare_backend::auth_agent_assurance_munaseb::ROLE as ROLE_AGENT_ASSURANCE_MUNASEB;
+use laaficare_backend::jwt::SorteJeton;
 
 /// Motif de refus d'une requête protégée. Messages génériques : la réponse
 /// n'aide pas à deviner pourquoi un jeton est refusé.
@@ -93,31 +93,30 @@ impl FromRequestParts<AppState> for AgentAssuranceMunasebAuthentifie {
             .await
             .map_err(|_| RefusAuthentification::IdentifiantsAbsents)?;
 
-        // Validation::default() de jsonwebtoken : HS256 et expiration
-        // vérifiés (voir jwt.rs).
+        // Signature HS256, expiration et audience vérifiées par `jwt.rs` :
+        // un jeton d'une autre sorte (patient, intermédiaire…) est un jeton
+        // invalide pour cette route (RFC 6750 §3.1, invalid_token), pas un
+        // manque de droits.
         let claims = state
             .jwt
-            .verifier(bearer.token())
+            .verifier(bearer.token(), SorteJeton::ProfessionnelEnExercice)
             .map_err(|_| RefusAuthentification::JetonInvalide)?;
 
-        if claims.role != ROLE_AGENT_ASSURANCE_MUNASEB {
-            return Err(RefusAuthentification::Interdit);
-        }
-
-        let utilisateur_id =
-            Uuid::parse_str(&claims.sub).map_err(|_| RefusAuthentification::JetonInvalide)?;
-
-        // Décision J3 : un agent retiré perd l'accès tout de suite, sans
-        // attendre l'expiration de son jeton (jusqu'à 24 h).
-        let toujours_agent: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM agent_assurance_munaseb WHERE utilisateur_id = $1")
-                .bind(utilisateur_id)
-                .fetch_optional(&state.db)
-                .await
-                .map_err(|e| RefusAuthentification::Interne(e.to_string()))?;
-        if toujours_agent.is_none() {
-            return Err(RefusAuthentification::Interdit);
-        }
+        // TEMPORAIRE jusqu'à l'étape 3.9 : la table `agent_assurance_munaseb`
+        // a été supprimée par la migration 0011, cette requête échoue donc
+        // (500) et les routes MUNASEB restent hors service. L'étape 3.9 la
+        // remplace par la vérification de l'affectation portée par le jeton
+        // (compte actif, version_jeton, affectation active, structure
+        // validée, licence en cours).
+        let utilisateur_id: Option<Uuid> = sqlx::query_scalar(
+            "SELECT c.utilisateur_id FROM compte c \
+             JOIN agent_assurance_munaseb a ON a.utilisateur_id = c.utilisateur_id WHERE c.id = $1",
+        )
+        .bind(claims.sub)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| RefusAuthentification::Interne(e.to_string()))?;
+        let utilisateur_id = utilisateur_id.ok_or(RefusAuthentification::Interdit)?;
 
         Ok(AgentAssuranceMunasebAuthentifie { utilisateur_id })
     }
@@ -130,7 +129,7 @@ mod tests {
     use axum::http::Request;
     use axum::http::header::AUTHORIZATION;
     use jsonwebtoken::{EncodingKey, Header, encode};
-    use laaficare_backend::jwt::{Claims, JwtService};
+    use laaficare_backend::jwt::JwtService;
     use laaficare_backend::sms::SmsSenderConsole;
     use sqlx::PgPool;
 
@@ -166,7 +165,8 @@ mod tests {
     #[tokio::test]
     async fn refus_avant_toute_requete_en_base() {
         let state = etat(PgPool::connect_lazy("postgres://localhost/aucune_base").unwrap());
-        let id = "11111111-1111-1111-1111-111111111111";
+        let id = Uuid::from_u128(1);
+        let affectation = Some(Uuid::from_u128(7));
 
         let absent = extraire(&state, None).await.unwrap_err();
         assert_eq!(absent.status(), StatusCode::UNAUTHORIZED);
@@ -176,16 +176,21 @@ mod tests {
         assert_eq!(mal_forme.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(www_authenticate(&mal_forme), Some("Bearer"));
 
-        let autre_cle = JwtService::new(&"b".repeat(32)).emettre(id, ROLE_AGENT_ASSURANCE_MUNASEB).unwrap();
+        let autre_cle = JwtService::new(&"b".repeat(32))
+            .emettre(SorteJeton::ProfessionnelEnExercice, id, 0, affectation)
+            .unwrap();
         let refus = extraire(&state, Some(&format!("Bearer {autre_cle}"))).await.unwrap_err();
         assert_eq!(refus.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(www_authenticate(&refus), Some(r#"Bearer error="invalid_token""#));
 
-        // Expiré au-delà des 60 s de tolérance de Validation::default().
-        let maintenant = jsonwebtoken::get_current_timestamp() as usize;
+        // Expiré d'une seconde : aucune tolérance (leeway = 0, jwt.rs).
+        let maintenant = jsonwebtoken::get_current_timestamp();
         let expire = encode(
             &Header::default(),
-            &Claims { sub: id.into(), role: ROLE_AGENT_ASSURANCE_MUNASEB.into(), iat: maintenant - 300, exp: maintenant - 200 },
+            &serde_json::json!({
+                "sub": id, "aud": SorteJeton::ProfessionnelEnExercice.audience(), "ver": 0,
+                "aff": affectation, "iat": maintenant - 60, "exp": maintenant - 1
+            }),
             &EncodingKey::from_secret(SECRET.as_bytes()),
         )
         .unwrap();
@@ -193,10 +198,17 @@ mod tests {
         assert_eq!(refus.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(www_authenticate(&refus), Some(r#"Bearer error="invalid_token""#));
 
-        let patient = state.jwt.emettre(id, "patient").unwrap();
-        let refus = extraire(&state, Some(&format!("Bearer {patient}"))).await.unwrap_err();
-        assert_eq!(refus.status(), StatusCode::FORBIDDEN);
-        assert_eq!(www_authenticate(&refus), None);
+        // Toute autre sorte de jeton, même bien signée : mauvaise audience,
+        // donc jeton invalide pour cette route (401), jamais 403.
+        for sorte in SorteJeton::TOUTES {
+            if sorte == SorteJeton::ProfessionnelEnExercice {
+                continue;
+            }
+            let jeton = state.jwt.emettre(sorte, id, 0, None).unwrap();
+            let refus = extraire(&state, Some(&format!("Bearer {jeton}"))).await.unwrap_err();
+            assert_eq!(refus.status(), StatusCode::UNAUTHORIZED, "{sorte:?}");
+            assert_eq!(www_authenticate(&refus), Some(r#"Bearer error="invalid_token""#));
+        }
     }
 
     // Base temporaire par test, jamais la base de développement : voir
@@ -219,7 +231,12 @@ mod tests {
             .await
             .unwrap();
 
-        let jeton = state.jwt.emettre(&utilisateur_id.to_string(), ROLE_AGENT_ASSURANCE_MUNASEB).unwrap();
+        // Échoue dès l'insertion ci-dessus (table supprimée) : test réécrit
+        // à l'étape 3.9, avec les affectations.
+        let jeton = state
+            .jwt
+            .emettre(SorteJeton::ProfessionnelEnExercice, utilisateur_id, 0, Some(Uuid::from_u128(7)))
+            .unwrap();
         let en_tete = format!("Bearer {jeton}");
 
         let agent = extraire(&state, Some(&en_tete)).await.unwrap();

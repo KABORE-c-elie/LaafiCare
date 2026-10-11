@@ -165,6 +165,14 @@ cargo run                # compile et lance le serveur
 
 Au démarrage, le serveur applique les migrations manquantes. Pour vérifier qu'il répond, ouvrir `http://127.0.0.1:8080/health` dans un navigateur (avec le port choisi).
 
+**Tester l'application mobile sur un téléphone Android branché en USB** : le serveur reste sur `127.0.0.1`, il n'est jamais ouvert au réseau local. L'outil `adb` (fourni avec Android Studio) relaie le port du téléphone vers celui de l'ordinateur :
+
+```
+adb reverse tcp:8080 tcp:8080
+```
+
+Le premier port est celui du téléphone, le second celui de l'ordinateur (aide de l'outil, `adb --help` : `reverse REMOTE LOCAL`). L'application sur le téléphone appelle alors `http://127.0.0.1:8080`, et la demande arrive au serveur de l'ordinateur. Le relais tombe quand on débranche le téléphone : relancer la commande à chaque branchement.
+
 ### Tester
 
 Un *test* est un petit programme qui vérifie automatiquement qu'une règle est respectée. Depuis `backend/` :
@@ -179,7 +187,7 @@ cargo test --lib -- --include-ignored totp        # seulement ceux dont le nom c
 
 Les tests qui utilisent la base créent chacun une base temporaire, supprimée ensuite : la base de développement n'est jamais touchée.
 
-**Échecs attendus pour l'instant** : trois tests échouent, `auth_professionnel`, `auth_agent_assurance_munaseb` et `extracteur_jwt`. Ils correspondent à l'ancienne connexion professionnelle, réécrite à l'étape 3.6. Tout autre échec est un vrai problème.
+**Échecs attendus pour l'instant** : deux tests échouent, `auth_professionnel` (ancienne connexion professionnelle, réécrite à l'étape 3.6) et `extracteur_jwt` (ancien contrôle de l'agent MUNASEB, réécrit à l'étape 3.9). Tout autre échec est un vrai problème.
 
 ## 7. Pour aller plus loin
 

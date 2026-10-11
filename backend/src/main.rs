@@ -1,6 +1,5 @@
 mod erreur_api;
 mod extracteur_jwt;
-mod routes_agent_assurance_munaseb;
 mod routes_patient;
 mod routes_remboursement_munaseb;
 
@@ -128,10 +127,6 @@ async fn main() {
 
     let app = Router::new()
         .route("/health", get(health))
-        .route(
-            "/api/assurance-munaseb/connexion",
-            post(routes_agent_assurance_munaseb::se_connecter),
-        )
         .route("/api/assurance-munaseb/remboursements", get(routes_remboursement_munaseb::lister))
         .route(
             "/api/assurance-munaseb/remboursements/simuler-acte",

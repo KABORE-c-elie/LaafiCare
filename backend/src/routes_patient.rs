@@ -2,7 +2,9 @@
 //! ne fait que : désérialiser, appeler le service métier, traduire le
 //! résultat en réponse HTTP -- aucune logique métier ici.
 
-use axum::{Json, extract::State, http::StatusCode};
+use axum::http::{HeaderValue, StatusCode, header::RETRY_AFTER};
+use axum::response::{IntoResponse, Response};
+use axum::{Json, extract::State};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +19,9 @@ fn mapper_erreur(erreur: ErreurAuthPatient) -> ReponseErreur {
     let (statut, code) = match &erreur {
         ErreurAuthPatient::TelephoneInvalide => (StatusCode::UNPROCESSABLE_ENTITY, "telephone_invalide"),
         ErreurAuthPatient::CodeInvalide => (StatusCode::UNAUTHORIZED, "code_invalide"),
+        // O5, O6 : RFC 6585 §4. L'en-tête `Retry-After` est ajouté par
+        // `reponse_erreur_patient`.
+        ErreurAuthPatient::TropDeDemandes { .. } => (StatusCode::TOO_MANY_REQUESTS, "trop_de_demandes"),
         ErreurAuthPatient::TelephoneDejaUtilise => (StatusCode::CONFLICT, "telephone_deja_utilise"),
         ErreurAuthPatient::TelephoneInconnu => (StatusCode::NOT_FOUND, "telephone_inconnu"),
         // Toutes les règles non respectées, pour une liste à cocher dans
@@ -39,6 +44,25 @@ fn mapper_erreur(erreur: ErreurAuthPatient) -> ReponseErreur {
     reponse_erreur(statut, code, erreur.to_string())
 }
 
+/// Réponse d'erreur complète des routes patient : celle de `mapper_erreur`,
+/// plus l'en-tête `Retry-After` (en secondes) quand une demande de code est
+/// refusée pour trop de demandes. RFC 6585 §4 : une réponse 429 « MAY
+/// include a Retry-After header indicating how long to wait before making a
+/// new request ». Construction de la réponse puis ajout de l'en-tête : même
+/// méthode que `extracteur_jwt.rs` pour `WWW-Authenticate` (`headers_mut`,
+/// doc axum 0.8.9).
+fn reponse_erreur_patient(erreur: ErreurAuthPatient) -> Response {
+    let reessayer_dans_secs = match &erreur {
+        ErreurAuthPatient::TropDeDemandes { reessayer_dans_secs } => *reessayer_dans_secs,
+        _ => None,
+    };
+    let mut reponse = mapper_erreur(erreur).into_response();
+    if let Some(secs) = reessayer_dans_secs {
+        reponse.headers_mut().insert(RETRY_AFTER, HeaderValue::from(secs));
+    }
+    reponse
+}
+
 #[derive(Deserialize)]
 pub struct DemandeOtpRequete {
     pub telephone: String,
@@ -51,10 +75,10 @@ pub struct DemandeOtpRequete {
 pub async fn demander_otp(
     State(state): State<AppState>,
     JsonApi(corps): JsonApi<DemandeOtpRequete>,
-) -> Result<StatusCode, ReponseErreur> {
+) -> Result<StatusCode, Response> {
     let (code, telephone) = auth_patient::demander_otp(&state.db, &corps.telephone)
         .await
-        .map_err(mapper_erreur)?;
+        .map_err(reponse_erreur_patient)?;
 
     let message = format!("Votre code LaafiCare : {code}. Valide 5 minutes.");
     // Envoi vers le numéro NORMALISÉ, jamais vers la saisie brute (décision
@@ -89,7 +113,7 @@ pub struct InscriptionReponse {
 pub async fn creer_compte(
     State(state): State<AppState>,
     JsonApi(corps): JsonApi<InscriptionRequete>,
-) -> Result<(StatusCode, Json<InscriptionReponse>), ReponseErreur> {
+) -> Result<(StatusCode, Json<InscriptionReponse>), Response> {
     let jeton = auth_patient::creer_compte(
         &state.db,
         &state.jwt,
@@ -102,7 +126,7 @@ pub async fn creer_compte(
         &corps.mot_de_passe,
     )
     .await
-    .map_err(mapper_erreur)?;
+    .map_err(reponse_erreur_patient)?;
 
     Ok((StatusCode::CREATED, Json(InscriptionReponse { jeton })))
 }
@@ -119,7 +143,7 @@ pub struct ReinitialisationRequete {
 pub async fn reinitialiser_mot_de_passe(
     State(state): State<AppState>,
     JsonApi(corps): JsonApi<ReinitialisationRequete>,
-) -> Result<StatusCode, ReponseErreur> {
+) -> Result<StatusCode, Response> {
     auth_patient::reinitialiser_mot_de_passe(
         &state.db,
         &corps.telephone,
@@ -127,7 +151,7 @@ pub async fn reinitialiser_mot_de_passe(
         &corps.nouveau_mot_de_passe,
     )
     .await
-    .map_err(mapper_erreur)?;
+    .map_err(reponse_erreur_patient)?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -148,10 +172,10 @@ pub struct ConnexionReponse {
 pub async fn se_connecter(
     State(state): State<AppState>,
     JsonApi(corps): JsonApi<ConnexionRequete>,
-) -> Result<Json<ConnexionReponse>, ReponseErreur> {
+) -> Result<Json<ConnexionReponse>, Response> {
     let jeton = auth_patient::se_connecter(&state.db, &state.jwt, &corps.telephone, &corps.mot_de_passe)
         .await
-        .map_err(mapper_erreur)?;
+        .map_err(reponse_erreur_patient)?;
     Ok(Json(ConnexionReponse { jeton }))
 }
 
@@ -174,6 +198,21 @@ mod tests {
             assert!(!corps.erreur.contains("secret"), "le détail interne ne sort jamais");
             assert!(corps.regles_non_respectees.is_none());
         }
+    }
+
+    #[test]
+    fn trop_de_demandes_429_avec_ou_sans_retry_after() {
+        let reponse = reponse_erreur_patient(ErreurAuthPatient::TropDeDemandes { reessayer_dans_secs: Some(42) });
+        assert_eq!(reponse.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(reponse.headers().get(RETRY_AFTER).unwrap(), "42");
+
+        // Dernier essai du code épuisé : pas de délai, il faut un nouveau code.
+        let reponse = reponse_erreur_patient(ErreurAuthPatient::TropDeDemandes { reessayer_dans_secs: None });
+        assert_eq!(reponse.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(reponse.headers().get(RETRY_AFTER).is_none());
+
+        let (_, Json(corps)) = mapper_erreur(ErreurAuthPatient::TropDeDemandes { reessayer_dans_secs: Some(42) });
+        assert_eq!(corps.code, "trop_de_demandes");
     }
 
     #[test]

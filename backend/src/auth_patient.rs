@@ -18,7 +18,7 @@ use chrono::NaiveDate;
 use sqlx::PgPool;
 use sqlx::types::Uuid;
 
-use crate::jwt::JwtService;
+use crate::jwt::{JwtService, SorteJeton};
 use crate::mot_de_passe::RegleMotDePasse;
 use crate::verrouillage::{self, ErreurConnexion, Verification};
 use crate::{mot_de_passe, nip, otp, telephone};
@@ -33,6 +33,14 @@ pub enum ErreurAuthPatient {
 
     #[error("code invalide ou expiré")]
     CodeInvalide,
+
+    /// Limite de l'OTP atteinte (O5, O6) : trop de demandes de code
+    /// (`reessayer_dans_secs` = délai d'attente, en-tête `Retry-After`), ou
+    /// dernier essai du code en cours épuisé (`None` : il faut demander un
+    /// nouveau code). Ne dit rien d'un compte : les limites s'appliquent à
+    /// tout numéro, inscrit ou non (O4).
+    #[error("trop de demandes, réessayer plus tard")]
+    TropDeDemandes { reessayer_dans_secs: Option<u64> },
 
     /// `creer_compte` uniquement : un compte patient existait déjà pour ce
     /// téléphone au moment de la vérification de l'OTP.
@@ -64,6 +72,27 @@ pub enum ErreurAuthPatient {
 impl From<telephone::TelephoneInvalide> for ErreurAuthPatient {
     fn from(_: telephone::TelephoneInvalide) -> Self {
         ErreurAuthPatient::TelephoneInvalide
+    }
+}
+
+impl From<otp::ErreurDemandeOtp> for ErreurAuthPatient {
+    fn from(erreur: otp::ErreurDemandeOtp) -> Self {
+        match erreur {
+            otp::ErreurDemandeOtp::TropDeDemandes { reessayer_dans_secs } => {
+                ErreurAuthPatient::TropDeDemandes { reessayer_dans_secs: Some(reessayer_dans_secs) }
+            }
+            otp::ErreurDemandeOtp::Base(erreur) => ErreurAuthPatient::Interne(erreur.to_string()),
+        }
+    }
+}
+
+/// Résultat d'une vérification d'OTP traduit pour les flux patient :
+/// `Valide` passe, les deux autres deviennent une erreur.
+async fn verifier_otp(pool: &PgPool, utilisateur_id: Uuid, code_otp: &str) -> Result<(), ErreurAuthPatient> {
+    match otp::verifier(pool, utilisateur_id, code_otp).await? {
+        otp::VerificationOtp::Valide => Ok(()),
+        otp::VerificationOtp::Invalide => Err(ErreurAuthPatient::CodeInvalide),
+        otp::VerificationOtp::EssaisEpuises => Err(ErreurAuthPatient::TropDeDemandes { reessayer_dans_secs: None }),
     }
 }
 
@@ -176,9 +205,7 @@ pub async fn creer_compte(
     // OTP vérifié AVANT de regarder si le compte existe déjà : sinon un
     // appelant sans code valide pourrait sonder n'importe quel numéro pour
     // savoir s'il est déjà inscrit, sans jamais prouver qu'il le contrôle.
-    if !otp::verifier(pool, utilisateur_id, code_otp).await? {
-        return Err(ErreurAuthPatient::CodeInvalide);
-    }
+    verifier_otp(pool, utilisateur_id, code_otp).await?;
 
     if compte_patient.is_some() {
         return Err(ErreurAuthPatient::TelephoneDejaUtilise);
@@ -198,11 +225,16 @@ pub async fn creer_compte(
         .execute(&mut *tx)
         .await?;
 
-    sqlx::query("INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'patient', $2)")
-        .bind(utilisateur_id)
-        .bind(&hash)
-        .execute(&mut *tx)
-        .await?;
+    // `version_jeton` relue plutôt que supposée à 0 : le jeton porte la
+    // valeur réelle de la base (décision C2).
+    let (compte_id, version_jeton): (Uuid, i32) = sqlx::query_as(
+        "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'patient', $2) \
+         RETURNING id, version_jeton",
+    )
+    .bind(utilisateur_id)
+    .bind(&hash)
+    .fetch_one(&mut *tx)
+    .await?;
 
     sqlx::query(
         "INSERT INTO patient (utilisateur_id, nip, date_naissance, lieu_naissance) VALUES ($1, $2, $3, $4)",
@@ -216,7 +248,7 @@ pub async fn creer_compte(
 
     tx.commit().await?;
 
-    jwt.emettre(&utilisateur_id.to_string(), "patient")
+    jwt.emettre(SorteJeton::Patient, compte_id, version_jeton, None)
         .map_err(|e| ErreurAuthPatient::Interne(e.to_string()))
 }
 
@@ -237,9 +269,7 @@ pub async fn reinitialiser_mot_de_passe(
 
     // Même ordre que `creer_compte`, même raison : prouver le contrôle du
     // numéro avant de révéler quoi que ce soit sur l'état du compte.
-    if !otp::verifier(pool, utilisateur_id, code_otp).await? {
-        return Err(ErreurAuthPatient::CodeInvalide);
-    }
+    verifier_otp(pool, utilisateur_id, code_otp).await?;
 
     let compte_id = compte_patient.ok_or(ErreurAuthPatient::TelephoneInconnu)?;
 
@@ -280,8 +310,8 @@ pub async fn se_connecter(
     // Un format invalide ne correspond à aucun compte possible : le dire
     // ne révèle rien (décision T3), inutile de vérifier un faux hachage.
     let telephone = telephone::normaliser(telephone_saisi)?;
-    let compte: Option<(Uuid, Uuid)> = sqlx::query_as(
-        "SELECT c.id, c.utilisateur_id FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
+    let compte: Option<(Uuid, i32)> = sqlx::query_as(
+        "SELECT c.id, c.version_jeton FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
          WHERE u.telephone = $1 AND c.type_compte = 'patient'",
     )
     .bind(&telephone)
@@ -305,16 +335,26 @@ pub async fn se_connecter(
 
     // `verifier` n'accepte qu'un compte existant : `compte` est forcément
     // présent ici.
-    let (_, utilisateur_id) =
+    let (compte_id, version_jeton) =
         compte.ok_or_else(|| ErreurAuthPatient::Interne("compte vérifié introuvable".into()))?;
 
-    jwt.emettre(&utilisateur_id.to_string(), "patient")
+    jwt.emettre(SorteJeton::Patient, compte_id, version_jeton, None)
         .map_err(|e| ErreurAuthPatient::Interne(e.to_string()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Simule une minute écoulée avant de redemander un code pour un même
+    /// numéro : sans cela, le délai de 60 s entre deux envois (O1, otp.rs)
+    /// refuserait la demande.
+    async fn laisser_passer_une_minute(pool: &PgPool) {
+        sqlx::query("UPDATE envoi_otp SET envoye_le = envoye_le - interval '61 seconds'")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
 
     // Base temporaire par test, jamais la base de développement : voir
     // « Tests et environnement », section 12 du CLAUDE.md.
@@ -350,6 +390,7 @@ mod tests {
         ), "le code déjà utilisé ne doit pas être réutilisable (règle NIST, otp.rs)");
 
         // --- mot de passe oublié, sur le compte qu'on vient de créer ---
+        laisser_passer_une_minute(&pool).await;
         let (code2, _) = demander_otp(&pool, telephone).await.unwrap();
 
         assert!(matches!(
@@ -359,6 +400,7 @@ mod tests {
         // code2 vient d'être consommé par l'appel ci-dessus (vérifié avec
         // succès avant l'échec métier) : il en faut un nouveau, comme un
         // vrai client redemanderait pour le bon flux.
+        laisser_passer_une_minute(&pool).await;
         let (code2b, _) = demander_otp(&pool, telephone).await.unwrap();
 
         reinitialiser_mot_de_passe(&pool, telephone, &code2b, "Nouveau-mdp-2")
@@ -390,22 +432,25 @@ mod tests {
             .await
             .unwrap();
 
-        // --- succès : jeton patient pour cette identité ---
+        // --- succès : jeton patient pour ce compte ---
         let jeton = se_connecter(&pool, &jwt, telephone, bon).await.unwrap();
-        let claims = jwt.verifier(&jeton).unwrap();
-        assert_eq!(claims.role, "patient");
-        let utilisateur_id: Uuid = sqlx::query_scalar("SELECT id FROM utilisateur WHERE telephone = $1")
-            .bind(telephone)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(claims.sub, utilisateur_id.to_string());
+        let claims = jwt.verifier(&jeton, SorteJeton::Patient).unwrap();
+        let (compte_id, version_jeton): (Uuid, i32) = sqlx::query_as(
+            "SELECT c.id, c.version_jeton FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
+             WHERE u.telephone = $1 AND c.type_compte = 'patient'",
+        )
+        .bind(telephone)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!((claims.sub, claims.ver, claims.aff), (compte_id, version_jeton, None));
 
         // --- le même numéro saisi sous d'autres formes (décision C3) ---
         for saisie in ["70 01 60 01", "70-01-60-01", "70.01.60.01", "00226 70016001", "226 70 01 60 01"] {
             se_connecter(&pool, &jwt, saisie, bon).await.unwrap_or_else(|e| panic!("{saisie:?} : {e:?}"));
         }
         // L'OTP renvoie le numéro normalisé, vers lequel part le SMS.
+        laisser_passer_une_minute(&pool).await;
         let (_, normalise) = demander_otp(&pool, "70 01 60 01").await.unwrap();
         assert_eq!(normalise, telephone);
         // Format invalide : erreur distincte, qui ne dit rien d'un compte (T3).
@@ -435,27 +480,25 @@ mod tests {
 
         // --- réinitialisation par OTP : nouveau mot de passe, verrouillage
         // levé, version de jeton augmentée (C2) ---
-        let version_avant: i32 = sqlx::query_scalar(
-            "SELECT version_jeton FROM compte WHERE utilisateur_id = $1 AND type_compte = 'patient'",
-        )
-        .bind(utilisateur_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let version_avant: i32 = sqlx::query_scalar("SELECT version_jeton FROM compte WHERE id = $1")
+            .bind(compte_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        laisser_passer_une_minute(&pool).await;
         let (code_reinit, _) = demander_otp(&pool, telephone).await.unwrap();
         reinitialiser_mot_de_passe(&pool, telephone, &code_reinit, "Nouveau-mdp-2").await.unwrap();
         se_connecter(&pool, &jwt, telephone, "Nouveau-mdp-2").await.unwrap();
         assert!(refuse(se_connecter(&pool, &jwt, telephone, bon).await), "l'ancien mot de passe ne marche plus");
-        let version_apres: i32 = sqlx::query_scalar(
-            "SELECT version_jeton FROM compte WHERE utilisateur_id = $1 AND type_compte = 'patient'",
-        )
-        .bind(utilisateur_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let version_apres: i32 = sqlx::query_scalar("SELECT version_jeton FROM compte WHERE id = $1")
+            .bind(compte_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(version_apres, version_avant + 1);
 
         // --- mot de passe non conforme : toutes les règles listées ---
+        laisser_passer_une_minute(&pool).await;
         let (code_faible, _) = demander_otp(&pool, telephone).await.unwrap();
         match reinitialiser_mot_de_passe(&pool, telephone, &code_faible, "abc").await {
             Err(ErreurAuthPatient::MotDePasseNonConforme(regles)) => assert_eq!(

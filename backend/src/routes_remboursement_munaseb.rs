@@ -4,8 +4,9 @@
 //! le service de `demande_remboursement_munaseb`, traduire le résultat --
 //! aucune logique métier ici.
 //!
-//! Regroupées dans ce fichier (décision L6) : `routes_agent_assurance_munaseb.rs`
-//! ne garde que la connexion de l'agent.
+//! Regroupées dans ce fichier (décision L6). La connexion de l'agent passe
+//! par la connexion professionnelle et le choix de l'affectation (étapes
+//! 3.6 et 3.9).
 
 use axum::extract::State;
 use axum::http::StatusCode;

@@ -2,7 +2,7 @@
 
 Ce document décrit les routes de l'API Rust/Axum telles qu'elles sont **codées aujourd'hui**, puis celles qui sont **seulement prévues**. Les applications Angular (web) et Flutter (mobile) s'appuient sur lui. Il est mis à jour avec chaque ajout ou modification d'une route.
 
-État au 2026-10-08, branche `dev`.
+État au 2026-10-09, branche `dev`.
 
 Toutes les valeurs des exemples sont fictives.
 
@@ -27,23 +27,38 @@ Les routes protégées attendent l'en-tête :
 Authorization: Bearer <jeton>
 ```
 
-Le jeton est un JWT signé en HS256, **valable 24 heures**. Il contient :
+Le jeton est un JWT signé en HS256. Il contient :
 
 | Champ | Contenu |
 |---|---|
-| `sub` | identifiant de l'utilisateur (`utilisateur.id`) |
-| `role` | `patient` ou `agent_assurance_munaseb` (aujourd'hui) |
+| `sub` | identifiant du **compte** (patient, professionnel ou administrateur) |
+| `aud` | sorte de jeton (tableau ci-dessous) |
+| `ver` | version du jeton du compte : un jeton émis avant une réinitialisation du mot de passe ou une bascule sera refusé |
+| `aff` | affectation active (structure et rôle), seulement pour `laaficare:professionnel_en_exercice` |
 | `iat`, `exp` | date d'émission et d'expiration (secondes depuis 1970) |
 
-Les applications ne doivent **pas** lire le contenu du jeton pour décider de ce qu'elles affichent : elles le gardent et le renvoient tel quel. Sa forme va changer à l'étape 3.6 (voir section 4).
+Il existe **huit sortes de jetons**. Chaque route n'en accepte qu'une : un jeton d'une autre sorte est refusé en 401 `jeton_invalide`, même s'il est encore valable.
+
+| Sorte (`aud`) | Sert à | Durée | État |
+|---|---|---|---|
+| `laaficare:patient` | routes du patient | 24 h | émis par l'inscription et la connexion patient |
+| `laaficare:professionnel_sans_affectation` | lister ses affectations, en activer une | 24 h | prévu (étape 3.6) |
+| `laaficare:professionnel_en_exercice` | routes métier (remboursements MUNASEB…) | 24 h | attendu par les routes MUNASEB ; émis à l'étape 3.9 |
+| `laaficare:administrateur` | routes de l'équipe LaafiCare | 24 h | prévu (étape 3.6) |
+| `laaficare:second_facteur_patient`, `…_professionnel`, `…_administrateur` | saisir le code du second facteur, après un mot de passe correct | 5 min | prévu (étape 3.6) |
+| `laaficare:reenrolement_administrateur` | activer un nouveau second facteur, rien d'autre | 10 min | prévu (étape 3.6) |
+
+Aucune tolérance après l'expiration : un jeton expiré d'une seconde est refusé.
+
+Les applications ne doivent **pas** lire le contenu du jeton pour décider de ce qu'elles affichent : elles le gardent et le renvoient tel quel.
 
 Refus d'une route protégée (RFC 6750) :
 
 | Code HTTP | `code` | Cas | En-tête renvoyé |
 |---|---|---|---|
 | 401 | `authentification_requise` | en-tête `Authorization` absent ou mal formé | `WWW-Authenticate: Bearer` |
-| 401 | `jeton_invalide` | signature fausse, jeton expiré ou illisible | `WWW-Authenticate: Bearer error="invalid_token"` |
-| 403 | `acces_refuse` | jeton valide mais mauvais rôle, ou droit retiré depuis l'émission | — |
+| 401 | `jeton_invalide` | signature fausse, jeton expiré ou illisible, ou **jeton d'une autre sorte** que celle attendue par la route | `WWW-Authenticate: Bearer error="invalid_token"` |
+| 403 | `acces_refuse` | jeton de la bonne sorte, mais droit retiré depuis l'émission (ex. affectation désactivée) | — |
 | 500 | `erreur_interne` | panne pendant la vérification | — |
 
 Les messages restent volontairement vagues : ils n'aident pas à deviner pourquoi un jeton est refusé.
@@ -66,6 +81,7 @@ Toute réponse d'erreur, sans exception, a cette forme :
 | `transition_invalide` | `statut_actuel` | statut actuel de la demande |
 
 - `erreur_interne` (500) ne donne jamais de détail : il reste dans les journaux du serveur.
+- `trop_de_demandes` (429) peut s'accompagner de l'**en-tête** `Retry-After` (nombre de secondes à attendre), jamais d'un champ du corps (voir 2.2.5).
 
 ### 1.4 Erreurs de lecture de la requête
 
@@ -114,16 +130,15 @@ Résumé :
 | POST | `/api/patients/inscription` | tout le monde | fonctionne |
 | POST | `/api/patients/connexion` | tout le monde | fonctionne |
 | POST | `/api/patients/mot-de-passe/reinitialiser` | tout le monde | fonctionne |
-| POST | `/api/assurance-munaseb/connexion` | agent MUNASEB | **hors service** |
-| POST | `/api/assurance-munaseb/remboursements/simuler-acte` | jeton agent MUNASEB | **hors service** |
-| GET | `/api/assurance-munaseb/remboursements` | jeton agent MUNASEB | **hors service** |
-| GET | `/api/assurance-munaseb/remboursements/{id}` | jeton agent MUNASEB | **hors service** |
-| POST | `/api/assurance-munaseb/remboursements/{id}/prendre-en-charge` | jeton agent MUNASEB | **hors service** |
-| POST | `/api/assurance-munaseb/remboursements/{id}/valider` | jeton agent MUNASEB | **hors service** |
-| POST | `/api/assurance-munaseb/remboursements/{id}/rejeter` | jeton agent MUNASEB | **hors service** |
-| POST | `/api/assurance-munaseb/remboursements/{id}/payer` | jeton agent MUNASEB | **hors service** |
+| POST | `/api/assurance-munaseb/remboursements/simuler-acte` | jeton en exercice, agent MUNASEB | **hors service** |
+| GET | `/api/assurance-munaseb/remboursements` | jeton en exercice, agent MUNASEB | **hors service** |
+| GET | `/api/assurance-munaseb/remboursements/{id}` | jeton en exercice, agent MUNASEB | **hors service** |
+| POST | `/api/assurance-munaseb/remboursements/{id}/prendre-en-charge` | jeton en exercice, agent MUNASEB | **hors service** |
+| POST | `/api/assurance-munaseb/remboursements/{id}/valider` | jeton en exercice, agent MUNASEB | **hors service** |
+| POST | `/api/assurance-munaseb/remboursements/{id}/rejeter` | jeton en exercice, agent MUNASEB | **hors service** |
+| POST | `/api/assurance-munaseb/remboursements/{id}/payer` | jeton en exercice, agent MUNASEB | **hors service** |
 
-> **Routes MUNASEB hors service.** Elles vérifient le compte agent dans la table `agent_assurance_munaseb`, supprimée par la migration 0011 (passage aux comptes séparés et aux affectations, section 14 du CLAUDE.md). La connexion agent et toute route qui exige un jeton agent répondent donc aujourd'hui `500 erreur_interne`. Elles seront rebranchées sur les affectations aux étapes 3.6 et 3.9 : la connexion changera (section 4), mais les chemins, corps et réponses des remboursements décrits ci-dessous devraient rester les mêmes, à confirmer à l'étape 3.9. Leur description sert donc de référence pour l'écran agent.
+> **Routes MUNASEB hors service.** L'ancienne connexion agent (`POST /api/assurance-munaseb/connexion`) est **supprimée** : un agent se connectera par la connexion professionnelle, puis choisira son affectation (étapes 3.6 et 3.9, section 4). Les routes de remboursement attendent déjà un jeton `laaficare:professionnel_en_exercice` ; tout autre jeton est refusé en 401. Avec un jeton de la bonne sorte, elles répondent encore `500 erreur_interne` : elles vérifient le compte agent dans une table supprimée par la migration 0011. Elles seront rebranchées sur les affectations à l'étape 3.9. Les chemins, corps et réponses des remboursements décrits ci-dessous devraient rester les mêmes ; leur description sert de référence pour l'écran agent.
 
 ### 2.1 Infrastructure
 
@@ -169,12 +184,12 @@ Envoie un code à 6 chiffres par SMS. Sert à l'inscription et au mot de passe o
 |---|---|---|
 | 204 | — | code envoyé (aucun corps) |
 | 422 | `telephone_invalide` | format non reconnu (voir 1.6) |
+| 429 | `trop_de_demandes` | moins de 60 s depuis le dernier code, ou déjà 5 codes dans l'heure ; en-tête `Retry-After` (voir 2.2.5) |
 | 500 | `erreur_interne` | panne |
 
 - Le code est valable **5 minutes**. Une nouvelle demande remplace le code précédent.
-- La réponse est la même que le numéro ait un compte ou non.
+- La réponse est la même que le numéro ait un compte ou non, limites comprises.
 - En développement, aucun SMS ne part : le code s'affiche dans les journaux du serveur.
-- **Pas encore de limite** du nombre de demandes par numéro (point ouvert avant la production).
 
 #### 2.2.2 `POST /api/patients/inscription`
 
@@ -199,15 +214,26 @@ Crée le compte patient, attribue le NIP et ouvre la session.
 
 | Code | `code` | Cas |
 |---|---|---|
-| 201 | — | compte créé ; corps `{"jeton": "<JWT>"}`, rôle `patient` |
+| 201 | — | compte créé ; corps `{"jeton": "<JWT>"}`, jeton `laaficare:patient` |
 | 422 | `telephone_invalide` | format du numéro non reconnu |
 | 422 | `mot_de_passe_non_conforme` | + `regles_non_respectees` (voir 1.5) |
 | 401 | `code_invalide` | code OTP faux, expiré ou déjà utilisé |
+| 429 | `trop_de_demandes` | code faux, et c'était le dernier essai permis : le code est effacé, pas d'en-tête `Retry-After` (voir 2.2.5) |
 | 409 | `telephone_deja_utilise` | un compte existe déjà pour ce numéro |
 | 500 | `erreur_interne` | panne |
 
 - Ordre des contrôles : numéro, puis mot de passe, puis code OTP. Un mot de passe refusé **ne consomme pas** le code : la personne corrige et renvoie la même requête.
 - Le 409 n'arrive qu'après un code OTP correct : seul le titulaire du numéro l'apprend.
+
+**Si la réponse se perd** (coupure réseau, délai dépassé) : le compte a peut-être été créé quand même, et le code OTP est peut-être déjà consommé. L'application ne renvoie pas la même inscription. Elle tente une **connexion** (`POST /api/patients/connexion`, section 2.2.3) avec le même téléphone et le même mot de passe :
+
+| Réponse de la connexion | Ce que fait l'application |
+|---|---|
+| 200 | Le compte existe : la session est ouverte avec ce jeton, l'inscription est terminée. |
+| 401 `identifiants_invalides` | Le compte n'a pas été créé. L'application reprend l'inscription : nouvelle demande de code (`POST /api/patients/otp`, qui peut répondre 429 si le dernier code date de moins de 60 s : attendre le délai de `Retry-After`), puis nouvel envoi du formulaire, qu'elle a gardé. |
+| erreur réseau | L'application réessaie la connexion plus tard ; elle ne renvoie pas l'inscription. |
+
+Aucun changement côté serveur : ce parcours n'utilise que les routes existantes.
 
 #### 2.2.3 `POST /api/patients/connexion`
 
@@ -222,7 +248,7 @@ Crée le compte patient, attribue le NIP et ouvre la session.
 
 | Code | `code` | Cas |
 |---|---|---|
-| 200 | — | corps `{"jeton": "<JWT>"}`, rôle `patient` |
+| 200 | — | corps `{"jeton": "<JWT>"}`, jeton `laaficare:patient` |
 | 401 | `identifiants_invalides` | tous les refus (voir ci-dessous) |
 | 422 | `telephone_invalide` | format du numéro non reconnu |
 | 500 | `erreur_interne` | panne |
@@ -247,6 +273,7 @@ Crée le compte patient, attribue le NIP et ouvre la session.
 | 422 | `telephone_invalide` | format du numéro non reconnu |
 | 422 | `mot_de_passe_non_conforme` | + `regles_non_respectees` |
 | 401 | `code_invalide` | code OTP faux, expiré ou déjà utilisé |
+| 429 | `trop_de_demandes` | code faux, et c'était le dernier essai permis : le code est effacé, pas d'en-tête `Retry-After` (voir 2.2.5) |
 | 404 | `telephone_inconnu` | aucun compte pour ce numéro (seulement après un code correct) |
 | 500 | `erreur_interne` | panne |
 
@@ -254,15 +281,32 @@ Crée le compte patient, attribue le NIP et ouvre la session.
 - Aucun jeton n'est renvoyé : la personne se connecte ensuite avec son nouveau mot de passe.
 - La réinitialisation **ne touche jamais au second facteur** (TOTP).
 
+#### 2.2.5 Limites du code OTP et réponse 429
+
+**Les limites**, identiques pour tout numéro, inscrit ou non (la réponse ne révèle donc rien d'un compte) :
+
+| Limite | Valeur | Réponse quand elle est atteinte |
+|---|---|---|
+| Délai entre deux demandes de code pour un même numéro | 60 s | 429 sur `POST /api/patients/otp`, avec `Retry-After` |
+| Demandes de code par numéro | 5 par heure glissante | 429 sur `POST /api/patients/otp`, avec `Retry-After` (temps avant que la plus ancienne des 5 ait plus d'une heure) |
+| Essais sur un code | 5 ; puis, tant qu'aucun code juste n'a été saisi, **1 seul essai** sur chaque nouveau code | 429 sur l'inscription ou la réinitialisation, **sans** `Retry-After` : le code est effacé |
+
+Les échecs s'additionnent d'un code à l'autre et ne reviennent à zéro qu'après un code juste. Le numéro est compté sous sa forme normalisée : « 70 00 00 00 » et « +226 70000000 » comptent ensemble.
+
+**Ce que l'application doit afficher sur un 429 `trop_de_demandes` :**
+
+| Où | En-tête `Retry-After` | Affichage |
+|---|---|---|
+| Demande de code (`POST /api/patients/otp`) | présent : nombre de secondes | Le délai à attendre, par exemple « Vous pourrez demander un nouveau code dans 45 s », avec un compte à rebours. Le bouton « Renvoyer le code » reste désactivé jusqu'à la fin du délai. Au-delà d'une minute, afficher en minutes. |
+| Inscription ou réinitialisation | absent | « Trop d'essais avec ce code. Demandez un nouveau code. » Le champ du code est vidé et l'application propose le bouton « Renvoyer le code ». |
+
+L'application lit la valeur de l'en-tête `Retry-After`, jamais le message `erreur`. Après un 401 `code_invalide`, elle laisse simplement la personne ressaisir le code, ou en redemander un s'il a expiré.
+
 ### 2.3 Agent MUNASEB (hors service, voir l'encadré plus haut)
 
-#### 2.3.1 `POST /api/assurance-munaseb/connexion`
+#### 2.3.1 Connexion de l'agent
 
-Sera **remplacée** par la connexion professionnelle (section 4). Décrite pour mémoire.
-
-- **Corps** : `{"email": "...", "mot_de_passe": "..."}`
-- **Réponses** : 200 `{"jeton": "<JWT>"}` (rôle `agent_assurance_munaseb`) ; 401 `identifiants_invalides` ; 423 `compte_verrouille` ; 500 `erreur_interne`.
-- Le 423 est **obsolète** (décision L1 du 2026-10-02 : un compte verrouillé répond 401 `identifiants_invalides`, comme un compte inconnu). Il disparaîtra avec cette route.
+L'ancienne route `POST /api/assurance-munaseb/connexion` est **supprimée** (2026-10-08), avec son code `423 compte_verrouille`. L'agent passera par la connexion professionnelle (section 4.1), puis par le choix de son affectation (section 4.4).
 
 #### 2.3.2 Valeurs utilisées par les routes de remboursement
 
@@ -436,11 +480,11 @@ Toutes : jeton agent MUNASEB ; l'agent qui agit est enregistré dans l'historiqu
 | `parametre_invalide` | 400 | liste des remboursements |
 | `telephone_invalide` | 422 | routes patient |
 | `code_invalide` | 401 | inscription, réinitialisation |
+| `trop_de_demandes` | 429 | demande de code (avec `Retry-After`), inscription et réinitialisation (sans) |
 | `telephone_deja_utilise` | 409 | inscription |
 | `telephone_inconnu` | 404 | réinitialisation |
 | `mot_de_passe_non_conforme` | 422 | inscription, réinitialisation |
 | `identifiants_invalides` | 401 | connexions |
-| `compte_verrouille` | 423 | connexion agent (obsolète) |
 | `montant_invalide`, `nip_invalide`, `partenaire_suspendu`, `non_couvert`, `en_carence` | 422 | simuler-acte |
 | `patient_inconnu`, `partenaire_inconnu` | 404 | simuler-acte |
 | `reference_acte_deja_utilisee` | 409 | simuler-acte |
