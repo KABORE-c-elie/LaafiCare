@@ -25,6 +25,10 @@ Les décisions déjà prises sont dans `CLAUDE.md` (sections 12 et 14), qui rest
 
 **Contrainte.** Ne jamais effacer une identité reliée à autre chose (compte, dossier patient, invitation…).
 
+### Durée de conservation des sessions (décidée)
+
+Une *session* correspond à une connexion sur un appareil. **Règle décidée le 2026-10-12** : à chaque nouvelle connexion, les sessions terminées (expirées ou révoquées) depuis plus de **30 jours** sont effacées. **Exception** : une session coupée parce qu'un vol de jeton a été détecté (motif `rejeu_detecte`) est gardée **6 mois**, comme trace. À vérifier avec la CIL, avec les autres durées de conservation (section 3).
+
 ---
 
 ## 2. Sécurité, avant la production
@@ -113,6 +117,18 @@ Les seuils sont fixés par les **professionnels concernés de chaque structure**
 - une **trace non modifiable** de chaque changement : qui, quand, ancienne et nouvelle valeur ;
 - chaque résultat **garde le seuil utilisé au moment de la mesure** : un changement de seuil ne réécrit jamais un résultat passé ;
 - un seuil fixé par une **source officielle** (par exemple 140 mmHg pour la tension, dans le carnet de santé mère-enfant) peut être rendu **plus strict** par une structure, **jamais plus souple**.
+
+### Obtenir le NIP d'un patient qui ne peut pas ouvrir son application
+
+Un soignant a besoin du NIP pour ouvrir le dossier. Le patient peut être trop malade, avoir un téléphone verrouillé, déchargé ou perdu, ou ne pas avoir de smartphone.
+
+**Pistes :**
+- le QR code du NIP affichable **sans déverrouiller l'application** ;
+- une **carte NIP** physique ;
+- le NIP **noté dans le carnet de santé** ;
+- une **recherche par identité** à l'accueil (nom, prénom, date et lieu de naissance).
+
+**Questions liées :** qui peut ouvrir un dossier avec un NIP ; faut-il un **accès d'urgence tracé** (« bris de glace ») quand le patient ne peut pas consentir. À décider avec le module du dossier médical.
 
 ### Structures et rôles
 

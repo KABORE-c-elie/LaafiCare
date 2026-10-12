@@ -2,7 +2,7 @@
 
 Ce document décrit les routes de l'API Rust/Axum telles qu'elles sont **codées aujourd'hui**, puis celles qui sont **seulement prévues**. Les applications Angular (web) et Flutter (mobile) s'appuient sur lui. Il est mis à jour avec chaque ajout ou modification d'une route.
 
-État au 2026-10-11, branche `dev`.
+État au 2026-10-12, branche `dev`.
 
 Toutes les valeurs des exemples sont fictives.
 
@@ -116,6 +116,57 @@ Toutes les règles non respectées sont renvoyées ensemble, pour que l'applicat
 Le serveur normalise le numéro saisi : il retire les espaces, les points et les tirets, et ajoute `+226` devant un numéro burkinabè à 8 chiffres. Formes acceptées (exemples fictifs) : `70 00 00 00`, `70.00.00.00`, `+226 70000000`, `0022670000000`, `22670000000`. Un numéro étranger commence par `+` et compte 7 à 15 chiffres. Le 0 initial d'un numéro national fait partie du numéro et n'est jamais retiré. Tout autre format → 422 `telephone_invalide`.
 
 L'application peut donc envoyer le numéro tel que saisi.
+
+### 1.7 Sessions et jeton de renouvellement — **EN COURS, pas encore codé**
+
+> ⚠️ **Contrat décidé, pas encore en service.** Tant que cette section porte la mention « en cours », le serveur répond encore `{"jeton": "<JWT>"}` (section 2) et les trois routes ci-dessous n'existent pas. Les applications peuvent s'y préparer, mais ne doivent pas encore s'en servir.
+
+**Le principe.** Après la connexion, l'application reçoit deux jetons :
+- un **jeton d'accès** (`jeton_acces`), de courte durée, à présenter à chaque demande (`Authorization: Bearer …`) ;
+- un **jeton de renouvellement** (`jeton_renouvellement`), qui sert uniquement à obtenir une nouvelle paire quand le jeton d'accès expire. Il **change à chaque usage** : l'ancien ne sert plus. Le serveur n'en garde qu'une empreinte.
+
+Chaque connexion ouvre une **session** (une par appareil). Le jeton d'accès porte l'identifiant de sa session : une session déconnectée refuse aussitôt ses jetons.
+
+| Compte | Jeton d'accès | Sans renouvellement pendant… | Au plus tard, mot de passe redemandé après… |
+|---|---|---|---|
+| Patient | 15 min | 30 jours | 30 jours |
+| Professionnel | 15 min | 1 h | 12 h |
+| Administrateur | 15 min | 1 h | 24 h |
+
+**Nouvelle réponse de la connexion et de l'inscription** (remplacera `{"jeton": …}`) :
+
+```json
+{
+  "etape": "complete",
+  "jeton_acces": "<JWT>",
+  "expire_dans": 900,
+  "jeton_renouvellement": "<64 caractères>"
+}
+```
+
+- `expire_dans` : durée de vie du jeton d'accès, en secondes.
+- Si le second facteur est actif : `{"etape": "second_facteur", "jeton_intermediaire": "<JWT>"}`, puis la paire après la saisie du code.
+- L'inscription (201) renvoie la même forme, avec `"etape": "complete"`.
+
+**Les trois routes :**
+
+| Route | Appelant | Corps | Réponses |
+|---|---|---|---|
+| `POST /api/sessions/renouveler` | tout le monde, **sans** en-tête `Authorization` (le jeton d'accès peut être expiré) | `{"jeton_renouvellement": "…"}` | 200 : nouvelle paire, même forme que ci-dessus sans `etape` ; 401 `jeton_invalide` : jeton inconnu, expiré, session révoquée ou expirée, ou vol détecté |
+| `POST /api/sessions/deconnexion` | tout le monde | `{"jeton_renouvellement": "…"}` | **toujours 204**, même pour un jeton inconnu : se déconnecter n'échoue jamais |
+| `POST /api/sessions/deconnexion-partout` | jeton d'accès **valide** (si expiré : renouveler d'abord) | aucun | 204 : toutes les sessions du compte sont fermées, sur tous les appareils |
+
+**Ce que fait l'application :**
+- garder le jeton de renouvellement dans le **stockage sécurisé** du téléphone (Keystore sous Android, Keychain sous iOS) ;
+- sur un 401 `jeton_invalide` d'une route ordinaire : renouveler une fois, puis rejouer la demande ; si le renouvellement répond 401, renvoyer à l'écran de connexion ;
+- toujours remplacer **les deux** jetons par ceux du renouvellement ;
+- ne jamais lancer deux renouvellements en même temps avec le même jeton.
+
+**Réponse perdue pendant un renouvellement (règle des 30 secondes).** Sur un réseau instable, la réponse d'un renouvellement peut se perdre alors que le serveur a déjà changé le jeton. Le serveur accepte alors **une seule fois** l'ancien jeton de renouvellement, **dans les 30 secondes** qui suivent son premier usage, et seulement si le nouveau jeton n'a jamais servi. Il renvoie une nouvelle paire.
+- **L'application doit relancer sa demande de renouvellement en moins de 30 secondes**, avec le même jeton, si elle n'a pas reçu de réponse. Son délai d'attente réseau doit être réglé en conséquence.
+- Au-delà de 30 secondes, ou après une seconde réutilisation, le serveur considère que le jeton a été volé : **la session est fermée** (401), et il faut se reconnecter.
+
+**Déconnexions automatiques** : la réinitialisation du mot de passe ferme toutes les sessions du compte ; une session fermée parce qu'un vol a été détecté aussi.
 
 ---
 
@@ -537,6 +588,10 @@ Toutes : jeton agent MUNASEB ; l'agent qui agit est enregistré dans l'historiqu
 ---
 
 ## 4. Routes prévues (pas encore codées)
+
+### 4.0 Sessions (en cours)
+
+Les routes `POST /api/sessions/renouveler`, `POST /api/sessions/deconnexion` et `POST /api/sessions/deconnexion-partout`, et la nouvelle réponse des connexions et de l'inscription, sont décrites en section 1.7. Elles sont écrites avant la connexion professionnelle (étape 3.6.2).
 
 Rien de cette section n'existe dans le code. **Les chemins, corps et réponses ne sont pas encore fixés** : chacun sera présenté au porteur et validé à son étape, puis décrit en section 2. Seules les fonctions et les règles déjà décidées (CLAUDE.md, sections 12 et 14) sont listées ici, pour que les applications puissent préparer leurs écrans.
 
