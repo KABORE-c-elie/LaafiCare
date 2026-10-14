@@ -62,13 +62,15 @@ void main() {
 
   test('enregistre puis relit le jeton', () async {
     final stockage = StockageJeton();
-    await stockage.enregistrerJetonAcces('jeton-exemple');
+    await stockage.enregistrerPaire(
+        jetonAcces: 'jeton-exemple', jetonRenouvellement: 'renouv-exemple');
     expect(await stockage.lireJetonAcces(), 'jeton-exemple');
   });
 
   test('effacer supprime le jeton', () async {
     final stockage = StockageJeton();
-    await stockage.enregistrerJetonAcces('jeton-exemple');
+    await stockage.enregistrerPaire(
+        jetonAcces: 'jeton-exemple', jetonRenouvellement: 'renouv-exemple');
     await stockage.effacer();
     expect(await stockage.lireJetonAcces(), isNull);
   });
@@ -76,18 +78,12 @@ void main() {
   test("effacer ne touche pas aux autres secrets de l'application", () async {
     FlutterSecureStorage.setMockInitialValues({'autre_secret': 'garde'});
     final stockage = StockageJeton();
-    await stockage.enregistrerJetonAcces('jeton-exemple');
+    await stockage.enregistrerPaire(
+        jetonAcces: 'jeton-exemple', jetonRenouvellement: 'renouv-exemple');
     await stockage.effacer();
     expect(
       await const FlutterSecureStorage().read(key: 'autre_secret'),
       'garde',
-    );
-  });
-
-  test('refuse un jeton vide', () {
-    expect(
-      () => StockageJeton().enregistrerJetonAcces(''),
-      throwsArgumentError,
     );
   });
 

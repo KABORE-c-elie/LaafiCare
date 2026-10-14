@@ -69,13 +69,6 @@ class StockageJeton {
     await _stockage.write(key: _cleJetonAcces, value: jetonAcces);
   }
 
-  /// Ancienne écriture du seul jeton d'accès : retirée au commit 5, quand
-  /// AuthRepository passe à [enregistrerPaire].
-  Future<void> enregistrerJetonAcces(String jeton) {
-    _exigerNonVide(_cleJetonAcces, jeton);
-    return _stockage.write(key: _cleJetonAcces, value: jeton);
-  }
-
   /// Fin de session (déconnexion, ou 401 jeton_invalide) : efface tous les
   /// jetons de la session. Décision du porteur : la déconnexion efface les
   /// jetons sur le téléphone.

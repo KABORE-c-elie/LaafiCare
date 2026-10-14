@@ -1,8 +1,9 @@
 import 'package:flutter/foundation.dart';
 
 import '../../domain/models/erreur_api.dart';
+import '../../domain/models/paire_jetons.dart';
 import '../services/client_api.dart';
-import '../services/stockage_jeton.dart';
+import '../services/gestionnaire_session.dart';
 
 /// État de la session patient.
 enum EtatSession {
@@ -53,29 +54,55 @@ class DonneesInscription {
 
 /// La réponse de l'inscription s'est perdue, et la connexion de contrôle
 /// répond `identifiants_invalides` : le compte n'a pas été créé. Reprendre
-/// l'inscription : nouveau code, puis nouvel envoi du formulaire gardé
-/// (docs/api.md §2.2.2).
+/// l'inscription : nouveau code, puis nouvel envoi du formulaire gardé, avec
+/// `relance: true` (docs/api.md §2.2.2).
 class InscriptionNonCreee implements Exception {
   const InscriptionNonCreee();
 }
 
 /// La réponse de l'inscription s'est perdue, et la connexion de contrôle n'a
-/// pas pu joindre le serveur : on ne sait pas si le compte existe.
-/// Réessayer plus tard avec [AuthRepository.confirmerInscription], **jamais**
-/// en renvoyant l'inscription (docs/api.md §2.2.2).
+/// pas pu joindre le serveur après 4 essais : on ne sait pas si le compte
+/// existe. Réessayer plus tard avec [AuthRepository.confirmerInscription],
+/// **jamais** en renvoyant l'inscription (docs/api.md §2.2.2). Le formulaire
+/// reste gardé par l'écran.
 class InscriptionNonConfirmee implements Exception {
   const InscriptionNonConfirmee();
 }
 
-/// Authentification patient : les quatre routes de docs/api.md §2.2, et
-/// l'état de la session pour la navigation.
+/// La relance de l'inscription a répondu 409, puis la connexion de contrôle
+/// encore 401 : le numéro appartient à un autre compte, ou ce compte a un
+/// autre mot de passe. Le parcours s'arrête ; l'écran affiche le message
+/// normal « ce numéro a déjà un compte », avec la connexion et « Mot de
+/// passe oublié ? » (docs/api.md §2.2.2, « Sortie de boucle »).
+class NumeroDejaInscrit implements Exception {
+  const NumeroDejaInscrit();
+}
+
+/// Authentification patient : les routes de docs/api.md §2.2, la session
+/// (§1.7, par le gestionnaire de session) et l'état de la session pour la
+/// navigation.
 class AuthRepository extends ChangeNotifier {
   // Paramètres nommés privés (Dart ≥ 3.12) : l'appelant écrit client:,
-  // stockage:. https://dart.dev/language/constructors
-  AuthRepository({required this._client, required this._stockage});
+  // session:, attendre:. https://dart.dev/language/constructors
+  AuthRepository({
+    required this._client,
+    required this._session,
+    this._attendre = _attendreParDefaut,
+  }) {
+    // Une session fermée ailleurs (renouvellement refusé, rejeu refusé)
+    // ramène la navigation à la connexion.
+    _session.surSessionFermee = () => _changerEtat(EtatSession.deconnecte);
+  }
 
   final ClientApi _client;
-  final StockageJeton _stockage;
+  final GestionnaireSession _session;
+
+  /// Attente entre deux connexions de contrôle ; remplaçable dans les tests
+  /// (sinon 22 s réelles).
+  final Future<void> Function(Duration) _attendre;
+
+  static Future<void> _attendreParDefaut(Duration duree) =>
+      Future<void>.delayed(duree);
 
   static const _cheminOtp = '/api/patients/otp';
   static const _cheminInscription = '/api/patients/inscription';
@@ -83,23 +110,32 @@ class AuthRepository extends ChangeNotifier {
   static const _cheminReinitialisation =
       '/api/patients/mot-de-passe/reinitialiser';
 
-  /// Réponses d'un intermédiaire réseau (passerelle, répartiteur) à
-  /// l'inscription : 502, 503, 504. Le serveur a peut-être créé le compte.
-  /// Choix du porteur, en attendant que docs/api.md décrive ce cas : elles
-  /// sont traitées comme une réponse perdue, et la connexion de contrôle est
-  /// lancée. Sans risque : cette connexion ne crée rien, elle vérifie.
+  /// Réponses d'un intermédiaire réseau (passerelle, proxy, répartiteur) :
+  /// la demande a peut-être été traitée, la réponse est traitée comme
+  /// perdue (docs/api.md §2.2.2).
   static const _statutsIntermediaire = {502, 503, 504};
+
+  /// Attentes entre les essais de la connexion de contrôle : 1 essai, puis
+  /// au plus 3 nouveaux essais (docs/api.md §2.2.2 : « au plus 3 fois,
+  /// espacées (par exemple après 2 s, 5 s, puis 15 s) »). Valeurs reprises
+  /// de l'exemple, choix du porteur.
+  static const _attentesControle = [
+    Duration(seconds: 2),
+    Duration(seconds: 5),
+    Duration(seconds: 15),
+  ];
 
   EtatSession _etat = EtatSession.inconnu;
   EtatSession get etat => _etat;
 
-  /// Au démarrage : une session existe si un jeton est enregistré. Le jeton
-  /// n'est pas lu ni vérifié ici (docs/api.md §1.2 : l'application ne lit
-  /// pas son contenu) ; s'il a expiré, la première route protégée répondra
-  /// 401, et la session sera fermée.
+  /// Au démarrage : une session existe si un jeton d'accès est enregistré.
+  /// Le jeton n'est pas lu ni vérifié ici (docs/api.md §1.2 : l'application
+  /// ne lit pas son contenu) ; s'il a expiré, la première route protégée
+  /// répondra 401, et le gestionnaire de session renouvellera.
   Future<void> initialiser() async {
-    final jeton = await _stockage.lireJetonAcces();
-    _changerEtat(jeton == null ? EtatSession.deconnecte : EtatSession.connecte);
+    _changerEtat(await _session.estOuverte()
+        ? EtatSession.connecte
+        : EtatSession.deconnecte);
   }
 
   /// Envoie un code par SMS (docs/api.md §2.2.1). Un 429 remonte en
@@ -118,51 +154,73 @@ class AuthRepository extends ChangeNotifier {
     await _ouvrirSession(reponse);
   }
 
-  /// Inscription (docs/api.md §2.2.2). Si la réponse se perd (erreur
-  /// réseau, délai dépassé, ou 502/503/504 d'un intermédiaire),
-  /// l'inscription n'est jamais renvoyée : une connexion avec le même
-  /// téléphone et le même mot de passe vérifie si le compte a été créé
-  /// (voir [confirmerInscription]).
-  Future<void> inscrire(DonneesInscription donnees) async {
+  /// Inscription (docs/api.md §2.2.2). [relance] : vrai quand l'écran
+  /// renvoie le formulaire après [InscriptionNonCreee].
+  ///
+  /// - Réponse perdue (erreur réseau, délai, 502/503/504) : jamais de second
+  ///   envoi, connexion de contrôle ([confirmerInscription]).
+  /// - Relance qui répond 409 `telephone_deja_utilise` : la première
+  ///   inscription avait abouti ; connexion de contrôle sans erreur
+  ///   affichée, et [NumeroDejaInscrit] si elle répond encore 401.
+  /// - Première inscription qui répond 409 : l'erreur remonte telle quelle.
+  Future<void> inscrire(
+    DonneesInscription donnees, {
+    bool relance = false,
+  }) async {
     final ReponseApi reponse;
     try {
       reponse =
           await _client.post(_cheminInscription, corps: donnees.versJson());
     } on ErreurReseau {
-      await confirmerInscription(
-        telephone: donnees.telephone,
-        motDePasse: donnees.motDePasse,
-      );
-      return;
+      return confirmerInscription(
+          telephone: donnees.telephone, motDePasse: donnees.motDePasse);
     } on ErreurApi catch (erreur) {
-      if (!_statutsIntermediaire.contains(erreur.statut)) rethrow;
-      await confirmerInscription(
-        telephone: donnees.telephone,
-        motDePasse: donnees.motDePasse,
-      );
-      return;
+      if (_statutsIntermediaire.contains(erreur.statut)) {
+        return confirmerInscription(
+            telephone: donnees.telephone, motDePasse: donnees.motDePasse);
+      }
+      if (relance && erreur.code == CodesErreur.telephoneDejaUtilise) {
+        try {
+          return await confirmerInscription(
+              telephone: donnees.telephone, motDePasse: donnees.motDePasse);
+        } on InscriptionNonCreee {
+          throw const NumeroDejaInscrit();
+        }
+      }
+      rethrow;
     }
     await _ouvrirSession(reponse);
   }
 
-  /// Connexion de contrôle après une inscription dont la réponse s'est
-  /// perdue (tableau de docs/api.md §2.2.2) :
+  /// Connexion de contrôle (tableau de docs/api.md §2.2.2) :
   /// - 200 : le compte existe, la session est ouverte ;
   /// - 401 identifiants_invalides : [InscriptionNonCreee] ;
-  /// - erreur réseau : [InscriptionNonConfirmee], réessayer plus tard.
+  /// - erreur réseau ou 502/503/504 : nouvel essai après 2 s, 5 s, puis
+  ///   15 s ; après le 4ᵉ échec, [InscriptionNonConfirmee] (le formulaire
+  ///   reste gardé par l'écran, qui pourra rappeler cette méthode).
+  ///
+  /// Une [EtapeConnexionNonGeree] remonte telle quelle : le compte existe,
+  /// mais demande une étape que l'application ne gère pas encore.
   Future<void> confirmerInscription({
     required String telephone,
     required String motDePasse,
   }) async {
-    try {
-      await connecter(telephone: telephone, motDePasse: motDePasse);
-    } on ErreurApi catch (erreur) {
-      if (erreur.code == CodesErreur.identifiantsInvalides) {
-        throw const InscriptionNonCreee();
+    for (var essai = 0;; essai++) {
+      try {
+        await connecter(telephone: telephone, motDePasse: motDePasse);
+        return;
+      } on ErreurApi catch (erreur) {
+        if (erreur.code == CodesErreur.identifiantsInvalides) {
+          throw const InscriptionNonCreee();
+        }
+        if (!_statutsIntermediaire.contains(erreur.statut)) rethrow;
+      } on ErreurReseau {
+        // Nouvel essai ci-dessous.
       }
-      rethrow;
-    } on ErreurReseau {
-      throw const InscriptionNonConfirmee();
+      if (essai == _attentesControle.length) {
+        throw const InscriptionNonConfirmee();
+      }
+      await _attendre(_attentesControle[essai]);
     }
   }
 
@@ -180,30 +238,23 @@ class AuthRepository extends ChangeNotifier {
     });
   }
 
-  /// Déconnexion, ou fin de session après un 401 (rappel de [ClientApi]) :
-  /// décision du porteur, le jeton est effacé sur le téléphone. Aucune
-  /// route de déconnexion n'est encore en service (docs/api.md §1.7, en
-  /// cours).
-  Future<void> deconnecter() async {
-    await _stockage.effacer();
-    _changerEtat(EtatSession.deconnecte);
-  }
+  /// Déconnexion de cet appareil (docs/api.md §1.7) : jetons effacés même
+  /// sans réseau ; l'état passe à « déconnecté » par le rappel du
+  /// gestionnaire.
+  Future<void> deconnecter() => _session.deconnecter();
+
+  /// Déconnexion de tous les appareils : jetons effacés dans tous les cas ;
+  /// une erreur remonte si les autres appareils n'ont peut-être pas été
+  /// déconnectés.
+  Future<void> deconnecterPartout() => _session.deconnecterPartout();
 
   /// **Seul endroit** qui lit la réponse d'ouverture de session (connexion
-  /// et inscription). Aujourd'hui : `{"jeton": "<JWT>"}` (docs/api.md §2.2.2,
-  /// §2.2.3). Quand docs/api.md §1.7 sera en service, cette méthode lira
-  /// {"etape", "jeton_acces", "expire_dans", "jeton_renouvellement"} ou
-  /// {"etape": "second_facteur", …} ; rien d'autre ne changera dans
-  /// l'application.
+  /// et inscription), par PaireJetons.depuisOuverture : `etape` testée
+  /// (EtapeConnexionNonGeree sinon), paire enregistrée avant tout le reste.
   Future<void> _ouvrirSession(ReponseApi reponse) async {
-    final jeton = reponse.json?['jeton'];
-    if (jeton is! String || jeton.isEmpty) {
-      throw ErreurApi(
-        statut: reponse.statut,
-        code: CodesErreur.reponseIllisible,
-      );
-    }
-    await _stockage.enregistrerJetonAcces(jeton);
+    final paire =
+        PaireJetons.depuisOuverture(statut: reponse.statut, json: reponse.json);
+    await _session.ouvrir(paire);
     _changerEtat(EtatSession.connecte);
   }
 
