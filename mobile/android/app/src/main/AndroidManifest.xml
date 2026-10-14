@@ -1,5 +1,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!--
+      Accès au réseau pour joindre l'API, aussi dans la version publiée : flutter
+      create ne le déclare que dans les manifestes debug et profile. Doc Flutter
+      (Review the app manifest) : <uses-permission
+      android:name="android.permission.INTERNET"/>.
+      https://docs.flutter.dev/deployment/android
+    -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!--
       Sauvegarde et transfert désactivés : les données sont chiffrées par le
       Keystore, illisibles après restauration (README de
       flutter_secure_storage : « Disabling Auto Backup », « Failed to unwrap
