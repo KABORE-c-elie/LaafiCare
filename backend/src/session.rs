@@ -19,9 +19,12 @@
 //! `fermer_toutes` ne verrouille jamais un jeton : aucun cycle d'attente,
 //! donc aucun interblocage.
 
+use std::fmt;
+
 use sha2::{Digest, Sha256};
 use sqlx::types::Uuid;
 use sqlx::{PgConnection, PgPool};
+use zeroize::{Zeroize, Zeroizing};
 
 /// Tolérance pour une réponse perdue (décision du 2026-10-12, sur le modèle
 /// de la « Rotation Overlap Period » d'Auth0 ; la RFC 9700 n'en prévoit
@@ -96,10 +99,36 @@ impl MotifRevocation {
     }
 }
 
+/// Jeton de renouvellement en clair. Il n'existe en clair qu'ici, le temps
+/// de le remettre au client : la base n'en garde que l'empreinte.
+/// - `Debug` affiche toujours `***` : il ne doit jamais apparaître dans un
+///   journal ni dans un message d'erreur.
+/// - Effacé de la mémoire à sa libération (`zeroize`, comme le secret TOTP).
+///   Pas d'implémentation de `Display` ni de `Deref` : la seule façon de
+///   lire le jeton est `en_clair()`, à l'endroit où il est envoyé.
+pub struct JetonRenouvellement(String);
+
+impl JetonRenouvellement {
+    pub fn en_clair(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for JetonRenouvellement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("***")
+    }
+}
+
+impl Drop for JetonRenouvellement {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
 /// Session ouverte ou renouvelée : ce qu'il faut pour émettre le jeton
 /// d'accès (`sid` = `session_id`), et le nouveau jeton de renouvellement à
-/// remettre au client. Ce jeton n'existe en clair qu'ici : la base n'en
-/// garde que l'empreinte.
+/// remettre au client.
 #[derive(Debug)]
 pub struct SessionActive {
     pub session_id: Uuid,
@@ -107,7 +136,7 @@ pub struct SessionActive {
     pub affectation_id: Option<Uuid>,
     pub type_compte: TypeCompte,
     pub version_jeton: i32,
-    pub jeton_renouvellement: String,
+    pub jeton_renouvellement: JetonRenouvellement,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -138,19 +167,31 @@ impl From<sqlx::Error> for ErreurSession {
 /// 32 octets (256 bits) tirés par `rand::random`, qui utilise `ThreadRng`,
 /// générateur cryptographique (doc rand 0.10.3, déjà suivie dans `otp.rs`).
 /// Hexadécimal : 64 caractères, sans nouvelle dépendance (décision S1).
-fn nouveau_jeton() -> ([u8; 32], String) {
-    let octets: [u8; 32] = rand::random();
-    let texte = octets.iter().map(|octet| format!("{octet:02x}")).collect();
-    (octets, texte)
+///
+/// Les octets sont effacés à la fin de leur usage (`Zeroizing`). Le texte
+/// est construit à sa taille exacte (`with_capacity`) : sans réallocation,
+/// aucune copie du jeton ne reste dans une zone mémoire libérée (doc
+/// `zeroize` 1.9.0 : son effacement « cannot guarantee copies of the data
+/// were not previously made by buffer reallocation »).
+fn nouveau_jeton() -> (Zeroizing<[u8; 32]>, JetonRenouvellement) {
+    const CHIFFRES: &[u8; 16] = b"0123456789abcdef";
+    let octets = Zeroizing::new(rand::random::<[u8; 32]>());
+    let mut texte = String::with_capacity(64);
+    for octet in octets.iter() {
+        texte.push(CHIFFRES[usize::from(octet >> 4)] as char);
+        texte.push(CHIFFRES[usize::from(octet & 0x0f)] as char);
+    }
+    (octets, JetonRenouvellement(texte))
 }
 
 /// Un texte qui n'est pas exactement 64 caractères hexadécimaux ne peut pas
-/// être un jeton émis par le serveur.
-fn decoder(texte: &str) -> Option<[u8; 32]> {
+/// être un jeton émis par le serveur. Les octets décodés sont effacés à la
+/// fin de leur usage.
+fn decoder(texte: &str) -> Option<Zeroizing<[u8; 32]>> {
     if texte.len() != 64 || !texte.is_ascii() {
         return None;
     }
-    let mut octets = [0u8; 32];
+    let mut octets = Zeroizing::new([0u8; 32]);
     for (i, octet) in octets.iter_mut().enumerate() {
         *octet = u8::from_str_radix(&texte[2 * i..2 * i + 2], 16).ok()?;
     }
@@ -173,7 +214,7 @@ async fn inserer_jeton(
     conn: &mut PgConnection,
     session_id: Uuid,
     type_compte: TypeCompte,
-) -> Result<(Uuid, String), sqlx::Error> {
+) -> Result<(Uuid, JetonRenouvellement), sqlx::Error> {
     let (octets, texte) = nouveau_jeton();
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO jeton_renouvellement (session_id, empreinte, expire_le) \
@@ -192,10 +233,18 @@ async fn inserer_jeton(
 /// plus de 30 jours, sauf celles révoquées pour `rejeu_detecte`, gardées
 /// 6 mois. Leurs jetons partent en cascade.
 ///
-/// Sans risque d'interblocage avec `renouveler` : une session purgeable n'a
-/// plus aucun jeton valide (chaque jeton expire au plus tard avec sa
-/// session, et au plus 30 jours après son émission), et `renouveler` ne
-/// verrouille que des jetons encore valides.
+/// Sans risque d'interblocage avec `renouveler`, qui ne verrouille que des
+/// jetons **non expirés** (`expire_le > now()`). « Non expiré » ne veut pas
+/// dire « jamais utilisé » : un jeton déjà utilisé reste verrouillable, ce
+/// qu'exigent la tolérance de 30 s et la détection du rejeu. L'état de la
+/// session ne fait pas partie de ce filtre ; il est vérifié ensuite, une
+/// fois la session verrouillée.
+///
+/// Or une session purgeable n'a plus aucun jeton non expiré : chaque jeton
+/// expire au plus tard avec sa session (`LEAST`), et au plus 30 jours après
+/// son émission, donc avant que la session, terminée, devienne purgeable
+/// 30 jours plus tard (6 mois pour `rejeu_detecte`). La purge et
+/// `renouveler` ne se disputent donc jamais les mêmes lignes.
 async fn purger(conn: &mut PgConnection) -> Result<(), sqlx::Error> {
     sqlx::query(
         "DELETE FROM session WHERE CASE \
@@ -266,8 +315,9 @@ pub async fn renouveler(pool: &PgPool, jeton: &str) -> Result<SessionActive, Err
     };
     let mut tx = pool.begin().await?;
 
-    // 1. Le jeton présenté, verrouillé, seulement s'il est encore valide :
-    //    un jeton expiré n'est jamais verrouillé (voir `purger`).
+    // 1. Le jeton présenté, verrouillé seulement s'il n'est pas expiré, même
+    //    s'il a déjà servi (tolérance, rejeu) ; un jeton expiré n'est jamais
+    //    verrouillé (voir `purger`).
     type LigneJeton = (Uuid, Uuid, bool, Option<Uuid>, bool, bool, bool);
     let jeton_present: Option<LigneJeton> = sqlx::query_as(
         "SELECT id, session_id, utilise_le IS NOT NULL, remplace_par_id, reutilise_le IS NOT NULL, \
@@ -409,13 +459,33 @@ mod tests {
 
     #[test]
     fn jeton_de_64_caracteres_hexadecimaux() {
-        let (octets, texte) = nouveau_jeton();
+        let (octets, jeton) = nouveau_jeton();
+        let texte = jeton.en_clair();
         assert_eq!(texte.len(), 64);
-        assert_eq!(decoder(&texte), Some(octets));
-        assert_eq!(decoder(&texte.to_uppercase()), Some(octets));
-        assert_eq!(decoder("abc"), None);
-        assert_eq!(decoder(&"g".repeat(64)), None);
-        assert_eq!(decoder(&"é".repeat(32)), None);
+        assert!(texte.bytes().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert_eq!(decoder(texte).as_deref(), Some(&*octets));
+        assert_eq!(decoder(&texte.to_uppercase()).as_deref(), Some(&*octets));
+        assert!(decoder("abc").is_none());
+        assert!(decoder(&"g".repeat(64)).is_none());
+        assert!(decoder(&"é".repeat(32)).is_none());
+    }
+
+    #[test]
+    fn le_jeton_n_apparait_jamais_dans_debug() {
+        let (_, jeton) = nouveau_jeton();
+        let texte = jeton.en_clair().to_owned();
+        let session = SessionActive {
+            session_id: Uuid::from_u128(1),
+            compte_id: Uuid::from_u128(2),
+            affectation_id: None,
+            type_compte: TypeCompte::Patient,
+            version_jeton: 0,
+            jeton_renouvellement: jeton,
+        };
+        let affichage = format!("{session:?}");
+        assert!(!affichage.contains(&texte), "{affichage}");
+        assert!(affichage.contains("***"), "{affichage}");
+        assert_eq!(format!("{:?}", session.jeton_renouvellement), "***");
     }
 
     #[test]
@@ -480,7 +550,7 @@ mod tests {
         ] {
             let compte_id = compte(&pool, telephone, type_compte).await;
             let session = ouvrir(&pool, compte_id, None).await.unwrap();
-            assert_eq!(session.jeton_renouvellement.len(), 64);
+            assert_eq!(session.jeton_renouvellement.en_clair().len(), 64);
             let (duree_ok, inactivite_ok, en_clair): (bool, bool, i64) = sqlx::query_as(
                 "SELECT s.expire_le - s.creee_le = $2::interval, \
                         j.expire_le - j.cree_le = $3::interval, \
@@ -490,13 +560,13 @@ mod tests {
             .bind(session.session_id)
             .bind(absolue)
             .bind(inactivite)
-            .bind(&session.jeton_renouvellement)
+            .bind(session.jeton_renouvellement.en_clair())
             .fetch_one(&pool)
             .await
             .unwrap();
             assert!(duree_ok && inactivite_ok, "{type_compte}");
             assert_eq!(en_clair, 0, "le jeton n'est jamais enregistré en clair");
-            id_du_jeton(&pool, &session.jeton_renouvellement).await;
+            id_du_jeton(&pool, session.jeton_renouvellement.en_clair()).await;
         }
     }
 
@@ -504,8 +574,8 @@ mod tests {
     #[ignore]
     async fn rotation_normale(pool: PgPool) {
         let compte_id = compte(&pool, "+22670030010", "patient").await;
-        let a = ouvrir(&pool, compte_id, None).await.unwrap().jeton_renouvellement;
-        let b = renouveler(&pool, &a).await.unwrap().jeton_renouvellement;
+        let a = ouvrir(&pool, compte_id, None).await.unwrap().jeton_renouvellement.en_clair().to_owned();
+        let b = renouveler(&pool, &a).await.unwrap().jeton_renouvellement.en_clair().to_owned();
         assert_ne!(a, b);
         let id_b = id_du_jeton(&pool, &b).await;
         let (utilise, remplace_par): (bool, Option<Uuid>) = sqlx::query_as(
@@ -531,7 +601,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let b = renouveler(&pool, &session.jeton_renouvellement).await.unwrap().jeton_renouvellement;
+        let b = renouveler(&pool, session.jeton_renouvellement.en_clair()).await.unwrap().jeton_renouvellement.en_clair().to_owned();
         let borne: bool = sqlx::query_scalar(
             "SELECT j.expire_le = s.expire_le FROM jeton_renouvellement j JOIN session s ON s.id = j.session_id \
              WHERE j.id = $1",
@@ -547,10 +617,10 @@ mod tests {
     #[ignore]
     async fn tolerance_une_fois_successeur_jamais_utilise(pool: PgPool) {
         let compte_id = compte(&pool, "+22670030012", "patient").await;
-        let a = ouvrir(&pool, compte_id, None).await.unwrap().jeton_renouvellement;
-        let b = renouveler(&pool, &a).await.unwrap().jeton_renouvellement;
+        let a = ouvrir(&pool, compte_id, None).await.unwrap().jeton_renouvellement.en_clair().to_owned();
+        let b = renouveler(&pool, &a).await.unwrap().jeton_renouvellement.en_clair().to_owned();
         // La réponse « b » est perdue : le client renvoie « a ».
-        let c = renouveler(&pool, &a).await.unwrap().jeton_renouvellement;
+        let c = renouveler(&pool, &a).await.unwrap().jeton_renouvellement.en_clair().to_owned();
         let (id_b, id_c) = (id_du_jeton(&pool, &b).await, id_du_jeton(&pool, &c).await);
 
         let (remplace_par, reutilise): (Option<Uuid>, bool) = sqlx::query_as(
@@ -578,9 +648,9 @@ mod tests {
     async fn successeur_revoque_qui_revient_est_un_rejeu(pool: PgPool) {
         let compte_id = compte(&pool, "+22670030013", "patient").await;
         let session = ouvrir(&pool, compte_id, None).await.unwrap();
-        let a = session.jeton_renouvellement;
-        let b = renouveler(&pool, &a).await.unwrap().jeton_renouvellement;
-        let c = renouveler(&pool, &a).await.unwrap().jeton_renouvellement;
+        let a = session.jeton_renouvellement.en_clair().to_owned();
+        let b = renouveler(&pool, &a).await.unwrap().jeton_renouvellement.en_clair().to_owned();
+        let c = renouveler(&pool, &a).await.unwrap().jeton_renouvellement.en_clair().to_owned();
 
         assert!(est_rejeu(renouveler(&pool, &b).await));
         assert_eq!(motif(&pool, session.session_id).await.as_deref(), Some("rejeu_detecte"));
@@ -592,8 +662,8 @@ mod tests {
     async fn rejeu_si_successeur_deja_utilise(pool: PgPool) {
         let compte_id = compte(&pool, "+22670030014", "patient").await;
         let session = ouvrir(&pool, compte_id, None).await.unwrap();
-        let a = session.jeton_renouvellement;
-        let b = renouveler(&pool, &a).await.unwrap().jeton_renouvellement;
+        let a = session.jeton_renouvellement.en_clair().to_owned();
+        let b = renouveler(&pool, &a).await.unwrap().jeton_renouvellement.en_clair().to_owned();
         renouveler(&pool, &b).await.unwrap();
         assert!(est_rejeu(renouveler(&pool, &a).await));
         assert_eq!(motif(&pool, session.session_id).await.as_deref(), Some("rejeu_detecte"));
@@ -604,7 +674,7 @@ mod tests {
     async fn rejeu_apres_30_secondes(pool: PgPool) {
         let compte_id = compte(&pool, "+22670030015", "patient").await;
         let session = ouvrir(&pool, compte_id, None).await.unwrap();
-        let a = session.jeton_renouvellement;
+        let a = session.jeton_renouvellement.en_clair().to_owned();
         renouveler(&pool, &a).await.unwrap();
         sqlx::query("UPDATE jeton_renouvellement SET utilise_le = utilise_le - interval '31 seconds' WHERE id = $1")
             .bind(id_du_jeton(&pool, &a).await)
@@ -620,7 +690,7 @@ mod tests {
     async fn rejeu_si_deuxieme_reutilisation(pool: PgPool) {
         let compte_id = compte(&pool, "+22670030016", "patient").await;
         let session = ouvrir(&pool, compte_id, None).await.unwrap();
-        let a = session.jeton_renouvellement;
+        let a = session.jeton_renouvellement.en_clair().to_owned();
         renouveler(&pool, &a).await.unwrap();
         renouveler(&pool, &a).await.unwrap();
         assert!(est_rejeu(renouveler(&pool, &a).await));
@@ -641,7 +711,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        assert!(est_invalide(renouveler(&pool, &premiere.jeton_renouvellement).await), "inactivité dépassée");
+        assert!(est_invalide(renouveler(&pool, premiere.jeton_renouvellement.en_clair()).await), "inactivité dépassée");
 
         let seconde = ouvrir(&pool, compte_id, None).await.unwrap();
         sqlx::query(
@@ -651,7 +721,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        assert!(est_invalide(renouveler(&pool, &seconde.jeton_renouvellement).await), "session expirée");
+        assert!(est_invalide(renouveler(&pool, seconde.jeton_renouvellement.en_clair()).await), "session expirée");
 
         // Jeton mal formé ou inconnu.
         assert!(est_invalide(renouveler(&pool, "pas-un-jeton").await));
@@ -663,12 +733,12 @@ mod tests {
     async fn renouvellements_simultanes(pool: PgPool) {
         let compte_id = compte(&pool, "+22670030018", "patient").await;
         let session = ouvrir(&pool, compte_id, None).await.unwrap();
-        let a = session.jeton_renouvellement;
+        let a = session.jeton_renouvellement.en_clair().to_owned();
 
         let mut taches = tokio::task::JoinSet::new();
         for _ in 0..2 {
             let (pool, a) = (pool.clone(), a.clone());
-            taches.spawn(async move { renouveler(&pool, &a).await.map(|s| s.jeton_renouvellement) });
+            taches.spawn(async move { renouveler(&pool, &a).await.map(|s| s.session_id) });
         }
         while let Some(resultat) = taches.join_next().await {
             // Rotation pour l'un, tolérance pour l'autre : aucun
@@ -692,9 +762,9 @@ mod tests {
         let compte_id = compte(&pool, "+22670030019", "patient").await;
 
         let une = ouvrir(&pool, compte_id, None).await.unwrap();
-        fermer(&pool, &une.jeton_renouvellement).await.unwrap();
+        fermer(&pool, une.jeton_renouvellement.en_clair()).await.unwrap();
         assert_eq!(motif(&pool, une.session_id).await.as_deref(), Some("deconnexion"));
-        assert!(est_invalide(renouveler(&pool, &une.jeton_renouvellement).await));
+        assert!(est_invalide(renouveler(&pool, une.jeton_renouvellement.en_clair()).await));
         fermer(&pool, "pas-un-jeton").await.unwrap();
         fermer(&pool, &"0".repeat(64)).await.unwrap();
 
@@ -801,9 +871,9 @@ mod tests {
     async fn purge_session_avec_jetons_enchaines(pool: PgPool) {
         let compte_id = compte(&pool, "+22670030022", "patient").await;
         let session = ouvrir(&pool, compte_id, None).await.unwrap();
-        let a = session.jeton_renouvellement;
-        let b = renouveler(&pool, &a).await.unwrap().jeton_renouvellement;
-        let c = renouveler(&pool, &a).await.unwrap().jeton_renouvellement; // tolérance : A → C, B annulé
+        let a = session.jeton_renouvellement.en_clair().to_owned();
+        let b = renouveler(&pool, &a).await.unwrap().jeton_renouvellement.en_clair().to_owned();
+        let c = renouveler(&pool, &a).await.unwrap().jeton_renouvellement.en_clair().to_owned(); // tolérance : A → C, B annulé
         renouveler(&pool, &c).await.unwrap(); // C → D
         let _ = b;
         let jetons: i64 = sqlx::query_scalar("SELECT count(*) FROM jeton_renouvellement WHERE session_id = $1")
