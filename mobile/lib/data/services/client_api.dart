@@ -35,40 +35,47 @@ class ErreurReseau implements Exception {
 /// Client de l'API LaafiCare : JSON, délai d'attente, erreurs au format
 /// {"erreur", "code"} (docs/api.md §1).
 ///
+/// Un 401 n'est jamais traité ici : avec les jetons d'accès de 15 minutes,
+/// il faut d'abord tenter un renouvellement (docs/api.md §1.7). C'est le
+/// gestionnaire de session qui décide, le client ne fait que lever
+/// l'ErreurApi.
+///
 /// Un seul client http pour toute l'application, comme le recommande le
 /// README du paquet http : « it's recommended to use a Client instance
 /// rather than the top-level functions » (https://pub.dev/packages/http).
 class ClientApi {
   // Paramètres nommés privés (Dart ≥ 3.12) : l'appelant écrit client:,
-  // delaiAttente:, surSessionExpiree: ; les champs restent privés.
+  // delaiAttente: ; les champs restent privés.
   // https://dart.dev/language/constructors
   ClientApi({
     required Configuration configuration,
     required this._client,
     this._delaiAttente = Configuration.delaiAttente,
-    this._surSessionExpiree,
   }) : _adresseApi = configuration.adresseApi;
 
   final Uri _adresseApi;
   final http.Client _client;
+
+  /// Délai par défaut de chaque requête.
   final Duration _delaiAttente;
 
-  /// Appelé quand une requête **portant un jeton** est refusée en 401
-  /// `jeton_invalide` ou `authentification_requise` (docs/api.md §1.2) :
-  /// la session est terminée (décision du porteur : effacer le jeton et
-  /// revenir à la connexion). Une requête sans jeton refusée en 401 (ex.
-  /// `identifiants_invalides` à la connexion) n'appelle jamais ce rappel.
-  final void Function()? _surSessionExpiree;
-
-  Future<ReponseApi> get(String chemin, {String? jeton}) =>
-      _envoyer('GET', chemin, jeton: jeton);
+  /// [delaiAttente] remplace le délai par défaut pour cette seule requête
+  /// (ex. renouvellement de session, plus court : docs/api.md §1.7).
+  Future<ReponseApi> get(
+    String chemin, {
+    String? jeton,
+    Duration? delaiAttente,
+  }) =>
+      _envoyer('GET', chemin, jeton: jeton, delaiAttente: delaiAttente);
 
   Future<ReponseApi> post(
     String chemin, {
     Map<String, Object?>? corps,
     String? jeton,
+    Duration? delaiAttente,
   }) =>
-      _envoyer('POST', chemin, corps: corps, jeton: jeton);
+      _envoyer('POST', chemin,
+          corps: corps, jeton: jeton, delaiAttente: delaiAttente);
 
   /// Ferme les connexions ; le client n'est plus utilisable ensuite.
   void fermer() => _client.close();
@@ -78,6 +85,7 @@ class ClientApi {
     String chemin, {
     Map<String, Object?>? corps,
     String? jeton,
+    Duration? delaiAttente,
   }) async {
     assert(chemin.startsWith('/'), 'Le chemin commence par / : $chemin');
 
@@ -87,7 +95,8 @@ class ClientApi {
     // plutôt que Future.delayed, pour ne rien laisser en attente après la
     // réponse.
     final declencheur = Completer<void>();
-    final minuterie = Timer(_delaiAttente, declencheur.complete);
+    final minuterie =
+        Timer(delaiAttente ?? _delaiAttente, declencheur.complete);
 
     final requete = http.AbortableRequest(
       methode,
@@ -134,18 +143,11 @@ class ClientApi {
     final texte = utf8.decode(reponse.bodyBytes, allowMalformed: true);
 
     if (reponse.statusCode < 200 || reponse.statusCode >= 300) {
-      final erreur = ErreurApi.depuisReponse(
+      throw ErreurApi.depuisReponse(
         statut: reponse.statusCode,
         corps: texte,
         entetes: reponse.headers,
       );
-      if (jeton != null &&
-          reponse.statusCode == 401 &&
-          (erreur.code == CodesErreur.jetonInvalide ||
-              erreur.code == CodesErreur.authentificationRequise)) {
-        _surSessionExpiree?.call();
-      }
-      throw erreur;
     }
 
     if (texte.isEmpty) {

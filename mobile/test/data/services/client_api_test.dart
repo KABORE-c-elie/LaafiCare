@@ -14,13 +14,11 @@ final _configuration =
 ClientApi _client(
   http.Client client, {
   Duration delai = const Duration(seconds: 30),
-  void Function()? surSessionExpiree,
 }) =>
     ClientApi(
       configuration: _configuration,
       client: client,
       delaiAttente: delai,
-      surSessionExpiree: surSessionExpiree,
     );
 
 /// Réponse JSON encodée en UTF-8, sans charset dans Content-Type.
@@ -76,33 +74,37 @@ void main() {
     );
   });
 
-  test('401 jeton_invalide avec jeton : session expirée signalée', () async {
-    var appels = 0;
-    final client = _client(
-      MockClient((_) async =>
-          _json(401, {'erreur': 'x', 'code': 'jeton_invalide'})),
-      surSessionExpiree: () => appels++,
-    );
+  test('401 jeton_invalide avec jeton : seulement une ErreurApi, '
+      'le client ne décide rien', () async {
+    var requetes = 0;
+    final client = _client(MockClient((_) async {
+      requetes++;
+      return _json(401, {'erreur': 'x', 'code': 'jeton_invalide'});
+    }));
     await expectLater(
       client.get('/api/patients/moi', jeton: 'abc'),
-      throwsA(isA<ErreurApi>()),
+      throwsA(isA<ErreurApi>()
+          .having((e) => e.statut, 'statut', 401)
+          .having((e) => e.code, 'code', CodesErreur.jetonInvalide)),
     );
-    expect(appels, 1);
+    expect(requetes, 1);
   });
 
-  test('401 identifiants_invalides sans jeton : pas de session expirée',
+  test('délai propre à une requête : il remplace le délai du client',
       () async {
-    var appels = 0;
     final client = _client(
-      MockClient((_) async =>
-          _json(401, {'erreur': 'x', 'code': 'identifiants_invalides'})),
-      surSessionExpiree: () => appels++,
+      MockClient.streaming((requete, _) async {
+        await (requete as http.Abortable).abortTrigger;
+        throw http.RequestAbortedException(requete.url);
+      }),
+      delai: const Duration(seconds: 30),
     );
     await expectLater(
-      client.post('/api/patients/connexion', corps: {}),
-      throwsA(isA<ErreurApi>()),
+      client.post('/api/sessions/renouveler',
+          corps: {}, delaiAttente: const Duration(milliseconds: 10)),
+      throwsA(isA<ErreurReseau>()
+          .having((e) => e.delaiDepasse, 'delaiDepasse', isTrue)),
     );
-    expect(appels, 0);
   });
 
   test('délai dépassé : requête interrompue, ErreurReseau(delaiDepasse)',
