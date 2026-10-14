@@ -2,7 +2,7 @@
 
 Ce document décrit les routes de l'API Rust/Axum telles qu'elles sont **codées aujourd'hui**, puis celles qui sont **seulement prévues**. Les applications Angular (web) et Flutter (mobile) s'appuient sur lui. Il est mis à jour avec chaque ajout ou modification d'une route.
 
-État au 2026-10-09, branche `dev`.
+État au 2026-10-14, branche `dev`.
 
 Toutes les valeurs des exemples sont fictives.
 
@@ -35,16 +35,17 @@ Le jeton est un JWT signé en HS256. Il contient :
 | `aud` | sorte de jeton (tableau ci-dessous) |
 | `ver` | version du jeton du compte : un jeton émis avant une réinitialisation du mot de passe ou une bascule sera refusé |
 | `aff` | affectation active (structure et rôle), seulement pour `laaficare:professionnel_en_exercice` |
+| `sid` | session de l'appareil (section 1.7), seulement pour les quatre sortes de 15 min ; une session fermée refuse aussitôt ses jetons |
 | `iat`, `exp` | date d'émission et d'expiration (secondes depuis 1970) |
 
 Il existe **huit sortes de jetons**. Chaque route n'en accepte qu'une : un jeton d'une autre sorte est refusé en 401 `jeton_invalide`, même s'il est encore valable.
 
 | Sorte (`aud`) | Sert à | Durée | État |
 |---|---|---|---|
-| `laaficare:patient` | routes du patient | 24 h | émis par l'inscription et la connexion patient |
-| `laaficare:professionnel_sans_affectation` | lister ses affectations, en activer une | 24 h | prévu (étape 3.6) |
-| `laaficare:professionnel_en_exercice` | routes métier (remboursements MUNASEB…) | 24 h | attendu par les routes MUNASEB ; émis à l'étape 3.9 |
-| `laaficare:administrateur` | routes de l'équipe LaafiCare | 24 h | prévu (étape 3.6) |
+| `laaficare:patient` | routes du patient (`GET /api/patients/moi`, `deconnexion-partout`) | 15 min | émis par l'inscription, la connexion et le renouvellement ; refusé après une réinitialisation du mot de passe ou la fermeture de sa session |
+| `laaficare:professionnel_sans_affectation` | lister ses affectations, en activer une | 15 min | prévu (étape 3.6) |
+| `laaficare:professionnel_en_exercice` | routes métier (remboursements MUNASEB…) | 15 min | attendu par les routes MUNASEB ; émis à l'étape 3.9 |
+| `laaficare:administrateur` | routes de l'équipe LaafiCare | 15 min | prévu (étape 3.6) |
 | `laaficare:second_facteur_patient`, `…_professionnel`, `…_administrateur` | saisir le code du second facteur, après un mot de passe correct | 5 min | prévu (étape 3.6) |
 | `laaficare:reenrolement_administrateur` | activer un nouveau second facteur, rien d'autre | 10 min | prévu (étape 3.6) |
 
@@ -117,6 +118,60 @@ Le serveur normalise le numéro saisi : il retire les espaces, les points et les
 
 L'application peut donc envoyer le numéro tel que saisi.
 
+### 1.7 Sessions et jeton de renouvellement
+
+> **En service depuis le 2026-10-14** pour les comptes patients. Les professionnels et les administrateurs suivront avec leur connexion (étape 3.6). L'ancienne réponse `{"jeton": "<JWT>"}` n'existe plus.
+
+**Le principe.** Après la connexion, l'application reçoit deux jetons :
+- un **jeton d'accès** (`jeton_acces`), de courte durée, à présenter à chaque demande (`Authorization: Bearer …`) ;
+- un **jeton de renouvellement** (`jeton_renouvellement`), qui sert uniquement à obtenir une nouvelle paire quand le jeton d'accès expire. Il **change à chaque usage** : l'ancien ne sert plus. Le serveur n'en garde qu'une empreinte.
+
+Chaque connexion ouvre une **session** (une par appareil). Le jeton d'accès porte l'identifiant de sa session : une session déconnectée refuse aussitôt ses jetons.
+
+| Compte | Jeton d'accès | Sans renouvellement pendant… | Au plus tard, mot de passe redemandé après… |
+|---|---|---|---|
+| Patient | 15 min | 30 jours | 30 jours |
+| Professionnel | 15 min | 1 h | 12 h |
+| Administrateur | 15 min | 1 h | 24 h |
+
+**Réponse de la connexion et de l'inscription** :
+
+```json
+{
+  "etape": "complete",
+  "jeton_acces": "<JWT>",
+  "expire_dans": 900,
+  "jeton_renouvellement": "<64 caractères>"
+}
+```
+
+- `expire_dans` : durée de vie du jeton d'accès, en secondes.
+- `jeton_renouvellement` : 64 caractères hexadécimaux.
+- Plus tard, si le second facteur est actif : `{"etape": "second_facteur", "jeton_intermediaire": "<JWT>"}`, puis la paire après la saisie du code. Les patients ne peuvent pas encore activer le second facteur (après l'étape 3.11) : aujourd'hui, `etape` vaut toujours `complete`. L'application doit quand même tester `etape`.
+- L'inscription (201) renvoie la même forme, avec `"etape": "complete"`.
+
+**Les trois routes :**
+
+| Route | Appelant | Corps | Réponses |
+|---|---|---|---|
+| `POST /api/sessions/renouveler` | tout le monde, **sans** en-tête `Authorization` (le jeton d'accès peut être expiré) | `{"jeton_renouvellement": "…"}` | 200 : nouvelle paire, même forme que ci-dessus sans `etape` ; 401 `jeton_invalide` : jeton inconnu, expiré, session révoquée ou expirée, ou vol détecté |
+| `POST /api/sessions/deconnexion` | tout le monde | `{"jeton_renouvellement": "…"}` | **toujours 204**, même pour un jeton inconnu : se déconnecter n'échoue jamais |
+| `POST /api/sessions/deconnexion-partout` | jeton d'accès `laaficare:patient` **valide** (si expiré : renouveler d'abord) | aucun | 204 : toutes les sessions du compte sont fermées, sur tous les appareils ; 401 comme pour toute route protégée (section 1.2) |
+
+Erreurs de lecture de la requête (corps JSON mal formé, champ manquant) : section 1.4.
+
+**Ce que fait l'application :**
+- garder le jeton de renouvellement dans le **stockage sécurisé** du téléphone (Keystore sous Android, Keychain sous iOS) ;
+- sur un 401 `jeton_invalide` d'une route ordinaire : renouveler une fois, puis rejouer la demande ; si le renouvellement répond 401, renvoyer à l'écran de connexion ;
+- toujours remplacer **les deux** jetons par ceux du renouvellement ;
+- ne jamais lancer deux renouvellements en même temps avec le même jeton.
+
+**Réponse perdue pendant un renouvellement (règle des 30 secondes).** Sur un réseau instable, la réponse d'un renouvellement peut se perdre alors que le serveur a déjà changé le jeton. Le serveur accepte alors **une seule fois** l'ancien jeton de renouvellement, **dans les 30 secondes** qui suivent son premier usage, et seulement si le nouveau jeton n'a jamais servi. Il renvoie une nouvelle paire.
+- **L'application doit relancer sa demande de renouvellement en moins de 30 secondes**, avec le même jeton, si elle n'a pas reçu de réponse. Son délai d'attente réseau doit être réglé en conséquence.
+- Au-delà de 30 secondes, ou après une seconde réutilisation, le serveur considère que le jeton a été volé : **la session est fermée** (401), et il faut se reconnecter.
+
+**Déconnexions automatiques** : la réinitialisation du mot de passe ferme toutes les sessions du compte ; une session fermée parce qu'un vol a été détecté aussi.
+
 ---
 
 ## 2. Routes codées
@@ -130,6 +185,10 @@ Résumé :
 | POST | `/api/patients/inscription` | tout le monde | fonctionne |
 | POST | `/api/patients/connexion` | tout le monde | fonctionne |
 | POST | `/api/patients/mot-de-passe/reinitialiser` | tout le monde | fonctionne |
+| GET | `/api/patients/moi` | jeton `laaficare:patient` | fonctionne |
+| POST | `/api/sessions/renouveler` | tout le monde, avec un jeton de renouvellement | fonctionne (section 1.7) |
+| POST | `/api/sessions/deconnexion` | tout le monde, avec un jeton de renouvellement | fonctionne (section 1.7) |
+| POST | `/api/sessions/deconnexion-partout` | jeton `laaficare:patient` | fonctionne (section 1.7) |
 | POST | `/api/assurance-munaseb/remboursements/simuler-acte` | jeton en exercice, agent MUNASEB | **hors service** |
 | GET | `/api/assurance-munaseb/remboursements` | jeton en exercice, agent MUNASEB | **hors service** |
 | GET | `/api/assurance-munaseb/remboursements/{id}` | jeton en exercice, agent MUNASEB | **hors service** |
@@ -214,24 +273,31 @@ Crée le compte patient, attribue le NIP et ouvre la session.
 
 | Code | `code` | Cas |
 |---|---|---|
-| 201 | — | compte créé ; corps `{"jeton": "<JWT>"}`, jeton `laaficare:patient` |
+| 201 | — | compte créé et session ouverte ; corps `{"etape": "complete", "jeton_acces", "expire_dans", "jeton_renouvellement"}` (section 1.7), jeton d'accès `laaficare:patient` |
 | 422 | `telephone_invalide` | format du numéro non reconnu |
 | 422 | `mot_de_passe_non_conforme` | + `regles_non_respectees` (voir 1.5) |
 | 401 | `code_invalide` | code OTP faux, expiré ou déjà utilisé |
 | 429 | `trop_de_demandes` | code faux, et c'était le dernier essai permis : le code est effacé, pas d'en-tête `Retry-After` (voir 2.2.5) |
 | 409 | `telephone_deja_utilise` | un compte existe déjà pour ce numéro |
+| 502, 503 ou 504 | — | réponse d'un intermédiaire réseau (passerelle, proxy, répartiteur), pas du serveur LaafiCare : la demande a **peut-être** été traitée et le compte créé. Ne pas renvoyer l'inscription : voir « Si la réponse se perd ». |
 | 500 | `erreur_interne` | panne |
 
 - Ordre des contrôles : numéro, puis mot de passe, puis code OTP. Un mot de passe refusé **ne consomme pas** le code : la personne corrige et renvoie la même requête.
 - Le 409 n'arrive qu'après un code OTP correct : seul le titulaire du numéro l'apprend.
 
-**Si la réponse se perd** (coupure réseau, délai dépassé) : le compte a peut-être été créé quand même, et le code OTP est peut-être déjà consommé. L'application ne renvoie pas la même inscription. Elle tente une **connexion** (`POST /api/patients/connexion`, section 2.2.3) avec le même téléphone et le même mot de passe :
+**Si la réponse se perd** (coupure réseau, délai dépassé, ou réponse **502, 503 ou 504** d'un intermédiaire réseau) : le compte a peut-être été créé quand même, et le code OTP est peut-être déjà consommé. L'application ne renvoie pas la même inscription. Elle fait une **connexion de contrôle** (`POST /api/patients/connexion`, section 2.2.3) avec le même téléphone et le même mot de passe :
 
-| Réponse de la connexion | Ce que fait l'application |
+| Réponse de la connexion de contrôle | Ce que fait l'application |
 |---|---|
-| 200 | Le compte existe : la session est ouverte avec ce jeton, l'inscription est terminée. |
-| 401 `identifiants_invalides` | Le compte n'a pas été créé. L'application reprend l'inscription : nouvelle demande de code (`POST /api/patients/otp`, qui peut répondre 429 si le dernier code date de moins de 60 s : attendre le délai de `Retry-After`), puis nouvel envoi du formulaire, qu'elle a gardé. |
-| erreur réseau | L'application réessaie la connexion plus tard ; elle ne renvoie pas l'inscription. |
+| 200 | Le compte existe : la session est ouverte avec cette paire de jetons, l'inscription est terminée. |
+| 401 `identifiants_invalides` | Le compte n'a pas été créé. L'application relance l'inscription : nouvelle demande de code (`POST /api/patients/otp`, qui peut répondre 429 : attendre le délai de `Retry-After`), puis nouvel envoi du formulaire, qu'elle a gardé. |
+| 502, 503, 504 ou erreur réseau | L'application réessaie la connexion de contrôle, **au plus 3 fois**, espacées (par exemple après 2 s, 5 s, puis 15 s) ; elle ne renvoie pas l'inscription. Après le troisième échec, elle demande au patient de réessayer quand le réseau sera meilleur. **Le formulaire reste gardé.** |
+
+**Si l'inscription relancée répond 409 `telephone_deja_utilise`**, le compte a été créé entre-temps : la première inscription avait abouti. L'application refait une connexion de contrôle, **sans afficher d'erreur au patient**.
+
+**Sortie de boucle.** Si cette connexion de contrôle répond **encore** 401 `identifiants_invalides`, le numéro appartient à un autre compte (ou le mot de passe de ce compte est différent). L'application **arrête le parcours** et affiche le message normal « ce numéro a déjà un compte », avec accès à la connexion et à « Mot de passe oublié ? ».
+
+**Session inutilisée.** Une inscription dont la réponse s'est perdue a ouvert une session (section 1.7) que l'application n'a jamais reçue. Cette session n'est jamais utilisée et expire d'elle-même, au bout de 30 jours sans renouvellement, sans aucune action du patient ni du serveur.
 
 Aucun changement côté serveur : ce parcours n'utilise que les routes existantes.
 
@@ -248,7 +314,7 @@ Aucun changement côté serveur : ce parcours n'utilise que les routes existante
 
 | Code | `code` | Cas |
 |---|---|---|
-| 200 | — | corps `{"jeton": "<JWT>"}`, jeton `laaficare:patient` |
+| 200 | — | session ouverte ; corps `{"etape": "complete", "jeton_acces", "expire_dans", "jeton_renouvellement"}` (section 1.7), jeton d'accès `laaficare:patient` |
 | 401 | `identifiants_invalides` | tous les refus (voir ci-dessous) |
 | 422 | `telephone_invalide` | format du numéro non reconnu |
 | 500 | `erreur_interne` | panne |
@@ -279,6 +345,7 @@ Aucun changement côté serveur : ce parcours n'utilise que les routes existante
 
 - Effets : le verrouillage est levé, le compteur d'échecs remis à zéro.
 - Aucun jeton n'est renvoyé : la personne se connecte ensuite avec son nouveau mot de passe.
+- **Toutes les sessions du compte sont fermées**, sur tous les appareils : les jetons d'accès et de renouvellement émis avant la réinitialisation sont refusés.
 - La réinitialisation **ne touche jamais au second facteur** (TOTP).
 
 #### 2.2.5 Limites du code OTP et réponse 429
@@ -301,6 +368,46 @@ Les échecs s'additionnent d'un code à l'autre et ne reviennent à zéro qu'apr
 | Inscription ou réinitialisation | absent | « Trop d'essais avec ce code. Demandez un nouveau code. » Le champ du code est vidé et l'application propose le bouton « Renvoyer le code ». |
 
 L'application lit la valeur de l'en-tête `Retry-After`, jamais le message `erreur`. Après un 401 `code_invalide`, elle laisse simplement la personne ressaisir le code, ou en redemander un s'il a expiré.
+
+#### 2.2.6 `GET /api/patients/moi`
+
+Profil du patient connecté.
+
+- **Appelant** : jeton `laaficare:patient` (en-tête `Authorization: Bearer <jeton>`).
+- **Corps** : aucun.
+- **Réponse 200** :
+
+```json
+{
+  "compte_id": "0199b8e2-7c41-7a10-9f3e-2b6d1c0e4a55",
+  "nip": "1000000000000008",
+  "nom": "OUEDRAOGO",
+  "prenom": "Awa",
+  "telephone": "+22670000000",
+  "date_naissance": "1995-04-12",
+  "lieu_naissance": "Koudougou"
+}
+```
+
+| Champ | Contenu |
+|---|---|
+| `compte_id` | identifiant du compte patient ; **ne change jamais**. L'application s'en sert pour rattacher ce qu'elle garde sur le téléphone (rappels…). |
+| `nip` | NIP à 16 chiffres |
+| `nom`, `prenom` | toujours remplis |
+| `telephone` | forme normalisée (`+226…`) |
+| `date_naissance` | `AAAA-MM-JJ` |
+| `lieu_naissance` | texte saisi à l'inscription |
+
+- **Erreurs** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 401 | `authentification_requise` | en-tête `Authorization` absent |
+| 401 | `jeton_invalide` | jeton expiré, d'une autre sorte, **émis avant une réinitialisation du mot de passe**, ou compte désactivé |
+| 500 | `erreur_interne` | panne, ou incohérence en base |
+
+- **Révocation** : après une réinitialisation du mot de passe, ou quand la session du jeton a été fermée (déconnexion, déconnexion partout, vol détecté), le jeton est refusé (401 `jeton_invalide`) même s'il n'a pas encore expiré. L'application tente un renouvellement (section 1.7) ; s'il répond 401, elle renvoie la personne à l'écran de connexion.
+- **Compte verrouillé** (trop d'essais de mot de passe) : un jeton déjà reçu reste valable ; le verrouillage ne bloque que les nouvelles connexions.
 
 ### 2.3 Agent MUNASEB (hors service, voir l'encadré plus haut)
 

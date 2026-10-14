@@ -25,18 +25,17 @@ Les décisions déjà prises sont dans `CLAUDE.md` (sections 12 et 14), qui rest
 
 **Contrainte.** Ne jamais effacer une identité reliée à autre chose (compte, dossier patient, invitation…).
 
+### Durée de conservation des sessions (décidée)
+
+Une *session* correspond à une connexion sur un appareil. **Règle décidée le 2026-10-12** : à chaque nouvelle connexion, les sessions terminées (expirées ou révoquées) depuis plus de **30 jours** sont effacées. **Exception** : une session coupée parce qu'un vol de jeton a été détecté (motif `rejeu_detecte`) est gardée **6 mois**, comme trace. À vérifier avec la CIL, avec les autres durées de conservation (section 3).
+
 ---
 
 ## 2. Sécurité, avant la production
 
-### Déconnexion
+### Déconnexion — fermé le 2026-10-14
 
-**Aujourd'hui**, rien côté serveur : l'application efface son jeton, mais un jeton volé reste valable jusqu'à 24 heures. Le compte porte déjà un numéro de version des jetons (`version_jeton`) : l'augmenter rend invalides **tous** les jetons du compte, donc déconnecte **tous** les appareils.
-
-**Trois options :**
-1. une route qui augmente `version_jeton` : « me déconnecter partout » ;
-2. un identifiant par jeton (`jti`) et une liste des jetons révoqués, gardée jusqu'à leur expiration : déconnexion d'un seul appareil ;
-3. des jetons d'accès courts et un jeton de renouvellement révocable. Cette option est liée à la durée du jeton patient, à l'étude.
+Réglé par l'option 3, décidée le 2026-10-12 : jetons d'accès de 15 minutes, jeton de renouvellement qui change à chaque usage et révocable, une session par appareil vérifiée à chaque demande. Déconnexion d'un appareil (`POST /api/sessions/deconnexion`) ou de tous (`POST /api/sessions/deconnexion-partout`) : voir `docs/api.md`, section 1.7. Reste ouvert : le **stockage du jeton de renouvellement dans un navigateur** (applications web), à décider à part.
 
 ### Empreinte du code reçu par SMS
 
@@ -113,6 +112,18 @@ Les seuils sont fixés par les **professionnels concernés de chaque structure**
 - une **trace non modifiable** de chaque changement : qui, quand, ancienne et nouvelle valeur ;
 - chaque résultat **garde le seuil utilisé au moment de la mesure** : un changement de seuil ne réécrit jamais un résultat passé ;
 - un seuil fixé par une **source officielle** (par exemple 140 mmHg pour la tension, dans le carnet de santé mère-enfant) peut être rendu **plus strict** par une structure, **jamais plus souple**.
+
+### Obtenir le NIP d'un patient qui ne peut pas ouvrir son application
+
+Un soignant a besoin du NIP pour ouvrir le dossier. Le patient peut être trop malade, avoir un téléphone verrouillé, déchargé ou perdu, ou ne pas avoir de smartphone.
+
+**Pistes :**
+- le QR code du NIP affichable **sans déverrouiller l'application** ;
+- une **carte NIP** physique ;
+- le NIP **noté dans le carnet de santé** ;
+- une **recherche par identité** à l'accueil (nom, prénom, date et lieu de naissance).
+
+**Questions liées :** qui peut ouvrir un dossier avec un NIP ; faut-il un **accès d'urgence tracé** (« bris de glace ») quand le patient ne peut pas consentir. À décider avec le module du dossier médical.
 
 ### Structures et rôles
 

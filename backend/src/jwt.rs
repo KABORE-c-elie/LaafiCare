@@ -64,14 +64,16 @@ impl SorteJeton {
         }
     }
 
-    /// Durées décidées par le porteur (J2) : 24 h pour un jeton complet,
-    /// 5 min pour saisir le code TOTP, 10 min pour réenrôler un TOTP.
+    /// Durées décidées par le porteur : 15 min pour un jeton d'accès complet
+    /// (option B du 2026-10-12, renouvelé par le jeton de renouvellement de
+    /// la session, `session.rs`) ; 5 min pour saisir le code TOTP et 10 min
+    /// pour réenrôler un TOTP (J2).
     fn duree_secs(self) -> u64 {
         match self {
             SorteJeton::Patient
             | SorteJeton::ProfessionnelSansAffectation
             | SorteJeton::ProfessionnelEnExercice
-            | SorteJeton::Administrateur => 24 * 3600,
+            | SorteJeton::Administrateur => DUREE_JETON_ACCES_SECS,
             SorteJeton::SecondFacteurPatient
             | SorteJeton::SecondFacteurProfessionnel
             | SorteJeton::SecondFacteurAdministrateur => 5 * 60,
@@ -82,7 +84,24 @@ impl SorteJeton {
     fn porte_une_affectation(self) -> bool {
         self == SorteJeton::ProfessionnelEnExercice
     }
+
+    /// Les quatre sortes complètes appartiennent à une session (`sid`,
+    /// vérifiée à chaque requête) ; les jetons intermédiaires et de
+    /// réenrôlement n'en ont pas (décision W1).
+    fn porte_une_session(self) -> bool {
+        matches!(
+            self,
+            SorteJeton::Patient
+                | SorteJeton::ProfessionnelSansAffectation
+                | SorteJeton::ProfessionnelEnExercice
+                | SorteJeton::Administrateur
+        )
+    }
 }
+
+/// Durée d'un jeton d'accès complet, en secondes (champ `expire_dans` des
+/// réponses de connexion et de renouvellement).
+pub const DUREE_JETON_ACCES_SECS: u64 = 15 * 60;
 
 /// Contenu du jeton. Les applications ne le lisent pas : elles le gardent et
 /// le renvoient tel quel (docs/api.md).
@@ -99,16 +118,19 @@ pub struct Claims {
     /// Affectation active, seulement pour `ProfessionnelEnExercice`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aff: Option<Uuid>,
+    /// Session (`session.id`), seulement pour les quatre sortes complètes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sid: Option<Uuid>,
     pub iat: u64,
     pub exp: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum ErreurJeton {
-    /// Affectation fournie pour une sorte qui n'en porte pas, ou absente
-    /// pour `ProfessionnelEnExercice`.
-    #[error("affectation incohérente avec la sorte de jeton")]
-    AffectationIncoherente,
+    /// Affectation ou session fournie pour une sorte qui n'en porte pas, ou
+    /// absente pour une sorte qui en exige une (décision W2).
+    #[error("contenu incohérent avec la sorte de jeton")]
+    ContenuIncoherent,
     #[error(transparent)]
     Jwt(#[from] jsonwebtoken::errors::Error),
 }
@@ -137,9 +159,10 @@ impl JwtService {
         compte_id: Uuid,
         version_jeton: i32,
         affectation: Option<Uuid>,
+        session: Option<Uuid>,
     ) -> Result<String, ErreurJeton> {
-        if sorte.porte_une_affectation() != affectation.is_some() {
-            return Err(ErreurJeton::AffectationIncoherente);
+        if !contenu_coherent(sorte, affectation, session) {
+            return Err(ErreurJeton::ContenuIncoherent);
         }
         let maintenant = jsonwebtoken::get_current_timestamp();
         let claims = Claims {
@@ -147,6 +170,7 @@ impl JwtService {
             aud: sorte.audience().to_string(),
             ver: version_jeton,
             aff: affectation,
+            sid: session,
             iat: maintenant,
             exp: maintenant + sorte.duree_secs(),
         };
@@ -154,14 +178,20 @@ impl JwtService {
     }
 
     /// N'accepte que la sorte attendue. Signature, expiration et audience
-    /// sont vérifiées par la crate ; la présence de `aff` ici.
+    /// sont vérifiées par la crate ; la présence de `aff` et de `sid` ici.
     pub fn verifier(&self, jeton: &str, sorte: SorteJeton) -> Result<Claims, ErreurJeton> {
         let claims = decode::<Claims>(jeton, &self.decoding_key, &validation(sorte))?.claims;
-        if sorte.porte_une_affectation() != claims.aff.is_some() {
-            return Err(ErreurJeton::AffectationIncoherente);
+        if !contenu_coherent(sorte, claims.aff, claims.sid) {
+            return Err(ErreurJeton::ContenuIncoherent);
         }
         Ok(claims)
     }
+}
+
+/// `aff` présent seulement pour `ProfessionnelEnExercice`, `sid` présent
+/// seulement pour les quatre sortes complètes.
+fn contenu_coherent(sorte: SorteJeton, affectation: Option<Uuid>, session: Option<Uuid>) -> bool {
+    sorte.porte_une_affectation() == affectation.is_some() && sorte.porte_une_session() == session.is_some()
 }
 
 fn validation(sorte: SorteJeton) -> Validation {
@@ -196,6 +226,14 @@ mod tests {
         sorte.porte_une_affectation().then(|| Uuid::from_u128(7))
     }
 
+    fn session_pour(sorte: SorteJeton) -> Option<Uuid> {
+        sorte.porte_une_session().then(|| Uuid::from_u128(9))
+    }
+
+    fn emettre(service: &JwtService, sorte: SorteJeton, compte: Uuid) -> String {
+        service.emettre(sorte, compte, 0, affectation_pour(sorte), session_pour(sorte)).unwrap()
+    }
+
     /// Jeton signé avec la bonne clé mais au contenu choisi par le test.
     fn signer(service: &JwtService, contenu: serde_json::Value) -> String {
         encode(&Header::new(Algorithm::HS256), &contenu, &service.encoding_key).unwrap()
@@ -206,11 +244,12 @@ mod tests {
         let service = service();
         let compte = Uuid::from_u128(1);
         for sorte in SorteJeton::TOUTES {
-            let jeton = service.emettre(sorte, compte, 3, affectation_pour(sorte)).unwrap();
+            let jeton = service.emettre(sorte, compte, 3, affectation_pour(sorte), session_pour(sorte)).unwrap();
             let claims = service.verifier(&jeton, sorte).unwrap();
             assert_eq!(claims.sub, compte);
             assert_eq!(claims.ver, 3);
             assert_eq!(claims.aff, affectation_pour(sorte));
+            assert_eq!(claims.sid, session_pour(sorte));
             assert_eq!(claims.aud, sorte.audience());
             assert_eq!(claims.exp - claims.iat, sorte.duree_secs(), "{sorte:?}");
         }
@@ -218,7 +257,15 @@ mod tests {
 
     #[test]
     fn durees_decidees() {
-        assert_eq!(SorteJeton::Patient.duree_secs(), 24 * 3600);
+        for sorte in [
+            SorteJeton::Patient,
+            SorteJeton::ProfessionnelSansAffectation,
+            SorteJeton::ProfessionnelEnExercice,
+            SorteJeton::Administrateur,
+        ] {
+            assert_eq!(sorte.duree_secs(), 15 * 60, "{sorte:?}");
+        }
+        assert_eq!(DUREE_JETON_ACCES_SECS, 15 * 60);
         assert_eq!(SorteJeton::SecondFacteurAdministrateur.duree_secs(), 5 * 60);
         assert_eq!(SorteJeton::ReenrolementAdministrateur.duree_secs(), 10 * 60);
     }
@@ -227,7 +274,7 @@ mod tests {
     fn une_sorte_n_est_jamais_acceptee_a_la_place_d_une_autre() {
         let service = service();
         for emise in SorteJeton::TOUTES {
-            let jeton = service.emettre(emise, Uuid::from_u128(1), 0, affectation_pour(emise)).unwrap();
+            let jeton = emettre(&service, emise, Uuid::from_u128(1));
             for attendue in SorteJeton::TOUTES {
                 if attendue != emise {
                     assert!(service.verifier(&jeton, attendue).is_err(), "{emise:?} accepté comme {attendue:?}");
@@ -278,7 +325,7 @@ mod tests {
             &service,
             json!({
                 "sub": Uuid::from_u128(1), "aud": SorteJeton::Patient.audience(),
-                "ver": 0, "iat": maintenant - 60, "exp": maintenant - 1
+                "ver": 0, "sid": Uuid::from_u128(9), "iat": maintenant - 60, "exp": maintenant - 1
             }),
         );
         assert!(service.verifier(&jeton, SorteJeton::Patient).is_err());
@@ -288,13 +335,14 @@ mod tests {
     fn affectation_obligatoire_en_exercice_et_interdite_ailleurs() {
         let service = service();
         let compte = Uuid::from_u128(1);
+        let sid = Some(Uuid::from_u128(9));
         assert!(matches!(
-            service.emettre(SorteJeton::ProfessionnelEnExercice, compte, 0, None),
-            Err(ErreurJeton::AffectationIncoherente)
+            service.emettre(SorteJeton::ProfessionnelEnExercice, compte, 0, None, sid),
+            Err(ErreurJeton::ContenuIncoherent)
         ));
         assert!(matches!(
-            service.emettre(SorteJeton::Patient, compte, 0, Some(Uuid::from_u128(7))),
-            Err(ErreurJeton::AffectationIncoherente)
+            service.emettre(SorteJeton::Patient, compte, 0, Some(Uuid::from_u128(7)), sid),
+            Err(ErreurJeton::ContenuIncoherent)
         ));
 
         // Jetons fabriqués à la main, bien signés : la vérification refuse
@@ -304,7 +352,7 @@ mod tests {
             &service,
             json!({
                 "sub": compte, "aud": SorteJeton::ProfessionnelEnExercice.audience(),
-                "ver": 0, "iat": maintenant, "exp": maintenant + 60
+                "ver": 0, "sid": sid, "iat": maintenant, "exp": maintenant + 60
             }),
         );
         assert!(service.verifier(&sans_aff, SorteJeton::ProfessionnelEnExercice).is_err());
@@ -312,17 +360,42 @@ mod tests {
             &service,
             json!({
                 "sub": compte, "aud": SorteJeton::ProfessionnelSansAffectation.audience(),
-                "ver": 0, "aff": Uuid::from_u128(7), "iat": maintenant, "exp": maintenant + 60
+                "ver": 0, "aff": Uuid::from_u128(7), "sid": sid, "iat": maintenant, "exp": maintenant + 60
             }),
         );
         assert!(service.verifier(&avec_aff, SorteJeton::ProfessionnelSansAffectation).is_err());
+    }
+
+    /// Décision W1 : les sortes complètes exigent `sid`, les autres le
+    /// refusent, à l'émission comme à la vérification.
+    #[test]
+    fn session_obligatoire_pour_les_jetons_complets_et_interdite_ailleurs() {
+        let service = service();
+        let compte = Uuid::from_u128(1);
+        let maintenant = jsonwebtoken::get_current_timestamp();
+        for sorte in SorteJeton::TOUTES {
+            let aff = affectation_pour(sorte);
+            let mauvaise_session = if sorte.porte_une_session() { None } else { Some(Uuid::from_u128(9)) };
+            assert!(
+                matches!(service.emettre(sorte, compte, 0, aff, mauvaise_session), Err(ErreurJeton::ContenuIncoherent)),
+                "{sorte:?}"
+            );
+            let jeton = signer(
+                &service,
+                json!({
+                    "sub": compte, "aud": sorte.audience(), "ver": 0, "aff": aff, "sid": mauvaise_session,
+                    "iat": maintenant, "exp": maintenant + 60
+                }),
+            );
+            assert!(service.verifier(&jeton, sorte).is_err(), "{sorte:?}");
+        }
     }
 
     #[test]
     fn refuse_un_jeton_signe_avec_un_autre_secret() {
         let a = JwtService::new(&"a".repeat(32));
         let b = JwtService::new(&"b".repeat(32));
-        let jeton = a.emettre(SorteJeton::Patient, Uuid::from_u128(1), 0, None).unwrap();
+        let jeton = emettre(&a, SorteJeton::Patient, Uuid::from_u128(1));
         assert!(b.verifier(&jeton, SorteJeton::Patient).is_err());
     }
 

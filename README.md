@@ -6,7 +6,7 @@ LaafiCare relie, autour d'un **identifiant unique du patient** (le NIP), les per
 
 Projet porté par **Calliste Elie KABORE**, ingénieur en électronique et informatique industrielle, qui en assure seul la conception et le développement.
 
-> Ce document s'adresse aussi à des personnes qui n'ont jamais programmé. Chaque terme technique est expliqué à sa première apparition, et repris dans le [glossaire](docs/glossaire.md).
+> Ce document s'adresse aussi à des personnes qui n'ont jamais programmé. Chaque terme technique est expliqué à sa première apparition.
 
 ---
 
@@ -17,10 +17,11 @@ Projet porté par **Calliste Elie KABORE**, ingénieur en électronique et infor
 3. [Comment c'est construit](#3-comment-cest-construit)
 4. [La sécurité en cinq minutes](#4-la-sécurité-en-cinq-minutes)
 5. [État d'avancement](#5-état-davancement)
-6. [Installer, lancer et tester](#6-installer-lancer-et-tester)
-7. [Pour aller plus loin](#7-pour-aller-plus-loin)
-8. [Sources](#8-sources)
-9. [Auteur](#9-auteur)
+6. [Organisation du dépôt](#6-organisation-du-dépôt)
+7. [Installer, lancer et tester](#7-installer-lancer-et-tester)
+8. [Pour aller plus loin](#8-pour-aller-plus-loin)
+9. [Sources](#9-sources)
+10. [Auteur](#10-auteur)
 
 ---
 
@@ -82,7 +83,7 @@ Les applications ne parlent jamais directement à la base de données : elles pa
 | Base de données | **PostgreSQL** 18 | Base relationnelle robuste : elle garantit elle-même de nombreuses règles (une valeur unique, une date obligatoire…), en plus du code. |
 | Applications web | **Angular** | Cadre de développement web adapté aux applications de gestion utilisées toute la journée. |
 | Application mobile | **Flutter** | Une seule base de code pour Android et iOS, et un fonctionnement possible hors connexion. |
-| Connexion | **JWT** | Après connexion, l'application reçoit un *jeton* signé par le serveur, qu'elle présente à chaque demande. |
+| Connexion | **JWT** | Après connexion, l'application reçoit deux *jetons* : un **jeton d'accès** signé par le serveur, valable 15 minutes, qu'elle présente à chaque demande, et un **jeton de renouvellement**, qui en obtient un nouveau sans redemander le mot de passe. |
 | SMS et paiement | API Orange BF, Telecel ; Orange Money, Moov Money | Les canaux que les patients interrogés utilisent tous déjà. |
 
 **Les migrations.** La structure de la base (ses tables et leurs règles) est décrite dans des fichiers numérotés, les *migrations* ([`backend/migrations/`](backend/migrations/)). Le serveur applique à son démarrage celles qui ne l'ont pas encore été, dans l'ordre. Une migration déjà appliquée ne doit plus jamais changer : SQLx garde son empreinte, et le serveur refuserait de démarrer.
@@ -99,7 +100,11 @@ Chaque choix ci-dessous suit une source reconnue, citée dans le code et détail
 
 **Le verrouillage** : après 5 essais faux, le compte est bloqué 15 minutes. Chaque essai est compté *avant* d'être vérifié, pour que des essais lancés tous en même temps ne puissent pas dépasser la limite. Fichier : [`verrouillage.rs`](backend/src/verrouillage.rs).
 
-**Le code reçu par SMS (OTP)** : un code à 6 chiffres, valable 5 minutes et utilisable une seule fois. Il ne sert qu'au patient, pour vérifier que le numéro lui appartient à l'inscription, et pour retrouver l'accès en cas de mot de passe oublié. Fichier : [`otp.rs`](backend/src/otp.rs).
+**Le code reçu par SMS (OTP)** : un code à 6 chiffres, valable 5 minutes et utilisable une seule fois. Il ne sert qu'au patient, pour vérifier que le numéro lui appartient à l'inscription, et pour retrouver l'accès en cas de mot de passe oublié. Il est limité, pour qu'on ne puisse ni le deviner ni faire envoyer des SMS sans fin : 60 secondes au moins entre deux codes, 5 codes par heure pour un même numéro, et 5 essais par code (puis un seul essai par nouveau code, tant qu'aucun code juste n'a été saisi). Au-delà, le serveur répond « trop de demandes » et indique combien de secondes attendre. Fichier : [`otp.rs`](backend/src/otp.rs).
+
+**Les jetons de connexion** : chaque sorte de jeton (patient, professionnel, administrateur, étape intermédiaire du second facteur…) n'ouvre que les routes qui lui sont destinées. Après une réinitialisation du mot de passe, tous les jetons émis avant elle sont refusés : un voleur de jeton perd l'accès dès que la personne change son mot de passe. Fichiers : [`jwt.rs`](backend/src/jwt.rs), [`extracteur_jwt.rs`](backend/src/extracteur_jwt.rs).
+
+**Les sessions** : chaque connexion ouvre une *session*, une par appareil. Le jeton d'accès ne vit que 15 minutes ; le jeton de renouvellement en obtient un nouveau, et **change à chaque usage**. Si un ancien jeton de renouvellement, déjà remplacé, est présenté à nouveau (par exemple après un vol), le serveur ferme la session. Le patient reste connecté jusqu'à 30 jours sans retaper son mot de passe ; il peut se déconnecter d'un appareil, ou de tous à la fois. Le serveur ne garde qu'une empreinte du jeton de renouvellement, jamais le jeton lui-même. Sources : RFC 9700 (bonnes pratiques de sécurité OAuth 2.0), NIST SP 800-63B. Fichier : [`session.rs`](backend/src/session.rs).
 
 **Le second facteur (TOTP)** : un code à 6 chiffres qui change toutes les 30 secondes, affiché par une application comme Google Authenticator, en plus du mot de passe. Il est facultatif pour les patients et les professionnels, et obligatoire pour l'équipe LaafiCare. Le secret partagé avec l'application est enregistré **chiffré**, un code n'est accepté qu'une fois, et 10 codes de secours, à usage unique, permettent de se connecter sans le téléphone. Fichier : [`totp.rs`](backend/src/totp.rs).
 
@@ -109,6 +114,16 @@ Chaque choix ci-dessous suit une source reconnue, citée dans le code et détail
 
 **Les règles médicales non négociables** (à venir avec les modules médicaux) : les allergies s'affichent toujours en premier et en rouge ; un résultat d'analyse n'est visible qu'après double validation ; les résultats sensibles ne sont jamais envoyés automatiquement.
 
+**Les couleurs ont un sens, dans toutes les applications**, quel que soit leur thème :
+
+| Couleur | Réservée à |
+|---|---|
+| Rouge | les alertes de santé (danger) : allergie, tension trop élevée, signe de danger |
+| Orange | les valeurs de santé à surveiller (vigilance) |
+| Couleur neutre du thème | les erreurs de saisie (mot de passe incorrect, numéro invalide, code expiré…), toujours avec une icône et un texte |
+
+La couleur ne porte jamais seule une information : chaque alerte a aussi un texte ou une icône, pour les personnes qui distinguent mal les couleurs (norme d'accessibilité WCAG 2.2, critère 1.4.1).
+
 ## 5. État d'avancement
 
 Le projet a commencé par une phase de cadrage : un cahier des charges et des diagrammes (cas d'utilisation, modèle de données, séquences), établis à partir des entretiens. Le développement démarre maintenant, en commençant par le serveur et par un périmètre volontairement réduit : la mutuelle MUNASEB.
@@ -116,26 +131,68 @@ Le projet a commencé par une phase de cadrage : un cahier des charges et des di
 | Partie | État |
 |---|---|
 | Cahier des charges | rédigé ; mise à jour en cours (nouvelle architecture, nouveaux rôles) |
-| Diagrammes | réalisés ; diagramme de classes et modèle relationnel à régénérer |
-| Maquettes | deux premiers écrans mobiles |
-| **Serveur : patients** | inscription par SMS, connexion, mot de passe oublié, verrouillage, NIP |
-| **Serveur : MUNASEB** | contrats et périodes d'adhésion, demandes de remboursement de bout en bout (création, prise en charge, validation, rejet, paiement), notifications, historique ; **routes des agents hors service** jusqu'aux étapes 3.6 et 3.9 (elles reposent encore sur l'ancien compte agent, supprimé lors du passage aux comptes séparés) |
-| **Serveur : comptes et établissements** | structure de la base en place (comptes séparés, établissements, pièces justificatives, affectations, invitations) |
-| **Serveur : second facteur** | fait : chiffrement du secret, activation, codes, codes de secours |
-| Serveur : connexion professionnelle | **prochaine étape** (étape 3.6) |
-| Applications Angular et Flutter | pas encore commencées |
+| Diagrammes | cas d'utilisation, diagramme de classes et modèle relationnel à jour ([`docs/diagrammes/`](docs/diagrammes/)) ; les diagrammes de séquence ne sont pas encore dans le dépôt |
+| Maquettes | chaque application a son propre thème, défini dans son dossier |
+| **Serveur : patients** | **fonctionne** : inscription par SMS, connexion, mot de passe oublié, verrouillage, NIP, limites du code SMS, profil du patient connecté (`GET /api/patients/moi`), sessions (jeton de 15 min, renouvellement, déconnexion d'un appareil ou de tous) |
+| **Serveur : MUNASEB** | contrats et périodes d'adhésion, demandes de remboursement de bout en bout (création, prise en charge, validation, rejet, paiement), notifications, historique ; **routes des agents hors service** : elles reposent encore sur l'ancien compte agent, supprimé lors du passage aux comptes séparés (l'ancienne route de connexion agent est supprimée). Elles seront rebranchées à l'étape 3.9, mais **on ne pourra les tester qu'après les étapes 3.7, 3.8 et 3.10 réduites à la MUNASEB** (création et validation de la structure MUNASEB, invitation d'un agent), qui permettent de créer un agent. |
+| **Serveur : backoffice** | base prête, routes à venir (voir ci-dessous) |
+| Serveur : connexion professionnelle | **en cours** (étape 3.6) : la forme des jetons est faite, la connexion elle-même reste à écrire |
+| Applications Angular et Flutter | en cours, chacune dans sa branche (voir « Organisation du dépôt ») |
+
+**Le backoffice** est la partie qui gère les comptes et les établissements : création d'un établissement par son responsable, validation par l'équipe LaafiCare (licence), invitation des employés, administrateurs.
+- **Ce qui existe déjà** : les tables dans la base (comptes séparés, établissements, pièces justificatives, décisions de l'équipe, affectations, invitations, profil administrateur) avec leurs règles, et la **double authentification** (second facteur TOTP : chiffrement du secret, activation, vérification des codes, codes de secours).
+- **Ce qui n'est pas encore utilisable** : aucune route du backoffice n'existe avant les étapes 3.6 à 3.10 (connexion professionnelle et administrateur, établissements, décisions, choix de l'affectation, invitations). On ne peut donc encore ni créer un établissement, ni inviter un agent, ni se connecter comme professionnel.
+- **Les détails** : les tables et leurs règles dans [`docs/modele-donnees.md`](docs/modele-donnees.md), la double authentification dans [`docs/securite.md`](docs/securite.md), les routes prévues dans [`docs/api.md`](docs/api.md) (section 4).
 
 Les modules médicaux (dossier, ordonnances, pharmacie, laboratoire, suivi de grossesse) viendront ensuite. La liste détaillée des décisions encore ouvertes est dans [`docs/points-ouverts.md`](docs/points-ouverts.md).
 
-## 6. Installer, lancer et tester
+## 6. Organisation du dépôt
 
-Ces étapes concernent le serveur, seule partie écrite pour l'instant. Les commandes se tapent dans un terminal (PowerShell sous Windows).
+Le code est conservé avec **Git**, un outil qui garde l'historique de chaque modification. Le dépôt a quatre *branches* (des versions parallèles du projet) :
+
+| Branche | Contenu |
+|---|---|
+| `main` | la version en production. **Vide jusqu'à la première mise en production** : elle ne contient qu'un commit d'initialisation. |
+| `dev` | le développement : le serveur (`backend/`), la documentation (`docs/`) et les fichiers de la racine. Les branches `web` et `mobile` y sont fusionnées par le porteur. |
+| `web` | les applications web Angular, dans `web/`. |
+| `mobile` | l'application mobile Flutter, dans `mobile/`. |
+
+Pour travailler sur les trois à la fois, le porteur utilise trois *dossiers de travail* reliés au même dépôt (commande `git worktree`), chacun ouvert sur sa branche :
+
+| Dossier | Branche | Ce qu'on y modifie |
+|---|---|---|
+| `LaafiCare` | `dev` | `backend/`, `docs/`, `README.md`, `CLAUDE.md` |
+| `LaafiCare-web` | `web` | `web/` |
+| `LaafiCare-mobile` | `mobile` | `mobile/` |
+
+Contenu du dossier `LaafiCare` :
+
+| Chemin | Contenu |
+|---|---|
+| `backend/` | le serveur Rust : code (`src/`), migrations de la base (`migrations/`), tests (`tests/`), configuration (`docker-compose.yml`, `.env.example`) |
+| `docs/` | la documentation : routes (`api.md`), sécurité, modèle de données, points ouverts, diagrammes, cahier des charges |
+| `CLAUDE.md` | le journal détaillé de toutes les décisions |
+
+## 7. Installer, lancer et tester
+
+Ces étapes concernent le serveur. Les commandes se tapent dans un terminal (PowerShell sous Windows). **Toutes les commandes `docker compose` et `cargo` se lancent depuis le dossier `backend/`**, où se trouve le fichier `docker-compose.yml`.
 
 ### Ce qu'il faut installer
 
+- **Git**, pour récupérer le code.
 - **Rust**, version 1.88 au moins, avec `rustup` (site officiel : rustup.rs). Vérification : `rustc --version`.
 - **Docker Desktop**, qui fait tourner PostgreSQL sur votre machine sans l'installer directement.
-- **Git**, pour récupérer le code.
+- **Postman** (facultatif), pour envoyer des demandes au serveur à la main.
+
+### Récupérer le code
+
+Le dépôt est **privé** : il faut avoir reçu un accès du porteur.
+
+```
+git clone https://github.com/KABORE-c-elie/LaafiCare.git
+cd LaafiCare
+git checkout dev
+```
 
 ### Préparer la configuration
 
@@ -144,7 +201,7 @@ Ces étapes concernent le serveur, seule partie écrite pour l'instant. Les comm
    cd backend
    copy .env.example .env
    ```
-2. Ouvrir `backend/.env` et remplacer chaque `A_GENERER`. Le fichier explique comment générer chaque secret. Tant qu'un `A_GENERER` reste, le serveur refuse de démarrer : c'est voulu.
+2. Ouvrir `backend/.env` et remplacer chaque `A_GENERER`. Le fichier explique comment générer chaque secret. Tant qu'un `A_GENERER` reste dans `DATABASE_URL`, `JWT_SECRET` ou `TOTP_CLE_CHIFFREMENT`, le serveur refuse de démarrer : c'est voulu. **Attention** : `POSTGRES_PASSWORD` est lu par Docker, pas par le serveur ; Docker accepterait `A_GENERER` comme mot de passe sans rien dire. Choisissez-le vous-même, et reprenez la même valeur dans `DATABASE_URL`.
 
 | Variable | Rôle | Exemple **fictif** |
 |---|---|---|
@@ -158,12 +215,38 @@ Le fichier `.env` contient des secrets : il n'est jamais envoyé dans Git.
 
 ### Lancer
 
-```
-docker compose up -d     # démarre PostgreSQL en arrière-plan
-cargo run                # compile et lance le serveur
-```
+1. **Démarrer Docker Desktop** (l'application, depuis le menu Démarrer) et attendre qu'il indique qu'il tourne. Sans lui, rien ne marche.
+2. Depuis `backend/` :
+   ```
+   docker compose up -d     # démarre PostgreSQL en arrière-plan
+   docker compose ps        # vérifie : la base doit apparaître « running »
+   cargo run                # compile et lance le serveur
+   ```
 
-Au démarrage, le serveur applique les migrations manquantes. Pour vérifier qu'il répond, ouvrir `http://127.0.0.1:8080/health` dans un navigateur (avec le port choisi).
+**La première compilation prend plusieurs minutes** : Rust fabrique d'abord toutes les bibliothèques utilisées. Les suivantes sont bien plus rapides. Ce n'est pas un blocage.
+
+Au démarrage, le serveur applique les migrations manquantes. Pour vérifier qu'il répond, ouvrir `http://127.0.0.1:8080/health` dans un navigateur (avec le port choisi) : la page affiche `"status":"ok"`.
+
+Le serveur s'arrête avec `Ctrl+C` dans le terminal où il tourne. PostgreSQL s'arrête avec `docker compose down` ; les données sont gardées pour la prochaine fois.
+
+> ⚠️ **`docker compose down -v` efface toute la base de développement**, comptes de test compris : identités, comptes patients, contrats, demandes, tout. Rien ne peut être récupéré. À n'utiliser que pour repartir volontairement d'une base vide.
+
+### Un premier essai dans Postman
+
+En développement, **aucun SMS n'est envoyé** : le code apparaît dans le terminal où tourne le serveur, sur une ligne contenant `SMS (dev, non envoyé réellement)` et `Votre code LaafiCare : …`. Utilisez un numéro **fictif**.
+
+| Étape | Demande | Corps (JSON) | Réponse attendue |
+|---|---|---|---|
+| 1. Demander un code | `POST http://127.0.0.1:8080/api/patients/otp` | `{"telephone": "70 00 00 00"}` | 204, et le code dans le terminal du serveur |
+| 2. S'inscrire | `POST http://127.0.0.1:8080/api/patients/inscription` | téléphone, code reçu, nom, prénom, date et lieu de naissance, mot de passe (voir `docs/api.md`, 2.2.2) | 201, avec `jeton_acces` et `jeton_renouvellement` |
+| 3. Se connecter | `POST http://127.0.0.1:8080/api/patients/connexion` | `{"telephone": "70 00 00 00", "mot_de_passe": "…"}` | 200, avec `jeton_acces` et `jeton_renouvellement` |
+| 4. Lire son profil | `GET http://127.0.0.1:8080/api/patients/moi`, avec l'en-tête `Authorization: Bearer <jeton_acces>` | aucun | 200 et le profil (NIP, nom, prénom…) |
+| 5. Renouveler | `POST http://127.0.0.1:8080/api/sessions/renouveler` | `{"jeton_renouvellement": "…"}` | 200 et une **nouvelle** paire ; l'ancien jeton de renouvellement ne sert plus |
+| 6. Se déconnecter | `POST http://127.0.0.1:8080/api/sessions/deconnexion` | `{"jeton_renouvellement": "…"}` (le dernier reçu) | 204 ; refaire l'étape 4 avec le même `jeton_acces` : 401 |
+
+Le jeton d'accès expire après 15 minutes : au-delà, l'étape 4 répond 401, et l'étape 5 en donne un nouveau.
+
+Toutes les routes, leurs réponses et leurs erreurs sont décrites dans [`docs/api.md`](docs/api.md).
 
 **Tester l'application mobile sur un téléphone Android branché en USB** : le serveur reste sur `127.0.0.1`, il n'est jamais ouvert au réseau local. L'outil `adb` (fourni avec Android Studio) relaie le port du téléphone vers celui de l'ordinateur :
 
@@ -189,27 +272,39 @@ Les tests qui utilisent la base créent chacun une base temporaire, supprimée e
 
 **Échecs attendus pour l'instant** : deux tests échouent, `auth_professionnel` (ancienne connexion professionnelle, réécrite à l'étape 3.6) et `extracteur_jwt` (ancien contrôle de l'agent MUNASEB, réécrit à l'étape 3.9). Tout autre échec est un vrai problème.
 
-## 7. Pour aller plus loin
+### En cas de problème
+
+| Ce qu'on voit | Cause | Que faire |
+|---|---|---|
+| Les tests en base échouent tous avec `PoolTimedOut` | PostgreSQL ne répond pas : Docker Desktop n'est pas démarré | démarrer Docker Desktop, puis `docker compose up -d` et `docker compose ps` |
+| Le serveur s'arrête aussitôt avec « configuration invalide » | il reste un `A_GENERER` dans `backend/.env`, ou une valeur mal formée (secret trop court, clé qui n'est pas en hexadécimal) | compléter `.env` (voir « Préparer la configuration ») |
+| Le serveur s'arrête car la base est injoignable | Docker n'est pas démarré, ou le mot de passe de `DATABASE_URL` n'est pas celui de `POSTGRES_PASSWORD` | démarrer Docker ; mettre le même mot de passe dans les deux variables |
+| Réponse 429 `trop_de_demandes` | trop de codes demandés, ou trop d'essais de code | attendre le nombre de secondes indiqué par l'en-tête `Retry-After`, ou demander un nouveau code |
+| Réponse 401 `jeton_invalide` sur une route ordinaire | jeton d'accès expiré (15 min), d'une autre sorte, émis avant un changement de mot de passe, ou session fermée | renouveler (`POST /api/sessions/renouveler`) ; si le renouvellement répond aussi 401, se reconnecter |
+
+## 8. Pour aller plus loin
 
 - [`docs/securite.md`](docs/securite.md) : chaque choix de sécurité, sa source et son fichier.
 - [`docs/modele-donnees.md`](docs/modele-donnees.md) : les tables et leurs règles.
 - [`docs/api.md`](docs/api.md) : les routes du serveur, avec des exemples ; c'est le contrat sur lequel s'appuient les applications web et mobile.
-- [`docs/points-ouverts.md`](docs/points-ouverts.md) : les décisions encore à prendre.
-- [`docs/glossaire.md`](docs/glossaire.md) : les termes techniques et médicaux.
+- [`docs/points-ouverts.md`](docs/points-ouverts.md) : les décisions encore à prendre, du plus urgent au moins urgent.
 - [`CLAUDE.md`](CLAUDE.md) : le journal détaillé de toutes les décisions du projet.
 
-## 8. Sources
+## 9. Sources
 
 - **NIST SP 800-63B, révision 4** (août 2025) : mots de passe, OTP, second facteur, limitation des essais.
-- **OWASP** : *Password Storage Cheat Sheet* (Argon2id et ses paramètres), *File Upload Cheat Sheet* (pièces justificatives).
+- **OWASP** : *Password Storage Cheat Sheet* (Argon2id et ses paramètres), *File Upload Cheat Sheet* (pièces justificatives), *Multifactor Authentication Cheat Sheet* (limites d'envoi des codes), *Forgot Password Cheat Sheet* (réinitialisation par email, à venir).
 - **RFC 4226** (HOTP) et **RFC 6238** (TOTP) : codes à usage unique et second facteur.
 - **RFC 7518** §3.2 : taille minimale du secret de signature des jetons.
+- **RFC 8725** §3.12 : sortes de jetons séparées. **RFC 6750** §3.1 : refus d'un jeton invalide ou révoqué. **RFC 6585** §4 : réponse 429 et en-tête `Retry-After`.
+- **WCAG 2.2** (W3C, 12 décembre 2024), critère 1.4.1 : la couleur ne porte jamais seule une information.
+- **Loi n° 001-2021/AN du 30 mars 2021** portant protection des personnes à l'égard du traitement des données à caractère personnel (Burkina Faso) : formalités auprès de la CIL, hébergement des données de santé (voir `docs/points-ouverts.md`).
 - **UIT**, plan national de numérotage du Burkina Faso (communication de l'ARCEP du 4 mai 2023) : format des numéros de téléphone.
 - **Documentation PostgreSQL 18** et **documentation Git** (gitattributes, gitignore).
 - Documentation officielle des bibliothèques Rust utilisées : `axum`, `sqlx`, `argon2`, `jsonwebtoken`, `totp-rs`, `aes-gcm`, `unicode-normalization`, `rand`.
 - **Carnet de santé mère-enfant** du Ministère de la Santé du Burkina Faso : calendrier des CPN, seuils d'alerte.
 - **Mémoire sur la plateforme MUNASEB** : circuit d'un remboursement d'assurance.
 
-## 9. Auteur
+## 10. Auteur
 
 **Calliste Elie KABORE**, porteur du projet, maîtrise d'ouvrage et maîtrise d'œuvre.
