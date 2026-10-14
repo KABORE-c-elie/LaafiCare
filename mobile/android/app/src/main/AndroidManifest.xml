@@ -15,9 +15,13 @@
       les fichiers de règles couvrent les fabricants qui l'ignorent pour le
       transfert d'appareil à appareil (Android 12+).
       https://developer.android.com/identity/data/autobackup
+
+      Nom affiché sous l'icône : doc Flutter (Review the app manifest), « Edit
+      the android:label […] to reflect the final name of the app ».
+      https://docs.flutter.dev/deployment/android
     -->
     <application
-        android:label="patient"
+        android:label="LaafiCare"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"

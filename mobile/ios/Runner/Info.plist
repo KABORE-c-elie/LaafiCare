@@ -6,8 +6,16 @@
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<!--
+	  Nom affiché sous l'icône. La doc Flutter (déploiement iOS) ne cite que le
+	  champ Xcode « Display Name — The display name of your app », sans nommer
+	  la clé ; la page d'Apple sur CFBundleDisplayName n'a pas pu être lue.
+	  Cette clé portait déjà le nom « Patient » dans le projet créé par
+	  flutter create, ce qui montre que c'est elle qui porte le nom affiché.
+	  https://docs.flutter.dev/deployment/ios
+	-->
 	<key>CFBundleDisplayName</key>
-	<string>Patient</string>
+	<string>LaafiCare</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>

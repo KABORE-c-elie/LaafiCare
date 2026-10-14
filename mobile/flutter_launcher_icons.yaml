@@ -1,0 +1,24 @@
+# Icônes de l'application, générées par : dart run flutter_launcher_icons
+# Repris du pack laaficare-branding (frontend-mobile/flutter_launcher_icons.yaml),
+# avec les chemins corrigés vers le dossier source et min_sdk_android aligné
+# sur le projet (24). Options décrites dans le README du paquet :
+# https://pub.dev/packages/flutter_launcher_icons
+#
+# Après chaque génération, annuler la modification de
+# ios/Runner.xcodeproj/project.pbxproj :
+#   git restore mobile/ios/Runner.xcodeproj/project.pbxproj
+# Défaut de l'outil (lib/ios.dart, version 0.14.4) : il remplace la valeur de
+# toute ligne qui contient « ASSETCATALOG » par le nom de l'icône, y compris
+# ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS (YES devient
+# AppIcon, valeur invalide). ASSETCATALOG_COMPILER_APPICON_NAME vaut déjà
+# AppIcon : rien n'est à changer dans ce fichier.
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "laaficare-branding/frontend-mobile/assets/branding/icon.png"
+  min_sdk_android: 24
+  # README : « Removes alpha channel for IOS icons » (icon.png n'en a déjà pas).
+  remove_alpha_ios: true
+  adaptive_icon_background: "#0A6650"
+  adaptive_icon_foreground: "laaficare-branding/frontend-mobile/assets/branding/icon_foreground.png"
+  adaptive_icon_monochrome: "laaficare-branding/frontend-mobile/assets/branding/icon_monochrome.png"
