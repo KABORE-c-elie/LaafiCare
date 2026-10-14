@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Aucune donnée de LaafiCare n'est sauvegardée ni transférée : jetons et clés
+  sont chiffrés par le Keystore, qui ne quitte jamais l'appareil ; restaurés
+  ailleurs, ils seraient illisibles (README de flutter_secure_storage :
+  « Failed to unwrap key »).
+  Section <device-transfer> écrite explicitement : sans elle, ce mode est
+  « fully enabled », et sur certains fabricants allowBackup="false" ne
+  désactive pas le transfert d'appareil à appareil.
+  Syntaxe : https://developer.android.com/identity/data/autobackup
+  (« XML config syntax », Android 12 or higher) ; « You can reference the
+  current directory using ./ ».
+  <cross-platform-transfer> non écrit : il exige le bundleId et le teamId de
+  l'application iOS, pas encore créée. À ajouter avec elle.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" path="./" />
+        <exclude domain="file" path="./" />
+        <exclude domain="database" path="./" />
+        <exclude domain="sharedpref" path="./" />
+        <exclude domain="external" path="./" />
+        <exclude domain="device_root" path="./" />
+        <exclude domain="device_file" path="./" />
+        <exclude domain="device_database" path="./" />
+        <exclude domain="device_sharedpref" path="./" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" path="./" />
+        <exclude domain="file" path="./" />
+        <exclude domain="database" path="./" />
+        <exclude domain="sharedpref" path="./" />
+        <exclude domain="external" path="./" />
+        <exclude domain="device_root" path="./" />
+        <exclude domain="device_file" path="./" />
+        <exclude domain="device_database" path="./" />
+        <exclude domain="device_sharedpref" path="./" />
+    </device-transfer>
+</data-extraction-rules>
