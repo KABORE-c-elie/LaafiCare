@@ -27,7 +27,7 @@ Les décisions déjà prises sont dans `CLAUDE.md` (sections 12 et 14), qui rest
 
 ### Durée de conservation des sessions (décidée)
 
-Une *session* correspond à une connexion sur un appareil. **Règle décidée le 2026-10-12** : à chaque nouvelle connexion, les sessions terminées (expirées ou révoquées) depuis plus de **30 jours** sont effacées. **Exception** : une session coupée parce qu'un vol de jeton a été détecté (motif `rejeu_detecte`) est gardée **6 mois**, comme trace. À vérifier avec la CIL, avec les autres durées de conservation (section 3).
+Une *session* correspond à une connexion sur un appareil. **Règle décidée le 2026-10-12** : à chaque nouvelle connexion, les sessions terminées (expirées ou révoquées) depuis plus de **30 jours** sont effacées. **Exception** : une session coupée parce qu'un vol de jeton est soupçonné (motif `rejeu_detecte`) est gardée **6 mois**, comme trace ; ce n'est pas à elle seule une preuve de vol (voir « Fausses alertes de rejeu », section 2). À vérifier avec la CIL, avec les autres durées de conservation (section 3).
 
 ---
 
@@ -36,6 +36,14 @@ Une *session* correspond à une connexion sur un appareil. **Règle décidée le
 ### Déconnexion — fermé le 2026-10-14
 
 Réglé par l'option 3, décidée le 2026-10-12 : jetons d'accès de 15 minutes, jeton de renouvellement qui change à chaque usage et révocable, une session par appareil vérifiée à chaque demande. Déconnexion d'un appareil (`POST /api/sessions/deconnexion`) ou de tous (`POST /api/sessions/deconnexion-partout`) : voir `docs/api.md`, section 1.7. Reste ouvert : le **stockage du jeton de renouvellement dans un navigateur** (applications web), à décider à part.
+
+### Fausses alertes de rejeu sur un réseau instable
+
+**Signalé par l'équipe mobile le 2026-10-14.** Si deux demandes de renouvellement perdent leur réponse (réseau instable), une troisième tentative peut arriver plus de 30 secondes après le premier usage du jeton. Le serveur la traite alors comme un **rejeu** et ferme la session (motif `rejeu_detecte`), alors qu'il n'y a pas eu de vol. Le patient doit se reconnecter ; l'équipe mobile l'accepte.
+
+**Conséquence** : sur un réseau instable, les sessions révoquées pour `rejeu_detecte` peuvent contenir de **fausses alertes**. Une telle session **n'est donc pas à elle seule une preuve de vol**, y compris dans la trace gardée 6 mois.
+
+**À revoir plus tard**, si ces fausses alertes deviennent fréquentes : **d'abord mesurer leur nombre**, avant de changer la tolérance de 30 secondes (sa durée, ou le nombre de réutilisations permises).
 
 ### Empreinte du code reçu par SMS
 
