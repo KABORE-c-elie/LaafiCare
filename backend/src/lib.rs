@@ -16,6 +16,7 @@ pub mod nip;
 pub mod notification;
 pub mod otp;
 pub mod patient;
+pub mod session;
 pub mod sms;
 pub mod telephone;
 pub mod totp;

@@ -337,6 +337,11 @@ Champ du modèle `Patient` : `lieuNaissance` (obligatoire à l'inscription, avec
 
 **Ordre des verrous (règle permanente, 2026-09-25)** : tout code qui verrouille à la fois une demande de remboursement et sa période d'adhésion (`SELECT … FOR UPDATE`) doit **toujours verrouiller la demande d'abord, puis la période**. Sinon, deux transactions qui prennent ces verrous dans l'ordre inverse peuvent se bloquer mutuellement (interblocage).
 
+**Ordre des verrous des sessions (règles permanentes, décision S2 du 2026-10-14, `session.rs`)** :
+- toute opération qui touche **à la fois un compte et ses sessions** (réinitialisation du mot de passe, déconnexion partout, désactivation d'un compte, `session::fermer_toutes`) verrouille **le compte avant les sessions** ;
+- `session::renouveler` verrouille **le jeton de renouvellement avant la session** (le jeton présenté, puis son successeur, puis la session) ; il lit le compte sans le verrouiller.
+Aucun cycle n'est possible : `renouveler` ne verrouille jamais le compte, et `fermer_toutes` ne verrouille jamais un jeton. Testé par `reinitialisation_et_deconnexion_partout_simultanees` et `renouvellements_simultanes`.
+
 **Exigence pour la production (2026-09-25)** : l'application doit se connecter avec un **rôle PostgreSQL sans droits d'administration** (ni superuser, ni propriétaire des tables). Sinon, le trigger qui rend `historique_statut_demande` non modifiable (migration 0010) peut être désactivé, et l'historique perd sa garantie. En développement, l'utilisateur `laaficare` du docker-compose est superuser : la protection n'y vaut que contre les erreurs, pas contre un administrateur.
 
 **Tests et environnement (2026-09-25)** :
