@@ -272,18 +272,25 @@ Crée le compte patient, attribue le NIP et ouvre la session.
 | 401 | `code_invalide` | code OTP faux, expiré ou déjà utilisé |
 | 429 | `trop_de_demandes` | code faux, et c'était le dernier essai permis : le code est effacé, pas d'en-tête `Retry-After` (voir 2.2.5) |
 | 409 | `telephone_deja_utilise` | un compte existe déjà pour ce numéro |
+| 502, 503 ou 504 | — | réponse d'un intermédiaire réseau (passerelle, proxy, répartiteur), pas du serveur LaafiCare : la demande a **peut-être** été traitée et le compte créé. Ne pas renvoyer l'inscription : voir « Si la réponse se perd ». |
 | 500 | `erreur_interne` | panne |
 
 - Ordre des contrôles : numéro, puis mot de passe, puis code OTP. Un mot de passe refusé **ne consomme pas** le code : la personne corrige et renvoie la même requête.
 - Le 409 n'arrive qu'après un code OTP correct : seul le titulaire du numéro l'apprend.
 
-**Si la réponse se perd** (coupure réseau, délai dépassé) : le compte a peut-être été créé quand même, et le code OTP est peut-être déjà consommé. L'application ne renvoie pas la même inscription. Elle tente une **connexion** (`POST /api/patients/connexion`, section 2.2.3) avec le même téléphone et le même mot de passe :
+**Si la réponse se perd** (coupure réseau, délai dépassé, ou réponse **502, 503 ou 504** d'un intermédiaire réseau) : le compte a peut-être été créé quand même, et le code OTP est peut-être déjà consommé. L'application ne renvoie pas la même inscription. Elle fait une **connexion de contrôle** (`POST /api/patients/connexion`, section 2.2.3) avec le même téléphone et le même mot de passe :
 
-| Réponse de la connexion | Ce que fait l'application |
+| Réponse de la connexion de contrôle | Ce que fait l'application |
 |---|---|
 | 200 | Le compte existe : la session est ouverte avec ce jeton, l'inscription est terminée. |
-| 401 `identifiants_invalides` | Le compte n'a pas été créé. L'application reprend l'inscription : nouvelle demande de code (`POST /api/patients/otp`, qui peut répondre 429 si le dernier code date de moins de 60 s : attendre le délai de `Retry-After`), puis nouvel envoi du formulaire, qu'elle a gardé. |
-| erreur réseau | L'application réessaie la connexion plus tard ; elle ne renvoie pas l'inscription. |
+| 401 `identifiants_invalides` | Le compte n'a pas été créé. L'application relance l'inscription : nouvelle demande de code (`POST /api/patients/otp`, qui peut répondre 429 : attendre le délai de `Retry-After`), puis nouvel envoi du formulaire, qu'elle a gardé. |
+| 502, 503, 504 ou erreur réseau | L'application réessaie la connexion de contrôle, **au plus 3 fois**, espacées (par exemple après 2 s, 5 s, puis 15 s) ; elle ne renvoie pas l'inscription. Après le troisième échec, elle demande au patient de réessayer quand le réseau sera meilleur. **Le formulaire reste gardé.** |
+
+**Si l'inscription relancée répond 409 `telephone_deja_utilise`**, le compte a été créé entre-temps : la première inscription avait abouti. L'application refait une connexion de contrôle, **sans afficher d'erreur au patient**.
+
+**Sortie de boucle.** Si cette connexion de contrôle répond **encore** 401 `identifiants_invalides`, le numéro appartient à un autre compte (ou le mot de passe de ce compte est différent). L'application **arrête le parcours** et affiche le message normal « ce numéro a déjà un compte », avec accès à la connexion et à « Mot de passe oublié ? ».
+
+**Session inutilisée.** Une fois les sessions en service (section 1.7), une inscription dont la réponse s'est perdue a ouvert une session que l'application n'a jamais reçue. Cette session n'est jamais utilisée et expire d'elle-même, au bout de 30 jours sans renouvellement, sans aucune action du patient ni du serveur.
 
 Aucun changement côté serveur : ce parcours n'utilise que les routes existantes.
 
