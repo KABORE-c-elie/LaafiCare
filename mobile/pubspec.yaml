@@ -84,6 +84,13 @@ flutter:
   # doc officielle de traduction citée plus haut).
   generate: true
 
+  # Seuls les fichiers utilisés par l'application, un par un, pour ne pas
+  # l'alourdir (décision du porteur). La source complète est dans
+  # laaficare-branding/, non déclarée.
+  assets:
+    - assets/branding/logo_horizontal.svg
+    - assets/branding/logo_vertical_sur_vert.svg
+
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg

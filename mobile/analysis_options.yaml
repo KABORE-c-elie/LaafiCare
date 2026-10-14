@@ -14,6 +14,9 @@ analyzer:
     - build/**
     - android/**
     - ios/**
+    # Dossier source de l'identité visuelle : son laafi_logo.dart n'est qu'une
+    # référence, pas du code de l'application.
+    - laaficare-branding/**
 
 linter:
   # The lint rules applied to this project can be customized in the
