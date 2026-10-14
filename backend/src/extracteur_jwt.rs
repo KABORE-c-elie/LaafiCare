@@ -77,8 +77,9 @@ impl IntoResponse for RefusAuthentification {
     }
 }
 
-/// Patient authentifié : jeton `laaficare:patient` valide, et compte patient
-/// toujours actif avec la même `version_jeton` qu'à l'émission du jeton.
+/// Patient authentifié : jeton `laaficare:patient` valide, compte patient
+/// toujours actif avec la même `version_jeton` qu'à l'émission du jeton, et
+/// session du `sid` ouverte.
 #[derive(Debug)]
 pub struct PatientAuthentifie {
     /// Identifiant du compte patient (le `sub` du jeton, décision J3).
@@ -108,12 +109,20 @@ impl FromRequestParts<AppState> for PatientAuthentifie {
         // invalid for other reasons »), pas un manque de droits : 401.
         // Le verrouillage n'est pas regardé : il ne porte que sur les essais
         // de connexion (BF-01), pas sur un jeton déjà émis.
+        //
+        // Session (option B, 2026-10-12) : la session du `sid` doit exister,
+        // appartenir à ce compte, et n'être ni révoquée ni expirée. Une
+        // déconnexion ferme donc l'accès aussitôt, sans attendre la fin des
+        // 15 min du jeton. `jwt.rs` garantit déjà la présence du `sid`.
+        let session_id = claims.sid.ok_or(RefusAuthentification::JetonInvalide)?;
         let compte: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM compte \
-             WHERE id = $1 AND type_compte = 'patient' AND statut = 'actif' AND version_jeton = $2",
+            "SELECT c.id FROM compte c JOIN session s ON s.compte_id = c.id \
+             WHERE c.id = $1 AND c.type_compte = 'patient' AND c.statut = 'actif' AND c.version_jeton = $2 \
+               AND s.id = $3 AND s.revoquee_le IS NULL AND s.expire_le > now()",
         )
         .bind(claims.sub)
         .bind(claims.ver)
+        .bind(session_id)
         .fetch_optional(&state.db)
         .await
         .map_err(|e| RefusAuthentification::Interne(e.to_string()))?;
@@ -176,6 +185,7 @@ mod tests {
     use axum::http::header::AUTHORIZATION;
     use jsonwebtoken::{EncodingKey, Header, encode};
     use laaficare_backend::jwt::JwtService;
+    use laaficare_backend::session;
     use laaficare_backend::sms::SmsSenderConsole;
     use sqlx::PgPool;
 
@@ -207,6 +217,19 @@ mod tests {
             .map_err(IntoResponse::into_response)
     }
 
+    /// `sid` attendu par `jwt.rs` : présent pour les quatre sortes
+    /// complètes, absent ailleurs.
+    fn sid_pour(sorte: SorteJeton) -> Option<Uuid> {
+        matches!(
+            sorte,
+            SorteJeton::Patient
+                | SorteJeton::ProfessionnelSansAffectation
+                | SorteJeton::ProfessionnelEnExercice
+                | SorteJeton::Administrateur
+        )
+        .then_some(Uuid::from_u128(9))
+    }
+
     fn www_authenticate(reponse: &Response) -> Option<&str> {
         reponse.headers().get(WWW_AUTHENTICATE).map(|v| v.to_str().unwrap())
     }
@@ -229,7 +252,7 @@ mod tests {
         assert_eq!(www_authenticate(&mal_forme), Some("Bearer"));
 
         let autre_cle = JwtService::new(&"b".repeat(32))
-            .emettre(SorteJeton::ProfessionnelEnExercice, id, 0, affectation)
+            .emettre(SorteJeton::ProfessionnelEnExercice, id, 0, affectation, sid_pour(SorteJeton::ProfessionnelEnExercice))
             .unwrap();
         let refus = extraire(&state, Some(&format!("Bearer {autre_cle}"))).await.unwrap_err();
         assert_eq!(refus.status(), StatusCode::UNAUTHORIZED);
@@ -241,7 +264,8 @@ mod tests {
             &Header::default(),
             &serde_json::json!({
                 "sub": id, "aud": SorteJeton::ProfessionnelEnExercice.audience(), "ver": 0,
-                "aff": affectation, "iat": maintenant - 60, "exp": maintenant - 1
+                "aff": affectation, "sid": sid_pour(SorteJeton::ProfessionnelEnExercice),
+                "iat": maintenant - 60, "exp": maintenant - 1
             }),
             &EncodingKey::from_secret(SECRET.as_bytes()),
         )
@@ -256,7 +280,7 @@ mod tests {
             if sorte == SorteJeton::ProfessionnelEnExercice {
                 continue;
             }
-            let jeton = state.jwt.emettre(sorte, id, 0, None).unwrap();
+            let jeton = state.jwt.emettre(sorte, id, 0, None, sid_pour(sorte)).unwrap();
             let refus = extraire(&state, Some(&format!("Bearer {jeton}"))).await.unwrap_err();
             assert_eq!(refus.status(), StatusCode::UNAUTHORIZED, "{sorte:?}");
             assert_eq!(www_authenticate(&refus), Some(r#"Bearer error="invalid_token""#));
@@ -272,7 +296,7 @@ mod tests {
                 continue;
             }
             let aff = (sorte == SorteJeton::ProfessionnelEnExercice).then_some(Uuid::from_u128(7));
-            let jeton = state.jwt.emettre(sorte, id, 0, aff).unwrap();
+            let jeton = state.jwt.emettre(sorte, id, 0, aff, sid_pour(sorte)).unwrap();
             let refus = extraire_patient(&state, Some(&format!("Bearer {jeton}"))).await.unwrap_err();
             assert_eq!(refus.status(), StatusCode::UNAUTHORIZED, "{sorte:?}");
             assert_eq!(www_authenticate(&refus), Some(r#"Bearer error="invalid_token""#));
@@ -296,7 +320,9 @@ mod tests {
         .fetch_one(&state.db)
         .await
         .unwrap();
-        let en_tete = format!("Bearer {}", state.jwt.emettre(SorteJeton::Patient, compte_id, 0, None).unwrap());
+        let session_id = session::ouvrir(&state.db, compte_id, None).await.unwrap().session_id;
+        let jeton = |version: i32| state.jwt.emettre(SorteJeton::Patient, compte_id, version, None, Some(session_id));
+        let en_tete = format!("Bearer {}", jeton(0).unwrap());
         let modifier = |sql: &'static str| {
             let db = state.db.clone();
             async move { sqlx::query(sql).bind(compte_id).execute(&db).await.unwrap() }
@@ -317,11 +343,69 @@ mod tests {
         assert_eq!(www_authenticate(&refus), Some(r#"Bearer error="invalid_token""#));
 
         // Un jeton émis avec la nouvelle version passe ; compte désactivé : refusé.
-        let nouveau = format!("Bearer {}", state.jwt.emettre(SorteJeton::Patient, compte_id, 1, None).unwrap());
+        let nouveau = format!("Bearer {}", jeton(1).unwrap());
         assert!(extraire_patient(&state, Some(&nouveau)).await.is_ok());
         modifier("UPDATE compte SET statut = 'desactive' WHERE id = $1").await;
         let refus = extraire_patient(&state, Some(&nouveau)).await.unwrap_err();
         assert_eq!(refus.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// Un jeton d'accès encore valide (moins de 15 min) dont la session a
+    /// été fermée est refusé aussitôt ; de même pour une session inconnue
+    /// ou expirée, ou une session d'un autre compte.
+    #[sqlx::test]
+    #[ignore]
+    async fn patient_session_fermee_refusee(pool: PgPool) {
+        let state = etat(pool);
+        let mut comptes = Vec::new();
+        for telephone in ["+22670021002", "+22670021003"] {
+            let utilisateur_id: Uuid = sqlx::query_scalar("INSERT INTO utilisateur (telephone) VALUES ($1) RETURNING id")
+                .bind(telephone)
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+            let compte_id: Uuid = sqlx::query_scalar(
+                "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'patient', 'x') RETURNING id",
+            )
+            .bind(utilisateur_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+            comptes.push(compte_id);
+        }
+        let (compte_id, autre_compte) = (comptes[0], comptes[1]);
+        let en_tete = |session: Uuid| {
+            format!(
+                "Bearer {}",
+                state.jwt.emettre(SorteJeton::Patient, compte_id, 0, None, Some(session)).unwrap()
+            )
+        };
+        let refuse = |reponse: Result<PatientAuthentifie, Response>| {
+            reponse.is_err_and(|r| r.status() == StatusCode::UNAUTHORIZED)
+        };
+
+        // Session ouverte : accepté ; fermée par déconnexion : refusé.
+        let ouverte = session::ouvrir(&state.db, compte_id, None).await.unwrap();
+        let acces = en_tete(ouverte.session_id);
+        assert_eq!(extraire_patient(&state, Some(&acces)).await.unwrap().compte_id, compte_id);
+        session::fermer(&state.db, ouverte.jeton_renouvellement.en_clair()).await.unwrap();
+        assert!(refuse(extraire_patient(&state, Some(&acces)).await), "session fermée");
+
+        // Session inconnue.
+        assert!(refuse(extraire_patient(&state, Some(&en_tete(Uuid::from_u128(5)))).await), "session inconnue");
+
+        // Session expirée.
+        let expiree = session::ouvrir(&state.db, compte_id, None).await.unwrap();
+        sqlx::query("UPDATE session SET creee_le = now() - interval '2 hours', expire_le = now() - interval '1 hour' WHERE id = $1")
+            .bind(expiree.session_id)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        assert!(refuse(extraire_patient(&state, Some(&en_tete(expiree.session_id))).await), "session expirée");
+
+        // Session d'un autre compte.
+        let autre = session::ouvrir(&state.db, autre_compte, None).await.unwrap();
+        assert!(refuse(extraire_patient(&state, Some(&en_tete(autre.session_id))).await), "session d'un autre compte");
     }
 
     // Base temporaire par test, jamais la base de développement : voir
@@ -348,7 +432,7 @@ mod tests {
         // à l'étape 3.9, avec les affectations.
         let jeton = state
             .jwt
-            .emettre(SorteJeton::ProfessionnelEnExercice, utilisateur_id, 0, Some(Uuid::from_u128(7)))
+            .emettre(SorteJeton::ProfessionnelEnExercice, utilisateur_id, 0, Some(Uuid::from_u128(7)), Some(Uuid::from_u128(9)))
             .unwrap();
         let en_tete = format!("Bearer {jeton}");
 

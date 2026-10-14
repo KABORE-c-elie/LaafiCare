@@ -3,10 +3,9 @@
 //! de renouvellement à chaque usage, détection du rejeu, expiration après
 //! inactivité) ; NIST SP 800-63B rév. 4 §2.1.3 et §2.2.3 (durées).
 //!
-//! Ce module gère les sessions et les jetons de renouvellement ; il n'émet
-//! pas le jeton d'accès. Celui-ci (avec le `sid` de la session) est émis par
-//! l'appelant, à partir de `SessionActive` : le passage des jetons d'accès à
-//! 15 min ne doit arriver qu'avec les routes de session (décision S5).
+//! `ouvrir` et `renouveler` renvoient une `SessionActive` ; `en_paire` en
+//! fait la paire remise au client (jeton d'accès de 15 min avec le `sid` de
+//! la session, et jeton de renouvellement), décision W4.
 //!
 //! **Ordre des verrous (règles permanentes, décision S2)** :
 //! - `renouveler` verrouille **le jeton avant la session** (le jeton
@@ -25,6 +24,8 @@ use sha2::{Digest, Sha256};
 use sqlx::types::Uuid;
 use sqlx::{PgConnection, PgPool};
 use zeroize::{Zeroize, Zeroizing};
+
+use crate::jwt::{DUREE_JETON_ACCES_SECS, JwtService, SorteJeton};
 
 /// Tolérance pour une réponse perdue (décision du 2026-10-12, sur le modèle
 /// de la « Rotation Overlap Period » d'Auth0 ; la RFC 9700 n'en prévoit
@@ -136,6 +137,49 @@ pub struct SessionActive {
     pub affectation_id: Option<Uuid>,
     pub type_compte: TypeCompte,
     pub version_jeton: i32,
+    pub jeton_renouvellement: JetonRenouvellement,
+}
+
+impl SessionActive {
+    /// Sorte du jeton d'accès de cette session (décision J1).
+    pub fn sorte_du_jeton(&self) -> SorteJeton {
+        match (self.type_compte, self.affectation_id) {
+            (TypeCompte::Patient, _) => SorteJeton::Patient,
+            (TypeCompte::Professionnel, Some(_)) => SorteJeton::ProfessionnelEnExercice,
+            (TypeCompte::Professionnel, None) => SorteJeton::ProfessionnelSansAffectation,
+            (TypeCompte::Administrateur, _) => SorteJeton::Administrateur,
+        }
+    }
+
+    /// Paire remise au client (décision W4) : jeton d'accès de 15 min avec
+    /// le `sid` de la session, et le jeton de renouvellement. `jwt.rs` ne
+    /// connaît pas les sessions : l'assemblage se fait ici.
+    pub fn en_paire(self, jwt: &JwtService) -> Result<PaireJetons, ErreurSession> {
+        let jeton_acces = jwt
+            .emettre(
+                self.sorte_du_jeton(),
+                self.compte_id,
+                self.version_jeton,
+                self.affectation_id,
+                Some(self.session_id),
+            )
+            .map_err(|e| ErreurSession::Interne(e.to_string()))?;
+        Ok(PaireJetons {
+            jeton_acces,
+            expire_dans: DUREE_JETON_ACCES_SECS,
+            jeton_renouvellement: self.jeton_renouvellement,
+        })
+    }
+}
+
+/// Ce que reçoit le client après une connexion, une inscription ou un
+/// renouvellement. Volontairement sans `Debug` ni `Serialize` : les deux
+/// jetons sont des secrets ; la route construit sa réponse JSON elle-même,
+/// avec `en_clair()`, au dernier moment.
+pub struct PaireJetons {
+    pub jeton_acces: String,
+    /// Durée de vie du jeton d'accès, en secondes.
+    pub expire_dans: u64,
     pub jeton_renouvellement: JetonRenouvellement,
 }
 
@@ -468,6 +512,33 @@ mod tests {
         assert!(decoder("abc").is_none());
         assert!(decoder(&"g".repeat(64)).is_none());
         assert!(decoder(&"é".repeat(32)).is_none());
+    }
+
+    #[test]
+    fn paire_selon_le_type_de_compte() {
+        let jwt = JwtService::new(&"a".repeat(32));
+        for (type_compte, affectation, sorte) in [
+            (TypeCompte::Patient, None, SorteJeton::Patient),
+            (TypeCompte::Professionnel, None, SorteJeton::ProfessionnelSansAffectation),
+            (TypeCompte::Professionnel, Some(Uuid::from_u128(7)), SorteJeton::ProfessionnelEnExercice),
+            (TypeCompte::Administrateur, None, SorteJeton::Administrateur),
+        ] {
+            let session = SessionActive {
+                session_id: Uuid::from_u128(1),
+                compte_id: Uuid::from_u128(2),
+                affectation_id: affectation,
+                type_compte,
+                version_jeton: 4,
+                jeton_renouvellement: nouveau_jeton().1,
+            };
+            let paire = session.en_paire(&jwt).unwrap();
+            assert_eq!(paire.expire_dans, 15 * 60);
+            let claims = jwt.verifier(&paire.jeton_acces, sorte).unwrap();
+            assert_eq!(
+                (claims.sub, claims.sid, claims.aff, claims.ver),
+                (Uuid::from_u128(2), Some(Uuid::from_u128(1)), affectation, 4)
+            );
+        }
     }
 
     #[test]

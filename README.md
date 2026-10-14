@@ -83,7 +83,7 @@ Les applications ne parlent jamais directement à la base de données : elles pa
 | Base de données | **PostgreSQL** 18 | Base relationnelle robuste : elle garantit elle-même de nombreuses règles (une valeur unique, une date obligatoire…), en plus du code. |
 | Applications web | **Angular** | Cadre de développement web adapté aux applications de gestion utilisées toute la journée. |
 | Application mobile | **Flutter** | Une seule base de code pour Android et iOS, et un fonctionnement possible hors connexion. |
-| Connexion | **JWT** | Après connexion, l'application reçoit un *jeton* signé par le serveur, qu'elle présente à chaque demande. |
+| Connexion | **JWT** | Après connexion, l'application reçoit deux *jetons* : un **jeton d'accès** signé par le serveur, valable 15 minutes, qu'elle présente à chaque demande, et un **jeton de renouvellement**, qui en obtient un nouveau sans redemander le mot de passe. |
 | SMS et paiement | API Orange BF, Telecel ; Orange Money, Moov Money | Les canaux que les patients interrogés utilisent tous déjà. |
 
 **Les migrations.** La structure de la base (ses tables et leurs règles) est décrite dans des fichiers numérotés, les *migrations* ([`backend/migrations/`](backend/migrations/)). Le serveur applique à son démarrage celles qui ne l'ont pas encore été, dans l'ordre. Une migration déjà appliquée ne doit plus jamais changer : SQLx garde son empreinte, et le serveur refuserait de démarrer.
@@ -103,6 +103,8 @@ Chaque choix ci-dessous suit une source reconnue, citée dans le code et détail
 **Le code reçu par SMS (OTP)** : un code à 6 chiffres, valable 5 minutes et utilisable une seule fois. Il ne sert qu'au patient, pour vérifier que le numéro lui appartient à l'inscription, et pour retrouver l'accès en cas de mot de passe oublié. Il est limité, pour qu'on ne puisse ni le deviner ni faire envoyer des SMS sans fin : 60 secondes au moins entre deux codes, 5 codes par heure pour un même numéro, et 5 essais par code (puis un seul essai par nouveau code, tant qu'aucun code juste n'a été saisi). Au-delà, le serveur répond « trop de demandes » et indique combien de secondes attendre. Fichier : [`otp.rs`](backend/src/otp.rs).
 
 **Les jetons de connexion** : chaque sorte de jeton (patient, professionnel, administrateur, étape intermédiaire du second facteur…) n'ouvre que les routes qui lui sont destinées. Après une réinitialisation du mot de passe, tous les jetons émis avant elle sont refusés : un voleur de jeton perd l'accès dès que la personne change son mot de passe. Fichiers : [`jwt.rs`](backend/src/jwt.rs), [`extracteur_jwt.rs`](backend/src/extracteur_jwt.rs).
+
+**Les sessions** : chaque connexion ouvre une *session*, une par appareil. Le jeton d'accès ne vit que 15 minutes ; le jeton de renouvellement en obtient un nouveau, et **change à chaque usage**. Si un ancien jeton de renouvellement, déjà remplacé, est présenté à nouveau (par exemple après un vol), le serveur ferme la session. Le patient reste connecté jusqu'à 30 jours sans retaper son mot de passe ; il peut se déconnecter d'un appareil, ou de tous à la fois. Le serveur ne garde qu'une empreinte du jeton de renouvellement, jamais le jeton lui-même. Sources : RFC 9700 (bonnes pratiques de sécurité OAuth 2.0), NIST SP 800-63B. Fichier : [`session.rs`](backend/src/session.rs).
 
 **Le second facteur (TOTP)** : un code à 6 chiffres qui change toutes les 30 secondes, affiché par une application comme Google Authenticator, en plus du mot de passe. Il est facultatif pour les patients et les professionnels, et obligatoire pour l'équipe LaafiCare. Le secret partagé avec l'application est enregistré **chiffré**, un code n'est accepté qu'une fois, et 10 codes de secours, à usage unique, permettent de se connecter sans le téléphone. Fichier : [`totp.rs`](backend/src/totp.rs).
 
@@ -131,7 +133,7 @@ Le projet a commencé par une phase de cadrage : un cahier des charges et des di
 | Cahier des charges | rédigé ; mise à jour en cours (nouvelle architecture, nouveaux rôles) |
 | Diagrammes | cas d'utilisation, diagramme de classes et modèle relationnel à jour ([`docs/diagrammes/`](docs/diagrammes/)) ; les diagrammes de séquence ne sont pas encore dans le dépôt |
 | Maquettes | chaque application a son propre thème, défini dans son dossier |
-| **Serveur : patients** | **fonctionne** : inscription par SMS, connexion, mot de passe oublié, verrouillage, NIP, limites du code SMS, profil du patient connecté (`GET /api/patients/moi`) |
+| **Serveur : patients** | **fonctionne** : inscription par SMS, connexion, mot de passe oublié, verrouillage, NIP, limites du code SMS, profil du patient connecté (`GET /api/patients/moi`), sessions (jeton de 15 min, renouvellement, déconnexion d'un appareil ou de tous) |
 | **Serveur : MUNASEB** | contrats et périodes d'adhésion, demandes de remboursement de bout en bout (création, prise en charge, validation, rejet, paiement), notifications, historique ; **routes des agents hors service** : elles reposent encore sur l'ancien compte agent, supprimé lors du passage aux comptes séparés (l'ancienne route de connexion agent est supprimée). Elles seront rebranchées à l'étape 3.9, mais **on ne pourra les tester qu'après les étapes 3.7, 3.8 et 3.10 réduites à la MUNASEB** (création et validation de la structure MUNASEB, invitation d'un agent), qui permettent de créer un agent. |
 | **Serveur : backoffice** | base prête, routes à venir (voir ci-dessous) |
 | Serveur : connexion professionnelle | **en cours** (étape 3.6) : la forme des jetons est faite, la connexion elle-même reste à écrire |
@@ -236,9 +238,13 @@ En développement, **aucun SMS n'est envoyé** : le code apparaît dans le termi
 | Étape | Demande | Corps (JSON) | Réponse attendue |
 |---|---|---|---|
 | 1. Demander un code | `POST http://127.0.0.1:8080/api/patients/otp` | `{"telephone": "70 00 00 00"}` | 204, et le code dans le terminal du serveur |
-| 2. S'inscrire | `POST http://127.0.0.1:8080/api/patients/inscription` | téléphone, code reçu, nom, prénom, date et lieu de naissance, mot de passe (voir `docs/api.md`, 2.2.2) | 201 et un `jeton` |
-| 3. Se connecter | `POST http://127.0.0.1:8080/api/patients/connexion` | `{"telephone": "70 00 00 00", "mot_de_passe": "…"}` | 200 et un `jeton` |
-| 4. Lire son profil | `GET http://127.0.0.1:8080/api/patients/moi`, avec l'en-tête `Authorization: Bearer <jeton>` | aucun | 200 et le profil (NIP, nom, prénom…) |
+| 2. S'inscrire | `POST http://127.0.0.1:8080/api/patients/inscription` | téléphone, code reçu, nom, prénom, date et lieu de naissance, mot de passe (voir `docs/api.md`, 2.2.2) | 201, avec `jeton_acces` et `jeton_renouvellement` |
+| 3. Se connecter | `POST http://127.0.0.1:8080/api/patients/connexion` | `{"telephone": "70 00 00 00", "mot_de_passe": "…"}` | 200, avec `jeton_acces` et `jeton_renouvellement` |
+| 4. Lire son profil | `GET http://127.0.0.1:8080/api/patients/moi`, avec l'en-tête `Authorization: Bearer <jeton_acces>` | aucun | 200 et le profil (NIP, nom, prénom…) |
+| 5. Renouveler | `POST http://127.0.0.1:8080/api/sessions/renouveler` | `{"jeton_renouvellement": "…"}` | 200 et une **nouvelle** paire ; l'ancien jeton de renouvellement ne sert plus |
+| 6. Se déconnecter | `POST http://127.0.0.1:8080/api/sessions/deconnexion` | `{"jeton_renouvellement": "…"}` (le dernier reçu) | 204 ; refaire l'étape 4 avec le même `jeton_acces` : 401 |
+
+Le jeton d'accès expire après 15 minutes : au-delà, l'étape 4 répond 401, et l'étape 5 en donne un nouveau.
 
 Toutes les routes, leurs réponses et leurs erreurs sont décrites dans [`docs/api.md`](docs/api.md).
 
@@ -274,7 +280,7 @@ Les tests qui utilisent la base créent chacun une base temporaire, supprimée e
 | Le serveur s'arrête aussitôt avec « configuration invalide » | il reste un `A_GENERER` dans `backend/.env`, ou une valeur mal formée (secret trop court, clé qui n'est pas en hexadécimal) | compléter `.env` (voir « Préparer la configuration ») |
 | Le serveur s'arrête car la base est injoignable | Docker n'est pas démarré, ou le mot de passe de `DATABASE_URL` n'est pas celui de `POSTGRES_PASSWORD` | démarrer Docker ; mettre le même mot de passe dans les deux variables |
 | Réponse 429 `trop_de_demandes` | trop de codes demandés, ou trop d'essais de code | attendre le nombre de secondes indiqué par l'en-tête `Retry-After`, ou demander un nouveau code |
-| Réponse 401 `jeton_invalide` | jeton expiré (24 h), d'une autre sorte, ou émis avant un changement de mot de passe | se reconnecter |
+| Réponse 401 `jeton_invalide` sur une route ordinaire | jeton d'accès expiré (15 min), d'une autre sorte, émis avant un changement de mot de passe, ou session fermée | renouveler (`POST /api/sessions/renouveler`) ; si le renouvellement répond aussi 401, se reconnecter |
 
 ## 8. Pour aller plus loin
 

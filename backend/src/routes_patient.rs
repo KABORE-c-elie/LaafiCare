@@ -6,11 +6,12 @@ use axum::http::{HeaderValue, StatusCode, header::RETRY_AFTER};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, extract::State};
 use chrono::NaiveDate;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::AppState;
 use crate::erreur_api::{ErreurApi, JsonApi, ReponseErreur, reponse_erreur, reponse_erreur_interne};
 use crate::extracteur_jwt::PatientAuthentifie;
+use crate::routes_session::reponse_paire;
 use laaficare_backend::auth_patient::{self, ErreurAuthPatient};
 use laaficare_backend::patient::{self, ErreurProfil, ProfilPatient};
 
@@ -105,18 +106,15 @@ pub struct InscriptionRequete {
     pub mot_de_passe: String,
 }
 
-#[derive(Serialize)]
-pub struct InscriptionReponse {
-    pub jeton: String,
-}
-
 /// `POST /api/patients/inscription` -- flux de création de compte
-/// (section 11) : un seul appel, atomique côté service.
+/// (section 11) : un seul appel, atomique côté service. Réponse 201 avec
+/// la paire de jetons (option B, `docs/api.md` section 1.7) et
+/// `"etape": "complete"`, même forme que la connexion.
 pub async fn creer_compte(
     State(state): State<AppState>,
     JsonApi(corps): JsonApi<InscriptionRequete>,
-) -> Result<(StatusCode, Json<InscriptionReponse>), Response> {
-    let jeton = auth_patient::creer_compte(
+) -> Result<Response, Response> {
+    let paire = auth_patient::creer_compte(
         &state.db,
         &state.jwt,
         &corps.telephone,
@@ -130,7 +128,7 @@ pub async fn creer_compte(
     .await
     .map_err(reponse_erreur_patient)?;
 
-    Ok((StatusCode::CREATED, Json(InscriptionReponse { jeton })))
+    Ok(reponse_paire(StatusCode::CREATED, &paire, Some("complete")))
 }
 
 #[derive(Deserialize)]
@@ -164,21 +162,19 @@ pub struct ConnexionRequete {
     pub mot_de_passe: String,
 }
 
-#[derive(Serialize)]
-pub struct ConnexionReponse {
-    pub jeton: String,
-}
-
 /// `POST /api/patients/connexion` -- téléphone + mot de passe, verrouillage
 /// BF-01. Tout échec : 401 `identifiants_invalides` (décisions P1, L1).
+/// Succès : 200 avec `"etape": "complete"` et la paire de jetons (J4,
+/// option B). L'étape `second_facteur` viendra avec l'activation du TOTP
+/// patient (J10).
 pub async fn se_connecter(
     State(state): State<AppState>,
     JsonApi(corps): JsonApi<ConnexionRequete>,
-) -> Result<Json<ConnexionReponse>, Response> {
-    let jeton = auth_patient::se_connecter(&state.db, &state.jwt, &corps.telephone, &corps.mot_de_passe)
+) -> Result<Response, Response> {
+    let paire = auth_patient::se_connecter(&state.db, &state.jwt, &corps.telephone, &corps.mot_de_passe)
         .await
         .map_err(reponse_erreur_patient)?;
-    Ok(Json(ConnexionReponse { jeton }))
+    Ok(reponse_paire(StatusCode::OK, &paire, Some("complete")))
 }
 
 /// `GET /api/patients/moi` -- profil du patient connecté (jeton
@@ -260,7 +256,8 @@ mod tests {
             &state.db, &state.jwt, "70 02 20 01", &code, "OUEDRAOGO", "Awa", naissance, "Koudougou", "Exemple#2026",
         )
         .await
-        .unwrap();
+        .unwrap()
+        .jeton_acces;
 
         let mut parts = Request::builder()
             .header(AUTHORIZATION, format!("Bearer {jeton}"))

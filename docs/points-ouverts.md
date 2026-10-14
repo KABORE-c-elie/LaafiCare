@@ -33,14 +33,9 @@ Une *session* correspond à une connexion sur un appareil. **Règle décidée le
 
 ## 2. Sécurité, avant la production
 
-### Déconnexion
+### Déconnexion — fermé le 2026-10-14
 
-**Aujourd'hui**, rien côté serveur : l'application efface son jeton, mais un jeton volé reste valable jusqu'à 24 heures. Le compte porte déjà un numéro de version des jetons (`version_jeton`) : l'augmenter rend invalides **tous** les jetons du compte, donc déconnecte **tous** les appareils.
-
-**Trois options :**
-1. une route qui augmente `version_jeton` : « me déconnecter partout » ;
-2. un identifiant par jeton (`jti`) et une liste des jetons révoqués, gardée jusqu'à leur expiration : déconnexion d'un seul appareil ;
-3. des jetons d'accès courts et un jeton de renouvellement révocable. Cette option est liée à la durée du jeton patient, à l'étude.
+Réglé par l'option 3, décidée le 2026-10-12 : jetons d'accès de 15 minutes, jeton de renouvellement qui change à chaque usage et révocable, une session par appareil vérifiée à chaque demande. Déconnexion d'un appareil (`POST /api/sessions/deconnexion`) ou de tous (`POST /api/sessions/deconnexion-partout`) : voir `docs/api.md`, section 1.7. Reste ouvert : le **stockage du jeton de renouvellement dans un navigateur** (applications web), à décider à part.
 
 ### Empreinte du code reçu par SMS
 

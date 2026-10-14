@@ -111,12 +111,26 @@ Fichier : [`otp.rs`](../backend/src/otp.rs). Sources : NIST SP 800-63B rév. 4, 
 
 ## 6. Les jetons de connexion (JWT)
 
-Après une connexion réussie, l'application reçoit un **jeton** (*JWT*) signé par le serveur. Elle le présente à chaque demande, pour ne pas renvoyer le mot de passe à chaque fois. La signature empêche de fabriquer ou de modifier un jeton sans connaître le secret du serveur.
+Après une connexion réussie, l'application reçoit un **jeton d'accès** (*JWT*) signé par le serveur. Elle le présente à chaque demande, pour ne pas renvoyer le mot de passe à chaque fois. La signature empêche de fabriquer ou de modifier un jeton sans connaître le secret du serveur.
 
 Le secret de signature fait au moins 32 caractères (256 bits) : c'est le minimum de la RFC 7518 §3.2 pour l'algorithme HS256. Le serveur refuse de démarrer avec un secret plus court.
-Fichiers : [`jwt.rs`](../backend/src/jwt.rs), [`config.rs`](../backend/src/config.rs).
 
-Prévu à l'étape suivante : chaque compte aura un numéro de version de jeton, augmenté à chaque changement sensible (mot de passe réinitialisé, bascule entre comptes). Les anciens jetons seront alors refusés immédiatement.
+**Huit sortes de jetons**, une par usage (patient, professionnel, administrateur, étape intermédiaire du second facteur…) : chaque route n'en accepte qu'une, pour qu'un jeton ne serve jamais à la place d'un autre (RFC 8725 §3.12).
+
+**Révocation** : chaque compte a un numéro de version de jeton, augmenté à chaque réinitialisation du mot de passe ; les jetons émis avant sont refusés aussitôt.
+Fichiers : [`jwt.rs`](../backend/src/jwt.rs), [`extracteur_jwt.rs`](../backend/src/extracteur_jwt.rs), [`config.rs`](../backend/src/config.rs).
+
+**Sessions et jeton de renouvellement** (sources : RFC 9700, *OAuth 2.0 Security Best Current Practice*, §4.14 ; NIST SP 800-63B rév. 4, §2.1.3 et §2.2.3) :
+
+| Question | Réponse |
+|---|---|
+| Combien de temps vit le jeton d'accès ? | **15 minutes**. Un jeton volé ne sert donc pas longtemps. |
+| Comment rester connecté plus longtemps ? | Avec un **jeton de renouvellement**, qui donne une nouvelle paire de jetons. Patient : jusqu'à 30 jours sans retaper le mot de passe (NIST : 30 jours au plus avec un mot de passe seul) ; professionnel : 12 h ; administrateur : 24 h (NIST : 24 h au plus). |
+| Et si le jeton de renouvellement est volé ? | Il **change à chaque usage**. Si un ancien jeton revient alors que son successeur a déjà servi, c'est qu'il a été copié : la session est fermée (RFC 9700). Une seule tolérance : 30 secondes pour une réponse perdue sur un réseau instable, une fois. |
+| Le serveur garde-t-il les jetons ? | Non : seulement l'**empreinte** SHA-256 du jeton de renouvellement (256 bits aléatoires). Le jeton en clair n'apparaît jamais dans les journaux, et il est effacé de la mémoire après usage. |
+| Se déconnecter ? | Chaque connexion ouvre une **session**, une par appareil, vérifiée à chaque demande. On peut fermer celle d'un appareil, ou toutes à la fois ; une réinitialisation du mot de passe les ferme toutes. |
+
+Fichier : [`session.rs`](../backend/src/session.rs).
 
 ## 7. Comptes séparés
 
@@ -154,15 +168,15 @@ Structure en place : migration 0012. Les routes viendront à une étape ultérie
 
 Les secrets (accès à la base, secret des jetons, clé de chiffrement du second facteur) ne sont **jamais dans le code ni dans Git**. Ils sont lus au démarrage dans des variables d'environnement, en développement depuis un fichier `backend/.env` qui n'est jamais envoyé dans Git.
 
-Le modèle [`backend/.env.example`](../backend/.env.example) a des valeurs volontairement inutilisables (`A_GENERER`) : le serveur refuse de démarrer tant qu'elles ne sont pas remplacées.
+Le modèle [`backend/.env.example`](../backend/.env.example) a des valeurs volontairement inutilisables (`A_GENERER`) : le serveur refuse de démarrer tant que celles de `DATABASE_URL`, `JWT_SECRET` et `TOTP_CLE_CHIFFREMENT` ne sont pas remplacées. `POSTGRES_PASSWORD`, lu par Docker et non par le serveur, n'est pas contrôlé : il faut le choisir soi-même.
 
 La clé de chiffrement du second facteur doit être **sauvegardée à part** en production : la perdre rendrait tous les seconds facteurs inutilisables.
 
 ## 11. Ce qui reste à faire avant la mise en service
 
 - une **liste de mots de passe interdits** (les plus courants ou déjà divulgués), exigée par NIST ;
-- une **limite d'envois de SMS** par numéro : aujourd'hui, rien n'empêche de faire envoyer de nombreux codes à un même numéro ;
-- la vérification du **numéro de version des jetons** ;
+- une **limite du nombre de demandes par adresse IP** sur les connexions et les réinitialisations ;
+- le choix du **stockage du jeton de renouvellement dans un navigateur** (applications web) ;
 - un compte PostgreSQL sans droits d'administration, le chiffrement du disque de la base, un antivirus et un nettoyage des fichiers déposés ;
 - un fournisseur de SMS réel ;
 - la vérification des requêtes SQL dès la compilation.

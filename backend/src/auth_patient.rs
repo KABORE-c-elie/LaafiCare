@@ -18,8 +18,9 @@ use chrono::NaiveDate;
 use sqlx::PgPool;
 use sqlx::types::Uuid;
 
-use crate::jwt::{JwtService, SorteJeton};
+use crate::jwt::JwtService;
 use crate::mot_de_passe::RegleMotDePasse;
+use crate::session::{self, MotifRevocation, PaireJetons};
 use crate::verrouillage::{self, ErreurConnexion, Verification};
 use crate::{mot_de_passe, nip, otp, telephone};
 
@@ -191,7 +192,7 @@ pub async fn creer_compte(
     date_naissance: NaiveDate,
     lieu_naissance: &str,
     mot_de_passe: &str,
-) -> Result<String, ErreurAuthPatient> {
+) -> Result<PaireJetons, ErreurAuthPatient> {
     let telephone = telephone::normaliser(telephone_saisi)?;
     // Contrôlé avant l'OTP : un mot de passe refusé ne consomme pas le code.
     mot_de_passe::controler(mot_de_passe)?;
@@ -225,11 +226,9 @@ pub async fn creer_compte(
         .execute(&mut *tx)
         .await?;
 
-    // `version_jeton` relue plutôt que supposée à 0 : le jeton porte la
-    // valeur réelle de la base (décision C2).
-    let (compte_id, version_jeton): (Uuid, i32) = sqlx::query_as(
+    let compte_id: Uuid = sqlx::query_scalar(
         "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'patient', $2) \
-         RETURNING id, version_jeton",
+         RETURNING id",
     )
     .bind(utilisateur_id)
     .bind(&hash)
@@ -248,7 +247,18 @@ pub async fn creer_compte(
 
     tx.commit().await?;
 
-    jwt.emettre(SorteJeton::Patient, compte_id, version_jeton, None)
+    // Session ouverte après la création du compte (option B) : si elle
+    // échoue, le compte existe quand même, et la connexion de contrôle
+    // décrite dans docs/api.md (2.2.2) ouvrira une session.
+    ouvrir_session(pool, jwt, compte_id).await
+}
+
+/// Ouvre une session patient et renvoie la paire de jetons (`session.rs`),
+/// qui lit elle-même la `version_jeton` réelle du compte (décision C2).
+async fn ouvrir_session(pool: &PgPool, jwt: &JwtService, compte_id: Uuid) -> Result<PaireJetons, ErreurAuthPatient> {
+    session::ouvrir(pool, compte_id, None)
+        .await
+        .and_then(|session| session.en_paire(jwt))
         .map_err(|e| ErreurAuthPatient::Interne(e.to_string()))
 }
 
@@ -278,19 +288,23 @@ pub async fn reinitialiser_mot_de_passe(
 
     // - Verrouillage levé : prouver la possession du téléphone par l'OTP
     //   justifie le déblocage.
-    // - `version_jeton` augmentée (décision C2) : quand le jeton portera
-    //   cette version (étape 3.6), un changement de mot de passe
-    //   déconnectera aussitôt les sessions déjà ouvertes, par exemple celles
-    //   d'un voleur. Jusque-là, l'augmentation est enregistrée mais pas
-    //   encore vérifiée.
+    // - `version_jeton` augmentée (décision C2) et toutes les sessions
+    //   fermées (RFC 9700 §4.14.2 permet de révoquer les jetons de
+    //   renouvellement lors d'un « password change ») : les jetons d'accès
+    //   et de renouvellement d'un voleur sont aussitôt refusés.
+    // Une seule transaction, le compte verrouillé avant les sessions (règle
+    // S2 : l'UPDATE prend le verrou du compte, `fermer_toutes` les sessions).
+    let mut tx = pool.begin().await?;
     sqlx::query(
         "UPDATE compte SET mot_de_passe_hash = $1, tentatives_echouees = 0, verrouille_jusqua = NULL, \
          version_jeton = version_jeton + 1 WHERE id = $2",
     )
     .bind(&hash)
     .bind(compte_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    session::fermer_toutes(&mut tx, compte_id, MotifRevocation::ReinitialisationMotDePasse, false).await?;
+    tx.commit().await?;
 
     Ok(())
 }
@@ -306,19 +320,19 @@ pub async fn se_connecter(
     jwt: &JwtService,
     telephone_saisi: &str,
     mot_de_passe_saisi: &str,
-) -> Result<String, ErreurAuthPatient> {
+) -> Result<PaireJetons, ErreurAuthPatient> {
     // Un format invalide ne correspond à aucun compte possible : le dire
     // ne révèle rien (décision T3), inutile de vérifier un faux hachage.
     let telephone = telephone::normaliser(telephone_saisi)?;
-    let compte: Option<(Uuid, i32)> = sqlx::query_as(
-        "SELECT c.id, c.version_jeton FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
+    let compte: Option<Uuid> = sqlx::query_scalar(
+        "SELECT c.id FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
          WHERE u.telephone = $1 AND c.type_compte = 'patient'",
     )
     .bind(&telephone)
     .fetch_optional(pool)
     .await?;
 
-    let verification = verrouillage::verifier(pool, compte.map(|(compte_id, _)| compte_id), mot_de_passe_saisi)
+    let verification = verrouillage::verifier(pool, compte, mot_de_passe_saisi)
         .await
         .map_err(|erreur| match erreur {
             ErreurConnexion::IdentifiantsInvalides => ErreurAuthPatient::IdentifiantsInvalides,
@@ -335,16 +349,15 @@ pub async fn se_connecter(
 
     // `verifier` n'accepte qu'un compte existant : `compte` est forcément
     // présent ici.
-    let (compte_id, version_jeton) =
-        compte.ok_or_else(|| ErreurAuthPatient::Interne("compte vérifié introuvable".into()))?;
+    let compte_id = compte.ok_or_else(|| ErreurAuthPatient::Interne("compte vérifié introuvable".into()))?;
 
-    jwt.emettre(SorteJeton::Patient, compte_id, version_jeton, None)
-        .map_err(|e| ErreurAuthPatient::Interne(e.to_string()))
+    ouvrir_session(pool, jwt, compte_id).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::jwt::SorteJeton;
 
     /// Simule une minute écoulée avant de redemander un code pour un même
     /// numéro : sans cela, le délai de 60 s entre deux envois (O1, otp.rs)
@@ -382,7 +395,8 @@ mod tests {
         let jeton = creer_compte(&pool, &jwt, telephone, &code, "Test", "Auth", chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), "Ouagadougou", "Motdepasse-123")
             .await
             .expect("la création doit réussir avec un code et un mot de passe valides");
-        assert!(!jeton.is_empty());
+        assert!(!jeton.jeton_acces.is_empty());
+        assert_eq!(jeton.jeton_renouvellement.en_clair().len(), 64);
 
         assert!(matches!(
             creer_compte(&pool, &jwt, telephone, &code, "Test", "Auth", chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), "Ouagadougou", "Motdepasse-123").await,
@@ -415,7 +429,7 @@ mod tests {
         ), "aucun compte complet sous ce numéro : rien à réinitialiser");
     }
 
-    fn refuse(resultat: Result<String, ErreurAuthPatient>) -> bool {
+    fn refuse(resultat: Result<PaireJetons, ErreurAuthPatient>) -> bool {
         matches!(resultat, Err(ErreurAuthPatient::IdentifiantsInvalides))
     }
 
@@ -434,7 +448,8 @@ mod tests {
 
         // --- succès : jeton patient pour ce compte ---
         let jeton = se_connecter(&pool, &jwt, telephone, bon).await.unwrap();
-        let claims = jwt.verifier(&jeton, SorteJeton::Patient).unwrap();
+        let claims = jwt.verifier(&jeton.jeton_acces, SorteJeton::Patient).unwrap();
+        assert!(claims.sid.is_some(), "le jeton d'accès porte sa session");
         let (compte_id, version_jeton): (Uuid, i32) = sqlx::query_as(
             "SELECT c.id, c.version_jeton FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
              WHERE u.telephone = $1 AND c.type_compte = 'patient'",
@@ -496,6 +511,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(version_apres, version_avant + 1);
+        // Toutes les sessions ouvertes avant la réinitialisation sont fermées
+        // (seule reste celle de la connexion qui a suivi).
+        let fermees_par_reinitialisation: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM session WHERE compte_id = $1 AND motif_revocation = 'reinitialisation_mot_de_passe'",
+        )
+        .bind(compte_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(fermees_par_reinitialisation >= 1);
+        let ouvertes_avant: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM session WHERE compte_id = $1 AND revoquee_le IS NULL",
+        )
+        .bind(compte_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(ouvertes_avant, 1, "seule la session de la connexion suivante est ouverte");
 
         // --- mot de passe non conforme : toutes les règles listées ---
         laisser_passer_une_minute(&pool).await;
