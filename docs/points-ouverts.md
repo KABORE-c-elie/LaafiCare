@@ -155,6 +155,7 @@ Un soignant a besoin du NIP pour ouvrir le dossier. Le patient peut être trop m
 - Requêtes SQLx vérifiées à la compilation : après la stabilisation du module MUNASEB.
 - Synchronisation de l'application mobile hors ligne avec le serveur : protocole à concevoir.
 - Calcul du solde d'une période MUNASEB, présent en double (demandes et contrat) : à regrouper.
+- **Email enregistré sans espaces autour, garanti par la base** (décidé le 2026-10-15, à faire dans la migration de l'étape 3.7, où naissent les comptes professionnels) : contrainte `CHECK (email = btrim(email))`. La connexion professionnelle compare l'email saisi sans ses espaces autour ; sans cette contrainte, un email enregistré avec un espace pourrait ne jamais être retrouvé. Aucun email existant ne la violerait (vérifié le 2026-10-15 dans la base de développement ; à revérifier avant d'écrire la migration).
 
 ---
 

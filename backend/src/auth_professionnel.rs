@@ -136,9 +136,10 @@ async fn connexion_par_email(
     // compte des majuscules (J6). Au plus une ligne : un seul compte par
     // type et par identité (migration 0011, `un_compte_par_type`), une
     // seule identité par email (migration 0001, index unique sur
-    // `lower(email)`) — à condition que les emails soient enregistrés sans
-    // espaces autour, ce que doit garantir le code qui crée les comptes
-    // (3.7, 3.10).
+    // `lower(email)`). Les emails enregistrés n'ont pas d'espaces autour :
+    // la base l'imposera par `CHECK (email = btrim(email))` dans la
+    // migration de l'étape 3.7, où naissent les comptes professionnels
+    // (décision du 2026-10-15) ; aucun email existant ne la viole.
     let compte: Option<(Uuid, bool, i32)> = sqlx::query_as(
         "SELECT c.id, u.email_verifie_le IS NOT NULL, c.version_jeton \
          FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
