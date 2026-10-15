@@ -233,6 +233,18 @@ pub async fn commencer_activation(
     })
 }
 
+/// Ce que la confirmation exige en plus du code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Autorisation {
+    /// Activation par la personne elle-même (patients et professionnels,
+    /// après l'étape 3.11) : le code suffit.
+    Libre,
+    /// Réenrôlement d'un administrateur (étape 3.6.4, migration 0019) : la
+    /// fenêtre ouverte par l'équipe doit être en cours au moment de
+    /// l'activation ; elle est vidée dans la même transaction.
+    ReenrolementAdministrateur,
+}
+
 /// Confirme l'activation avec un premier code correct (Z7). Renvoie les
 /// codes de secours en clair : c'est la seule fois qu'ils sont visibles
 /// (Z6).
@@ -241,8 +253,9 @@ pub async fn confirmer_activation(
     cle: &[u8; 32],
     compte_id: Uuid,
     code: &str,
+    autorisation: Autorisation,
 ) -> Result<Vec<String>, ErreurTotp> {
-    confirmer_activation_a(pool, cle, compte_id, code, maintenant()?).await
+    confirmer_activation_a(pool, cle, compte_id, code, autorisation, maintenant()?).await
 }
 
 async fn confirmer_activation_a(
@@ -250,6 +263,7 @@ async fn confirmer_activation_a(
     cle: &[u8; 32],
     compte_id: Uuid,
     code: &str,
+    autorisation: Autorisation,
     instant: u64,
 ) -> Result<Vec<String>, ErreurTotp> {
     compter_essai(pool, compte_id).await?;
@@ -273,6 +287,25 @@ async fn confirmer_activation_a(
     let (codes, hachages) = generer_codes_secours()?;
 
     let mut transaction = pool.begin().await?;
+    // Réenrôlement : la fenêtre est vidée en premier, en une requête
+    // conditionnelle (horloge de PostgreSQL, migration 0019). Aucune ligne :
+    // la fenêtre a expiré depuis la demande, tout est annulé (la transaction
+    // se défait à sa libération) et le TOTP reste en attente.
+    // Ordre des verrous : le compte d'abord, puis la demande de TOTP, comme
+    // pour les sessions (le compte avant le reste) ; l'outil
+    // `desactiver_totp` (étape 3.6.5) suivra le même ordre.
+    if autorisation == Autorisation::ReenrolementAdministrateur {
+        let ouverte: Option<Uuid> = sqlx::query_scalar(
+            "UPDATE compte SET reenrolement_autorise_jusqu_au = NULL \
+             WHERE id = $1 AND reenrolement_autorise_jusqu_au > now() RETURNING id",
+        )
+        .bind(compte_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        if ouverte.is_none() {
+            return Err(ErreurTotp::Refuse);
+        }
+    }
     // La demande est verrouillée : deux confirmations simultanées ne
     // peuvent pas toutes deux réussir (la seconde attend, puis ne la trouve
     // plus en attente).
@@ -563,7 +596,7 @@ mod tests {
 
     async fn activer(pool: &PgPool, compte: Uuid, instant: u64) -> (ActivationEnCours, Vec<String>) {
         let activation = commencer_activation(pool, &CLE, compte, MOT_DE_PASSE).await.unwrap();
-        let codes = confirmer_activation_a(pool, &CLE, compte, &code_a(&activation, instant), instant)
+        let codes = confirmer_activation_a(pool, &CLE, compte, &code_a(&activation, instant), Autorisation::Libre, instant)
             .await
             .unwrap();
         (activation, codes)
@@ -596,7 +629,7 @@ mod tests {
         let code = code_a(&activation, INSTANT);
         assert!(refuse(verifier_code_a(&pool, &CLE, compte, &code, INSTANT).await));
 
-        let codes = confirmer_activation_a(&pool, &CLE, compte, &code, INSTANT).await.unwrap();
+        let codes = confirmer_activation_a(&pool, &CLE, compte, &code, Autorisation::Libre, INSTANT).await.unwrap();
         assert_eq!(codes.len(), NOMBRE_CODES_SECOURS);
         assert_eq!(tentatives(&pool, compte).await, 0, "compteur remis à zéro après le bon code");
 
@@ -657,13 +690,14 @@ mod tests {
         let nouveau = commencer_activation(&pool, &CLE, compte, MOT_DE_PASSE).await.unwrap();
         let instant = INSTANT + 300;
         assert!(refuse(
-            confirmer_activation_a(&pool, &CLE, compte, &code_a(&abandonnee, instant), instant).await
+            confirmer_activation_a(&pool, &CLE, compte, &code_a(&abandonnee, instant), Autorisation::Libre, instant).await
         ));
 
         // Pendant le remplacement, l'ancien TOTP fonctionne toujours.
         verifier_code_a(&pool, &CLE, compte, &code_a(&ancien, instant), instant).await.unwrap();
 
-        let nouveaux_codes = confirmer_activation_a(&pool, &CLE, compte, &code_a(&nouveau, instant + 30), instant + 30)
+        let nouveaux_codes =
+            confirmer_activation_a(&pool, &CLE, compte, &code_a(&nouveau, instant + 30), Autorisation::Libre, instant + 30)
             .await
             .unwrap();
 

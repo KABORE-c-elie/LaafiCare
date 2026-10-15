@@ -33,13 +33,15 @@ struct CorpsSecondFacteur<'a> {
 /// Réponse « second facteur » (Z10, J4). Le jeton intermédiaire n'est lu en
 /// clair qu'ici, au moment de sérialiser (`into_response` le fait tout de
 /// suite), puis effacé de la mémoire avec `JetonIntermediaire`.
-fn reponse_second_facteur(jeton: &JetonIntermediaire) -> Response {
+pub(crate) fn reponse_second_facteur(jeton: &JetonIntermediaire) -> Response {
     let corps = CorpsSecondFacteur { etape: "second_facteur", jeton_intermediaire: jeton.en_clair() };
     (StatusCode::OK, Json(corps)).into_response()
 }
 
-/// Un seul endroit qui décide du code HTTP et du `code` de chaque erreur.
-fn mapper_erreur(erreur: ErreurAuthProfessionnel) -> ReponseErreur {
+/// Un seul endroit qui décide du code HTTP et du `code` de chaque erreur,
+/// pour les professionnels et les administrateurs (`routes_administrateur`).
+/// `contexte` : libellé des journaux seulement.
+pub(crate) fn mapper_erreur(erreur: ErreurAuthProfessionnel, contexte: &'static str) -> ReponseErreur {
     match &erreur {
         // Tous les refus d'identifiants, sans distinction (P1, L1).
         ErreurAuthProfessionnel::IdentifiantsInvalides => {
@@ -51,7 +53,7 @@ fn mapper_erreur(erreur: ErreurAuthProfessionnel) -> ReponseErreur {
             reponse_erreur(StatusCode::FORBIDDEN, "email_non_verifie", erreur.to_string())
         }
         // L'étape en échec va aux journaux, jamais dans la réponse.
-        ErreurAuthProfessionnel::Interne(etape) => reponse_erreur_interne("connexion professionnelle", etape),
+        ErreurAuthProfessionnel::Interne(etape) => reponse_erreur_interne(contexte, etape),
     }
 }
 
@@ -65,7 +67,7 @@ pub async fn se_connecter(State(state): State<AppState>, JsonApi(corps): JsonApi
         Ok(ConnexionProfessionnelle::SecondFacteur { jeton_intermediaire }) => {
             reponse_second_facteur(&jeton_intermediaire)
         }
-        Err(erreur) => mapper_erreur(erreur).into_response(),
+        Err(erreur) => mapper_erreur(erreur, "connexion professionnelle").into_response(),
     }
 }
 
@@ -86,7 +88,7 @@ fn saisie(corps: SecondFacteurRequete) -> Option<SaisieSecondFacteur> {
     }
 }
 
-fn reponse_erreur_second_facteur(erreur: ErreurSecondFacteur) -> Response {
+fn reponse_erreur_second_facteur(erreur: ErreurSecondFacteur, contexte: &'static str) -> Response {
     match erreur {
         // Une seule réponse pour un code faux, un code de secours faux ou
         // déjà utilisé, un compte verrouillé (F3). `code_invalide` existe
@@ -98,9 +100,7 @@ fn reponse_erreur_second_facteur(erreur: ErreurSecondFacteur) -> Response {
         // qu'un jeton invalide (RFC 6750 §3.1), l'application revient à
         // l'écran de connexion.
         ErreurSecondFacteur::JetonDejaUtilise => RefusAuthentification::JetonInvalide.into_response(),
-        ErreurSecondFacteur::Interne(etape) => {
-            reponse_erreur_interne("second facteur professionnel", etape).into_response()
-        }
+        ErreurSecondFacteur::Interne(etape) => reponse_erreur_interne(contexte, etape).into_response(),
     }
 }
 
@@ -114,6 +114,19 @@ pub async fn second_facteur(
     State(state): State<AppState>,
     JsonApi(corps): JsonApi<SecondFacteurRequete>,
 ) -> Response {
+    terminer_second_facteur(&state, intermediaire.compte_id, intermediaire.iat, corps, "second facteur professionnel")
+        .await
+}
+
+/// Second temps, commun aux professionnels et aux administrateurs (A5) :
+/// l'extracteur de chaque route a déjà contrôlé le jeton intermédiaire.
+pub(crate) async fn terminer_second_facteur(
+    state: &AppState,
+    compte_id: sqlx::types::Uuid,
+    iat: u64,
+    corps: SecondFacteurRequete,
+    contexte: &'static str,
+) -> Response {
     let Some(saisie) = saisie(corps) else {
         // Même code qu'un corps mal formé (docs/api.md, section 1.4).
         return reponse_erreur(
@@ -123,18 +136,10 @@ pub async fn second_facteur(
         )
         .into_response();
     };
-    match auth_professionnel::terminer_connexion(
-        &state.db,
-        &state.jwt,
-        &state.cle_totp,
-        intermediaire.compte_id,
-        intermediaire.iat,
-        &saisie,
-    )
-    .await
+    match auth_professionnel::terminer_connexion(&state.db, &state.jwt, &state.cle_totp, compte_id, iat, &saisie).await
     {
         Ok(paire) => reponse_paire(StatusCode::OK, &paire, Some("complete")),
-        Err(erreur) => reponse_erreur_second_facteur(erreur),
+        Err(erreur) => reponse_erreur_second_facteur(erreur, contexte),
     }
 }
 
@@ -164,7 +169,7 @@ mod tests {
                 "erreur interne",
             ),
         ] {
-            let (s, Json(corps)) = mapper_erreur(erreur);
+            let (s, Json(corps)) = mapper_erreur(erreur, "connexion professionnelle");
             assert_eq!((s, corps.code, corps.erreur.as_str()), (statut, code, message));
         }
     }
@@ -288,6 +293,7 @@ mod tests {
             state.cle_totp.octets(),
             compte_id,
             &generateur.generate(maintenant).to_string(),
+            totp::Autorisation::Libre,
         )
         .await
         .unwrap();
@@ -343,15 +349,16 @@ mod tests {
 
     #[test]
     fn erreurs_du_second_facteur() {
-        let code_invalide = reponse_erreur_second_facteur(ErreurSecondFacteur::CodeInvalide);
+        let contexte = "second facteur professionnel";
+        let code_invalide = reponse_erreur_second_facteur(ErreurSecondFacteur::CodeInvalide, contexte);
         assert_eq!(code_invalide.status(), StatusCode::UNAUTHORIZED);
-        let deja_utilise = reponse_erreur_second_facteur(ErreurSecondFacteur::JetonDejaUtilise);
+        let deja_utilise = reponse_erreur_second_facteur(ErreurSecondFacteur::JetonDejaUtilise, contexte);
         assert_eq!(deja_utilise.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(
             deja_utilise.headers().get(axum::http::header::WWW_AUTHENTICATE).unwrap(),
             r#"Bearer error="invalid_token""#
         );
-        let interne = reponse_erreur_second_facteur(ErreurSecondFacteur::Interne("vérification du code"));
+        let interne = reponse_erreur_second_facteur(ErreurSecondFacteur::Interne("vérification du code"), contexte);
         assert_eq!(interne.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(ErreurSecondFacteur::CodeInvalide.to_string(), "Code incorrect.");
     }

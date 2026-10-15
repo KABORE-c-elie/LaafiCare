@@ -1,5 +1,6 @@
 mod erreur_api;
 mod extracteur_jwt;
+mod routes_administrateur;
 mod routes_patient;
 mod routes_remboursement_munaseb;
 mod routes_professionnel;
@@ -163,6 +164,16 @@ async fn main() {
         .route("/api/sessions/deconnexion-partout", post(routes_session::deconnexion_partout))
         .route("/api/professionnels/connexion", post(routes_professionnel::se_connecter))
         .route("/api/professionnels/connexion/second-facteur", post(routes_professionnel::second_facteur))
+        .route("/api/administrateurs/connexion", post(routes_administrateur::se_connecter))
+        .route("/api/administrateurs/connexion/second-facteur", post(routes_administrateur::second_facteur))
+        .route(
+            "/api/administrateurs/reenrolement/commencer",
+            post(routes_administrateur::commencer_reenrolement),
+        )
+        .route(
+            "/api/administrateurs/reenrolement/confirmer",
+            post(routes_administrateur::confirmer_reenrolement),
+        )
         .route("/api/patients/otp", post(routes_patient::demander_otp))
         .route("/api/patients/inscription", post(routes_patient::creer_compte))
         .route(

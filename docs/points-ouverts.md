@@ -51,6 +51,14 @@ Réglé par l'option 3, décidée le 2026-10-12 : jetons d'accès de 15 minutes,
 
 **À revoir** si cela gêne en pratique : un identifiant unique par jeton intermédiaire (champ `jti`, RFC 7519 §4.1.7), enregistré à son usage, lèverait la limite.
 
+### Fenêtre de réenrôlement d'un administrateur : écriture réservée aux outils locaux
+
+**Noté le 2026-10-15 (étape 3.6.4, migration 0019).** Seul un outil local de l'équipe doit pouvoir ouvrir la fenêtre de 10 minutes pendant laquelle un administrateur sans second facteur en enregistre un nouveau (`compte.reenrolement_autorise_jusqu_au`). Aujourd'hui, c'est garanti **par le code seulement** : le serveur et les outils utilisent le même compte PostgreSQL. **En production**, un compte PostgreSQL séparé pour les outils locaux, **seul autorisé à écrire cette colonne** (droits par colonne de PostgreSQL), garantirait par la base qu'aucune route ne peut ouvrir une fenêtre. À traiter avec le compte PostgreSQL sans droits d'administration (section 3).
+
+### Prévenir l'administrateur quand son second facteur change (étape 3.7)
+
+**Exigence notée le 2026-10-15.** Quand un second facteur est enregistré ou désactivé sur un compte administrateur, la personne doit en être prévenue **par email**, par un autre canal que l'opération elle-même. Sources : NIST SP 800-63B rév. 4, §4.1.2.1 (« When an authenticator is added, the CSP SHALL notify the subscriber via a mechanism independent of the transaction binding the new authenticator ») et §4.2.3 (« account recovery SHALL cause a notification to be sent to the subscriber ») ; OWASP ASVS 5.0, 6.3.7. À faire avec l'envoi d'emails (`email.rs`, étape 3.7), pour le réenrôlement (étape 3.6.4) et l'outil `desactiver_totp` (étape 3.6.5).
+
 ### Empreinte du code reçu par SMS
 
 Le code est enregistré en SHA-256 simple. Avec seulement un million de codes possibles, une copie volée de la base permettrait de retrouver un code encore valable.

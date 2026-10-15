@@ -4,10 +4,11 @@
 //! facteur (Z10), puis session (`session.rs`, jeton
 //! `laaficare:professionnel_sans_affectation`, J5).
 //!
-//! La logique commune prend le type de compte en paramètre (P6) ; seule la
-//! connexion professionnelle est publique. Celle des administrateurs
-//! viendra à l'étape 3.6.4 avec sa règle propre : sans TOTP actif, pas de
-//! jeton complet mais un jeton de réenrôlement (Y4).
+//! La logique commune (`verifier_identifiants`) prend le type de compte en
+//! paramètre (P6) ; elle sert aussi à la connexion des administrateurs
+//! (`auth_administrateur.rs`), qui a sa règle propre : sans TOTP actif, pas
+//! de jeton complet mais un jeton de réenrôlement, seulement pendant une
+//! fenêtre ouverte par l'équipe (Y4, migration 0019).
 //!
 //! **Récupération du mot de passe** : par email uniquement (décisions R1 à
 //! R9, étape 3.12). L'OTP ne sert qu'au compte patient (section 14).
@@ -24,13 +25,18 @@ use crate::session::{self, PaireJetons};
 use crate::totp::{self, ErreurTotp};
 use crate::verrouillage::{self, ErreurConnexion, Verification};
 
-/// Jeton intermédiaire du second facteur (5 min) : même traitement que le
-/// jeton de renouvellement (`session.rs`). `Debug` affiche `***`, ni
-/// `Display` ni `Serialize` : la seule lecture est `en_clair()`, au moment
-/// de construire la réponse. Effacé de la mémoire à sa libération.
+/// Jeton intermédiaire du second facteur (5 min), ou de réenrôlement d'un
+/// administrateur (10 min) : même traitement que le jeton de
+/// renouvellement (`session.rs`). `Debug` affiche `***`, ni `Display` ni
+/// `Serialize` : la seule lecture est `en_clair()`, au moment de construire
+/// la réponse. Effacé de la mémoire à sa libération.
 pub struct JetonIntermediaire(String);
 
 impl JetonIntermediaire {
+    pub(crate) fn depuis(jeton: String) -> Self {
+        JetonIntermediaire(jeton)
+    }
+
     pub fn en_clair(&self) -> &str {
         &self.0
     }
@@ -71,10 +77,13 @@ impl fmt::Debug for ConnexionProfessionnelle {
     }
 }
 
+/// Erreurs de la connexion par email, communes aux professionnels et aux
+/// administrateurs (même messages, même codes).
 #[derive(Debug, thiserror::Error)]
 pub enum ErreurAuthProfessionnel {
-    /// Email inconnu, mauvais mot de passe, compte verrouillé ou désactivé :
-    /// jamais distingués (décisions P1 et L1), même temps de réponse.
+    /// Email inconnu, mauvais mot de passe, compte verrouillé ou désactivé,
+    /// administrateur sans TOTP ni fenêtre de réenrôlement : jamais
+    /// distingués (décisions P1 et L1), même temps de réponse.
     #[error("Email ou mot de passe incorrect.")]
     IdentifiantsInvalides,
 
@@ -92,7 +101,7 @@ pub enum ErreurAuthProfessionnel {
 
 /// Nature d'une erreur SQLx, sans son message : un message de PostgreSQL
 /// peut reprendre une valeur. Seule cette nature va aux journaux.
-fn nature_sqlx(erreur: &sqlx::Error) -> String {
+pub(crate) fn nature_sqlx(erreur: &sqlx::Error) -> String {
     match erreur {
         sqlx::Error::Database(e) => format!("base de données, code {}", e.code().as_deref().unwrap_or("inconnu")),
         sqlx::Error::PoolTimedOut => "délai d'attente de la base dépassé".to_string(),
@@ -109,7 +118,7 @@ fn interne_sqlx(etape: &'static str, erreur: &sqlx::Error) -> ErreurAuthProfessi
 
 /// Erreur dont le détail n'est pas journalisé : il peut venir d'un module
 /// qui ne garantit pas l'absence de données saisies.
-fn interne(etape: &'static str) -> ErreurAuthProfessionnel {
+pub(crate) fn interne(etape: &'static str) -> ErreurAuthProfessionnel {
     tracing::error!(etape, "connexion professionnelle : erreur interne");
     ErreurAuthProfessionnel::Interne(etape)
 }
@@ -121,19 +130,41 @@ pub async fn se_connecter(
     email: &str,
     mot_de_passe: &str,
 ) -> Result<ConnexionProfessionnelle, ErreurAuthProfessionnel> {
-    connexion_par_email(pool, jwt, "professionnel", SorteJeton::SecondFacteurProfessionnel, email, mot_de_passe).await
+    let compte = verifier_identifiants(pool, "professionnel", email, mot_de_passe).await?;
+    if compte.second_facteur {
+        let jeton = jwt
+            .emettre(SorteJeton::SecondFacteurProfessionnel, compte.compte_id, compte.version_jeton, None, None)
+            .map_err(|_| interne("émission du jeton intermédiaire"))?;
+        return Ok(ConnexionProfessionnelle::SecondFacteur { jeton_intermediaire: JetonIntermediaire(jeton) });
+    }
+    let paire = session::ouvrir(pool, compte.compte_id, None)
+        .await
+        .and_then(|active| active.en_paire(jwt))
+        .map_err(|_| interne("ouverture de session"))?;
+    Ok(ConnexionProfessionnelle::Complete(paire))
 }
 
-/// Logique commune (P6). `type_compte` : valeur de `compte.type_compte` ;
-/// `sorte_intermediaire` : jeton remis si un TOTP est actif.
-async fn connexion_par_email(
+/// Compte dont le mot de passe vient d'être vérifié, email vérifié.
+pub(crate) struct CompteVerifie {
+    pub(crate) compte_id: Uuid,
+    pub(crate) version_jeton: i32,
+    /// Un TOTP actif : le second temps de la connexion est exigé.
+    pub(crate) second_facteur: bool,
+    /// Fenêtre de réenrôlement en cours (migration 0019) ; toujours faux
+    /// pour un compte non administrateur (contrainte de la base).
+    pub(crate) reenrolement_autorise: bool,
+}
+
+/// Logique commune (P6) : compte du type demandé, mot de passe et
+/// verrouillage, email vérifié. `type_compte` : valeur de
+/// `compte.type_compte`. Ce qui suit (jeton intermédiaire, session,
+/// réenrôlement) appartient à chaque sorte de connexion.
+pub(crate) async fn verifier_identifiants(
     pool: &PgPool,
-    jwt: &JwtService,
     type_compte: &'static str,
-    sorte_intermediaire: SorteJeton,
     email: &str,
     mot_de_passe: &str,
-) -> Result<ConnexionProfessionnelle, ErreurAuthProfessionnel> {
+) -> Result<CompteVerifie, ErreurAuthProfessionnel> {
     // Email comparé sans les espaces autour de la saisie et sans tenir
     // compte des majuscules (J6). Au plus une ligne : un seul compte par
     // type et par identité (migration 0011, `un_compte_par_type`), une
@@ -142,8 +173,14 @@ async fn connexion_par_email(
     // la base l'imposera par `CHECK (email = btrim(email))` dans la
     // migration de l'étape 3.7, où naissent les comptes professionnels
     // (décision du 2026-10-15) ; aucun email existant ne la viole.
-    let compte: Option<(Uuid, bool, i32)> = sqlx::query_as(
-        "SELECT c.id, u.email_verifie_le IS NOT NULL, c.version_jeton \
+    //
+    // La fenêtre de réenrôlement est comparée à `now()` de PostgreSQL, qui
+    // l'a calculée (une seule horloge, migration 0019). Lue ici, avant le
+    // mot de passe : l'extracteur du jeton de réenrôlement la revérifie à
+    // chaque requête, la confirmation aussi, en transaction.
+    let compte: Option<(Uuid, bool, i32, bool)> = sqlx::query_as(
+        "SELECT c.id, u.email_verifie_le IS NOT NULL, c.version_jeton, \
+                coalesce(c.reenrolement_autorise_jusqu_au > now(), false) \
          FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
          WHERE lower(u.email) = lower(btrim($1)) AND c.type_compte = $2",
     )
@@ -156,7 +193,7 @@ async fn connexion_par_email(
     // Verrouillage BF-01, faux hachage si le compte n'existe pas (même
     // temps de réponse), compteur remis à zéro seulement sans TOTP actif
     // (règle V1) : tout est fait par `verrouillage::verifier`.
-    let verification = verrouillage::verifier(pool, compte.map(|(id, _, _)| id), mot_de_passe)
+    let verification = verrouillage::verifier(pool, compte.map(|(id, _, _, _)| id), mot_de_passe)
         .await
         .map_err(|erreur| match erreur {
             ErreurConnexion::IdentifiantsInvalides => ErreurAuthProfessionnel::IdentifiantsInvalides,
@@ -164,28 +201,20 @@ async fn connexion_par_email(
         })?;
 
     // `verifier` n'accepte qu'un compte existant : `compte` est présent.
-    let (compte_id, email_verifie, version_jeton) = compte.ok_or_else(|| interne("compte vérifié introuvable"))?;
+    let (compte_id, email_verifie, version_jeton, reenrolement_autorise) =
+        compte.ok_or_else(|| interne("compte vérifié introuvable"))?;
 
     // R0, P4 : contrôlé avant de délivrer un jeton intermédiaire.
     if !email_verifie {
         return Err(ErreurAuthProfessionnel::EmailNonVerifie);
     }
 
-    match verification {
-        Verification::SecondFacteurRequis(_) => {
-            let jeton = jwt
-                .emettre(sorte_intermediaire, compte_id, version_jeton, None, None)
-                .map_err(|_| interne("émission du jeton intermédiaire"))?;
-            Ok(ConnexionProfessionnelle::SecondFacteur { jeton_intermediaire: JetonIntermediaire(jeton) })
-        }
-        Verification::Complete(_) => {
-            let paire = session::ouvrir(pool, compte_id, None)
-                .await
-                .and_then(|active| active.en_paire(jwt))
-                .map_err(|_| interne("ouverture de session"))?;
-            Ok(ConnexionProfessionnelle::Complete(paire))
-        }
-    }
+    Ok(CompteVerifie {
+        compte_id,
+        version_jeton,
+        second_facteur: matches!(verification, Verification::SecondFacteurRequis(_)),
+        reenrolement_autorise,
+    })
 }
 
 // ---------------------------------------------------------------------
@@ -520,9 +549,15 @@ mod tests {
             .with_secret(totp_rs::Secret::try_from_base32(&activation.cle_base32).unwrap())
             .build()
             .unwrap();
-        let codes_secours = totp::confirmer_activation(pool, cle().octets(), compte_id, &generateur.generate(maintenant()).to_string())
-            .await
-            .unwrap();
+        let codes_secours = totp::confirmer_activation(
+            pool,
+            cle().octets(),
+            compte_id,
+            &generateur.generate(maintenant()).to_string(),
+            totp::Autorisation::Libre,
+        )
+        .await
+        .unwrap();
         let code_suivant = generateur.generate(maintenant() + 30).to_string();
         (compte_id, code_suivant, codes_secours)
     }

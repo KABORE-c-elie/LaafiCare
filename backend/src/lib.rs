@@ -4,6 +4,7 @@
 //! modules dépendent de `AppState` (défini dans `main.rs`, propre au serveur
 //! HTTP), aucun outil local n'en a besoin.
 
+pub mod auth_administrateur;
 pub mod auth_patient;
 pub mod auth_professionnel;
 pub mod config;

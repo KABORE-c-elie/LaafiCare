@@ -43,11 +43,11 @@ Il existe **huit sortes de jetons**. Chaque route n'en accepte qu'une : un jeton
 | Sorte (`aud`) | Sert à | Durée | État |
 |---|---|---|---|
 | `laaficare:patient` | routes du patient (`GET /api/patients/moi`, `deconnexion-partout`) | 15 min | émis par l'inscription, la connexion et le renouvellement ; refusé après une réinitialisation du mot de passe ou la fermeture de sa session |
-| `laaficare:professionnel_sans_affectation` | lister ses affectations, en activer une | 15 min | prévu (étape 3.6) |
+| `laaficare:professionnel_sans_affectation` | lister ses affectations, en activer une | 15 min | émis par la connexion professionnelle (section 2.4) ; routes des affectations à l'étape 3.9 |
 | `laaficare:professionnel_en_exercice` | routes métier (remboursements MUNASEB…) | 15 min | attendu par les routes MUNASEB ; émis à l'étape 3.9 |
-| `laaficare:administrateur` | routes de l'équipe LaafiCare | 15 min | prévu (étape 3.6) |
-| `laaficare:second_facteur_patient`, `…_professionnel`, `…_administrateur` | saisir le code du second facteur, après un mot de passe correct | 5 min | prévu (étape 3.6) |
-| `laaficare:reenrolement_administrateur` | activer un nouveau second facteur, rien d'autre | 10 min | prévu (étape 3.6) |
+| `laaficare:administrateur` | routes de l'équipe LaafiCare | 15 min | émis par le second temps de la connexion administrateur (section 2.5) ; routes de l'équipe à l'étape 3.8 ; refusé dès que le TOTP du compte n'est plus actif |
+| `laaficare:second_facteur_patient`, `…_professionnel`, `…_administrateur` | saisir le code du second facteur, après un mot de passe correct | 5 min | professionnel et administrateur : émis (sections 2.4 et 2.5), **une seule utilisation réussie** ; patient : après l'étape 3.11 |
+| `laaficare:reenrolement_administrateur` | enregistrer un nouveau second facteur, rien d'autre | 10 min | émis par la connexion administrateur (section 2.5), seulement pendant une fenêtre ouverte par l'équipe ; refusé dès qu'un TOTP est actif ou que la fenêtre a expiré |
 
 Aucune tolérance après l'expiration : un jeton expiré d'une seconde est refusé.
 
@@ -120,7 +120,7 @@ L'application peut donc envoyer le numéro tel que saisi.
 
 ### 1.7 Sessions et jeton de renouvellement
 
-> **En service depuis le 2026-10-14** pour les comptes patients. Les professionnels et les administrateurs suivront avec leur connexion (étape 3.6). L'ancienne réponse `{"jeton": "<JWT>"}` n'existe plus.
+> **En service depuis le 2026-10-14** pour les comptes patients, et depuis le 2026-10-15 pour les professionnels et les administrateurs (sections 2.4 et 2.5). L'ancienne réponse `{"jeton": "<JWT>"}` n'existe plus.
 
 **Le principe.** Après la connexion, l'application reçoit deux jetons :
 - un **jeton d'accès** (`jeton_acces`), de courte durée, à présenter à chaque demande (`Authorization: Bearer …`) ;
@@ -193,6 +193,10 @@ Résumé :
 | POST | `/api/sessions/deconnexion-partout` | jeton `laaficare:patient` | fonctionne (section 1.7) |
 | POST | `/api/professionnels/connexion` | tout le monde | fonctionne (section 2.4) ; pas encore testable sans compte professionnel (étapes 3.6.5 et 3.7) |
 | POST | `/api/professionnels/connexion/second-facteur` | jeton intermédiaire `laaficare:second_facteur_professionnel` | fonctionne (section 2.4) ; même remarque |
+| POST | `/api/administrateurs/connexion` | tout le monde | fonctionne (section 2.5) ; pas encore testable sans compte administrateur (étape 3.6.5) |
+| POST | `/api/administrateurs/connexion/second-facteur` | jeton intermédiaire `laaficare:second_facteur_administrateur` | fonctionne (section 2.5) ; même remarque |
+| POST | `/api/administrateurs/reenrolement/commencer` | jeton `laaficare:reenrolement_administrateur` | fonctionne (section 2.5) ; même remarque |
+| POST | `/api/administrateurs/reenrolement/confirmer` | jeton `laaficare:reenrolement_administrateur` | fonctionne (section 2.5) ; même remarque |
 | POST | `/api/assurance-munaseb/remboursements/simuler-acte` | jeton en exercice, agent MUNASEB | **hors service** |
 | GET | `/api/assurance-munaseb/remboursements` | jeton en exercice, agent MUNASEB | **hors service** |
 | GET | `/api/assurance-munaseb/remboursements/{id}` | jeton en exercice, agent MUNASEB | **hors service** |
@@ -637,6 +641,66 @@ ou
 - Sur 401 `code_invalide` : l'application vide le champ du code et laisse la personne réessayer. Sur 401 `jeton_invalide` : elle revient à l'écran de connexion.
 - **Limite connue** : une nouvelle connexion du même compte dans **la même seconde** qu'un second facteur réussi donne un jeton intermédiaire refusé à tort (401 `jeton_invalide`) ; la personne se reconnecte une seconde plus tard.
 
+### 2.5 Administrateurs LaafiCare : connexion et réenrôlement
+
+Le second facteur (TOTP) est **obligatoire** pour un administrateur : la connexion ne donne jamais de session sans code. Un administrateur sans TOTP actif (premier administrateur, ou téléphone perdu) ne peut en enregistrer un nouveau que pendant une **fenêtre de 10 minutes** ouverte par l'équipe LaafiCare avec un outil local, jamais par une route. Hors de cette fenêtre, son mot de passe seul ne donne rien.
+
+**Pas encore testable dans Postman** : aucun compte administrateur n'existe avant l'outil du premier administrateur (étape 3.6.5) ; les tests automatiques vérifient ces routes.
+
+#### `POST /api/administrateurs/connexion`
+
+- **Appelant** : tout le monde. **Corps** : `{"email": "…", "mot_de_passe": "…"}` (même forme que la connexion professionnelle).
+- **Réponses** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 200 | — | TOTP actif : `{"etape": "second_facteur", "jeton_intermediaire": "…"}` (5 min) |
+| 200 | — | pas de TOTP actif, fenêtre ouverte : `{"etape": "reenrolement", "jeton_reenrolement": "…"}` (10 min) |
+| 401 | `identifiants_invalides` | email inconnu, mauvais mot de passe, compte verrouillé ou désactivé, **ou pas de TOTP et pas de fenêtre** ; message « Email ou mot de passe incorrect. » dans tous les cas |
+| 403 | `email_non_verifie` | mot de passe correct, email pas vérifié |
+| 422 | `donnees_invalides` | champ manquant |
+| 500 | `erreur_interne` | panne |
+
+- Jamais d'`etape: "complete"` pour un administrateur.
+
+#### `POST /api/administrateurs/connexion/second-facteur`
+
+Identique à la route professionnelle (section 2.4) : en-tête `Authorization: Bearer <jeton_intermediaire>`, corps `{"code"}` ou `{"code_secours"}`, mêmes réponses, jeton à usage unique. La réponse 200 ouvre une **session administrateur** : jeton d'accès `laaficare:administrateur` de 15 min, session de 24 h au plus, fermée après 1 h d'inactivité.
+
+#### `POST /api/administrateurs/reenrolement/commencer`
+
+- **Appelant** : en-tête `Authorization: Bearer <jeton_reenrolement>`.
+- **Corps** : `{"mot_de_passe": "…"}`. Le mot de passe est redemandé, comme pour toute activation d'un second facteur.
+- **Réponses** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 200 | — | `{"url_otpauth": "otpauth://totp/…", "cle_base32": "…"}` : l'application dessine le QR code à partir de `url_otpauth`, et affiche `cle_base32` pour une saisie à la main |
+| 401 | `identifiants_invalides` | mot de passe faux ou compte verrouillé ; message « Mot de passe incorrect. » |
+| 401 | `jeton_invalide` | jeton expiré ou d'une autre sorte, fenêtre expirée, TOTP déjà actif, compte désactivé, email plus vérifié |
+| 422 | `donnees_invalides` | champ manquant |
+| 500 | `erreur_interne` | panne |
+
+- Peut être relancée tant que la fenêtre est ouverte (QR code perdu) : la demande précédente est remplacée.
+
+#### `POST /api/administrateurs/reenrolement/confirmer`
+
+- **Appelant** : en-tête `Authorization: Bearer <jeton_reenrolement>`.
+- **Corps** : `{"code": "123456"}`, le premier code affiché par l'application d'authentification.
+- **Réponses** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 200 | — | `{"codes_secours": ["XXXXX-XXXXX", …]}` : 10 codes, **montrés une seule fois** ; l'application demande de les noter avant de continuer |
+| 401 | `code_invalide` | code faux, aucune demande en cours, fenêtre expirée entre-temps, ou compte verrouillé ; message « Code incorrect. » |
+| 401 | `jeton_invalide` | comme pour `commencer` |
+| 422 | `donnees_invalides` | champ manquant |
+| 500 | `erreur_interne` | panne |
+
+- **Aucune session n'est ouverte** : après avoir montré les codes de secours, l'application revient à l'écran de connexion. La personne se connecte avec son mot de passe, puis un code de son nouveau TOTP.
+- Après la confirmation, le jeton de réenrôlement est refusé (401 `jeton_invalide`), et la fenêtre est refermée.
+- Chaque essai faux (mot de passe ou code) compte dans le verrouillage du compte (5 essais, puis 15 minutes).
+
 ---
 
 ## 3. Codes d'erreur : index
@@ -650,13 +714,13 @@ ou
 | `chemin_invalide` | 400 | routes avec `{id}` |
 | `parametre_invalide` | 400 | liste des remboursements |
 | `telephone_invalide` | 422 | routes patient |
-| `code_invalide` | 401 | inscription, réinitialisation, second facteur professionnel |
+| `code_invalide` | 401 | inscription, réinitialisation, second facteur (professionnel, administrateur), confirmation du réenrôlement |
 | `trop_de_demandes` | 429 | demande de code (avec `Retry-After`), inscription et réinitialisation (sans) |
 | `telephone_deja_utilise` | 409 | inscription |
 | `telephone_inconnu` | 404 | réinitialisation |
 | `mot_de_passe_non_conforme` | 422 | inscription, réinitialisation |
-| `identifiants_invalides` | 401 | connexions |
-| `email_non_verifie` | 403 | connexion professionnelle |
+| `identifiants_invalides` | 401 | connexions, début du réenrôlement administrateur |
+| `email_non_verifie` | 403 | connexions professionnelle et administrateur |
 | `montant_invalide`, `nip_invalide`, `partenaire_suspendu`, `non_couvert`, `en_carence` | 422 | simuler-acte |
 | `patient_inconnu`, `partenaire_inconnu` | 404 | simuler-acte |
 | `reference_acte_deja_utilisee` | 409 | simuler-acte |
@@ -675,7 +739,7 @@ Rien de cette section n'existe dans le code. **Les chemins, corps et réponses n
 
 - ✅ Connexion professionnelle : **codée**, section 2.4.
 - ✅ Second temps de la connexion professionnelle : **codé**, section 2.4. La même forme vaudra pour le patient qui aura activé le TOTP (après l'étape 3.11).
-- Connexion administrateur LaafiCare (étape 3.6.4) : même forme, TOTP toujours exigé ; un administrateur sans TOTP actif reçoit un jeton de réenrôlement qui ne sert qu'à en activer un.
+- ✅ Connexion administrateur LaafiCare et réenrôlement : **codés**, section 2.5.
 
 ### 4.2 Second facteur TOTP
 

@@ -149,6 +149,16 @@ Les professionnels se connectent par **email**, les patients par **téléphone**
 - le jeton intermédiaire **ne sert qu'une fois** : la base retient l'heure d'émission du dernier jeton utilisé, et refuse tout jeton qui n'est pas plus récent (migration 0018). Deux envois simultanés du même jeton n'ouvrent qu'une session. Un code faux, lui, ne consomme pas le jeton ;
 - les heures comparées viennent toutes de l'horloge du serveur d'application, jamais de celle de la base : deux horloges peuvent dériver l'une par rapport à l'autre.
 
+**Connexion d'un administrateur LaafiCare.** Le second facteur y est **obligatoire** : le mot de passe seul ne donne jamais de session. Un administrateur qui n'a plus de second facteur (premier administrateur, ou téléphone perdu) ne peut en enregistrer un nouveau que pendant une **fenêtre de 10 minutes**, ouverte par l'équipe LaafiCare avec un outil local, après avoir vérifié son identité. Sans cette règle, quelqu'un qui aurait volé le mot de passe pourrait enregistrer son propre second facteur et prendre le compte. Hors de la fenêtre, le bon mot de passe reçoit la même réponse qu'un mauvais.
+
+- Durée : NIST SP 800-63B rév. 4, §4.1.3 (un code d'association d'un nouvel authentificateur est valable « a maximum of 10 minutes »). La fenêtre est fixée par le code, jamais par l'outil.
+- La fenêtre est vérifiée à chaque étape (connexion, début, confirmation) et **refermée** par la confirmation, dans la même opération que l'activation.
+- Le mot de passe est redemandé au début de l'enregistrement, et chaque essai faux compte dans le verrouillage.
+- Après la confirmation, aucune session n'est ouverte : la personne se reconnecte avec son nouveau second facteur, par la seule voie qui ouvre une session administrateur.
+- Un jeton d'administrateur est refusé dès que son second facteur n'est plus actif, même s'il est encore valable.
+
+Fichiers : [`auth_administrateur.rs`](../backend/src/auth_administrateur.rs), [`extracteur_jwt.rs`](../backend/src/extracteur_jwt.rs). Migration 0019. **Limite** : la base ne peut pas encore interdire à une route d'ouvrir une fenêtre (voir `points-ouverts.md`).
+
 **La clé de chiffrement des secrets TOTP** est gardée en mémoire dans un type qui l'efface à l'arrêt et qui affiche `***` si on tente de l'écrire dans un journal ; l'état partagé du serveur, qui la contient avec le secret JWT, ne peut pas être affiché du tout. Fichiers : [`config.rs`](../backend/src/config.rs), [`main.rs`](../backend/src/main.rs).
 
 Un établissement n'a **accès à aucune donnée de patient tant que l'équipe LaafiCare ne l'a pas validé**.

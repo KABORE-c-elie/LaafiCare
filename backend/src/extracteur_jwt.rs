@@ -146,44 +146,168 @@ impl FromRequestParts<AppState> for IntermediaireProfessionnel {
     type Rejection = RefusAuthentification;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let TypedHeader(Authorization(bearer)) = parts
-            .extract::<TypedHeader<Authorization<Bearer>>>()
-            .await
-            .map_err(|_| RefusAuthentification::IdentifiantsAbsents)?;
+        let (compte_id, iat) =
+            intermediaire(parts, state, SorteJeton::SecondFacteurProfessionnel, "professionnel").await?;
+        Ok(IntermediaireProfessionnel { compte_id, iat })
+    }
+}
 
-        // Sorte `second_facteur_professionnel` uniquement (J1), 5 min.
+/// Jeton intermédiaire du second facteur administrateur (étape 3.6.4, A5) :
+/// mêmes contrôles que pour un professionnel, sur un compte administrateur.
+#[derive(Debug)]
+pub struct IntermediaireAdministrateur {
+    pub compte_id: Uuid,
+    /// Consommé par `auth_professionnel::terminer_connexion` (F5 b).
+    pub iat: u64,
+}
+
+impl FromRequestParts<AppState> for IntermediaireAdministrateur {
+    type Rejection = RefusAuthentification;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        let (compte_id, iat) =
+            intermediaire(parts, state, SorteJeton::SecondFacteurAdministrateur, "administrateur_laaficare").await?;
+        Ok(IntermediaireAdministrateur { compte_id, iat })
+    }
+}
+
+/// En-tête `Authorization: Bearer …` ; absent ou mal formé : 401 sans code
+/// d'erreur (RFC 6750 §3).
+async fn bearer_de(parts: &mut Parts) -> Result<Bearer, RefusAuthentification> {
+    let TypedHeader(Authorization(bearer)) = parts
+        .extract::<TypedHeader<Authorization<Bearer>>>()
+        .await
+        .map_err(|_| RefusAuthentification::IdentifiantsAbsents)?;
+    Ok(bearer)
+}
+
+/// Contrôles communs aux deux jetons intermédiaires (A5). `sorte` : la
+/// seule sorte acceptée (J1), 5 min ; `type_compte` : valeur de
+/// `compte.type_compte`. Renvoie le compte et l'`iat` du jeton.
+async fn intermediaire(
+    parts: &mut Parts,
+    state: &AppState,
+    sorte: SorteJeton,
+    type_compte: &'static str,
+) -> Result<(Uuid, u64), RefusAuthentification> {
+    let bearer = bearer_de(parts).await?;
+    let claims = state.jwt.verifier(bearer.token(), sorte).map_err(|_| RefusAuthentification::JetonInvalide)?;
+    let iat = i64::try_from(claims.iat).map_err(|_| RefusAuthentification::JetonInvalide)?;
+
+    // En une requête, avant tout essai de code :
+    // - compte du bon type, actif, même `version_jeton` (une
+    //   réinitialisation du mot de passe invalide le jeton) ;
+    // - email toujours vérifié (R0 : il a pu changer dans les 5 min) ;
+    // - jeton jamais consommé (F5 b) : `iat` plus grand que le dernier
+    //   jeton consommé. Les deux valeurs viennent de l'horloge du
+    //   serveur Rust (migration 0018). La consommation elle-même est
+    //   faite plus tard, en une requête conditionnelle qui couvre deux
+    //   requêtes simultanées.
+    // Un refus est un jeton invalide (RFC 6750 §3.1) : 401, et
+    // l'application revient à l'écran de connexion.
+    let compte: Option<Uuid> = sqlx::query_scalar(
+        "SELECT c.id FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
+         WHERE c.id = $1 AND c.type_compte = $4 AND c.statut = 'actif' AND c.version_jeton = $2 \
+           AND u.email_verifie_le IS NOT NULL \
+           AND (c.second_facteur_dernier_iat IS NULL OR c.second_facteur_dernier_iat < $3)",
+    )
+    .bind(claims.sub)
+    .bind(claims.ver)
+    .bind(iat)
+    .bind(type_compte)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| RefusAuthentification::Interne(e.to_string()))?;
+    let compte_id = compte.ok_or(RefusAuthentification::JetonInvalide)?;
+    Ok((compte_id, claims.iat))
+}
+
+/// Jeton de réenrôlement d'un administrateur (étape 3.6.4, A4, migration
+/// 0019) : ne sert qu'aux routes `reenrolement/*`.
+#[derive(Debug)]
+pub struct ReenrolementAdministrateur {
+    pub compte_id: Uuid,
+}
+
+impl FromRequestParts<AppState> for ReenrolementAdministrateur {
+    type Rejection = RefusAuthentification;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        let bearer = bearer_de(parts).await?;
         let claims = state
             .jwt
-            .verifier(bearer.token(), SorteJeton::SecondFacteurProfessionnel)
+            .verifier(bearer.token(), SorteJeton::ReenrolementAdministrateur)
             .map_err(|_| RefusAuthentification::JetonInvalide)?;
-        let iat = i64::try_from(claims.iat).map_err(|_| RefusAuthentification::JetonInvalide)?;
 
-        // En une requête, avant tout essai de code :
-        // - compte professionnel actif, même `version_jeton` (une
-        //   réinitialisation du mot de passe invalide le jeton) ;
-        // - email toujours vérifié (R0 : il a pu changer dans les 5 min) ;
-        // - jeton jamais consommé (F5 b) : `iat` plus grand que le dernier
-        //   jeton consommé. Les deux valeurs viennent de l'horloge du
-        //   serveur Rust (migration 0018). La consommation elle-même est
-        //   faite plus tard, en une requête conditionnelle qui couvre deux
-        //   requêtes simultanées.
-        // Un refus est un jeton invalide (RFC 6750 §3.1) : 401, et
-        // l'application revient à l'écran de connexion.
+        // À chaque requête : compte administrateur actif, même version,
+        // email vérifié, **aucun TOTP actif** (le jeton s'use donc de
+        // lui-même dès la confirmation, A4), et **fenêtre de réenrôlement
+        // en cours**, comparée à `now()` de PostgreSQL qui l'a calculée
+        // (une seule horloge, migration 0019). Une demande de TOTP en
+        // attente n'est pas un TOTP actif : `commencer` peut être relancé.
         let compte: Option<Uuid> = sqlx::query_scalar(
             "SELECT c.id FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
-             WHERE c.id = $1 AND c.type_compte = 'professionnel' AND c.statut = 'actif' AND c.version_jeton = $2 \
-               AND u.email_verifie_le IS NOT NULL \
-               AND (c.second_facteur_dernier_iat IS NULL OR c.second_facteur_dernier_iat < $3)",
+             WHERE c.id = $1 AND c.type_compte = 'administrateur_laaficare' AND c.statut = 'actif' \
+               AND c.version_jeton = $2 AND u.email_verifie_le IS NOT NULL \
+               AND c.reenrolement_autorise_jusqu_au > now() \
+               AND NOT EXISTS (SELECT 1 FROM second_facteur_totp t WHERE t.compte_id = c.id AND t.statut = 'actif')",
         )
         .bind(claims.sub)
         .bind(claims.ver)
-        .bind(iat)
         .fetch_optional(&state.db)
         .await
         .map_err(|e| RefusAuthentification::Interne(e.to_string()))?;
         let compte_id = compte.ok_or(RefusAuthentification::JetonInvalide)?;
+        Ok(ReenrolementAdministrateur { compte_id })
+    }
+}
 
-        Ok(IntermediaireProfessionnel { compte_id, iat: claims.iat })
+/// Administrateur LaafiCare authentifié (étape 3.6.4, A6), pour les routes
+/// réservées à l'équipe (décisions sur les structures, étape 3.8). Aucune
+/// route ne l'utilise encore : testé sur ses seules requêtes.
+// `expect` plutôt qu'`allow` (référence Rust, attribut `expect`, Rust
+// 1.81) : dès qu'une route l'utilisera (étape 3.8), le compilateur
+// signalera que l'attribut est devenu inutile. Hors tests seulement : les
+// tests le construisent.
+#[cfg_attr(not(test), expect(dead_code, reason = "première route administrateur à l'étape 3.8"))]
+#[derive(Debug)]
+pub struct AdministrateurAuthentifie {
+    pub compte_id: Uuid,
+}
+
+impl FromRequestParts<AppState> for AdministrateurAuthentifie {
+    type Rejection = RefusAuthentification;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        let bearer = bearer_de(parts).await?;
+        let claims = state
+            .jwt
+            .verifier(bearer.token(), SorteJeton::Administrateur)
+            .map_err(|_| RefusAuthentification::JetonInvalide)?;
+        let session_id = claims.sid.ok_or(RefusAuthentification::JetonInvalide)?;
+
+        // À chaque requête, comme pour le patient (session du `sid` ouverte,
+        // compte actif, même version), plus :
+        // - email toujours vérifié (R0) ;
+        // - **TOTP actif** (Y4) : un administrateur dont le TOTP vient
+        //   d'être désactivé est refusé aussitôt, même avec un jeton
+        //   d'accès encore valable.
+        let compte: Option<Uuid> = sqlx::query_scalar(
+            "SELECT c.id FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
+                                     JOIN session s ON s.compte_id = c.id \
+             WHERE c.id = $1 AND c.type_compte = 'administrateur_laaficare' AND c.statut = 'actif' \
+               AND c.version_jeton = $2 AND u.email_verifie_le IS NOT NULL \
+               AND s.id = $3 AND s.revoquee_le IS NULL AND s.expire_le > now() \
+               AND EXISTS (SELECT 1 FROM second_facteur_totp t WHERE t.compte_id = c.id AND t.statut = 'actif')",
+        )
+        .bind(claims.sub)
+        .bind(claims.ver)
+        .bind(session_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| RefusAuthentification::Interne(e.to_string()))?;
+        let compte_id = compte.ok_or(RefusAuthentification::JetonInvalide)?;
+        Ok(AdministrateurAuthentifie { compte_id })
     }
 }
 
@@ -491,6 +615,127 @@ mod tests {
             .await
             .map_err(IntoResponse::into_response);
         assert!(refuse(refus));
+    }
+
+    /// Extracteurs administrateur (étape 3.6.4) : jeton intermédiaire,
+    /// jeton de réenrôlement (fenêtre en cours, aucun TOTP actif) et jeton
+    /// d'accès (session ouverte, TOTP actif). Tout refus : 401.
+    #[sqlx::test]
+    #[ignore]
+    async fn extracteurs_administrateur_en_base(pool: PgPool) {
+        use laaficare_backend::{mot_de_passe, totp};
+
+        const MOT_DE_PASSE: &str = "Exemple#2026";
+        let state = etat(pool);
+        let creer = |telephone: &'static str, email: &'static str, type_compte: &'static str| {
+            let db = state.db.clone();
+            async move {
+                let utilisateur_id: Uuid =
+                    sqlx::query_scalar("INSERT INTO utilisateur (telephone, email) VALUES ($1, $2) RETURNING id")
+                        .bind(telephone)
+                        .bind(email)
+                        .fetch_one(&db)
+                        .await
+                        .unwrap();
+                sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1")
+                    .bind(utilisateur_id)
+                    .execute(&db)
+                    .await
+                    .unwrap();
+                let compte_id: Uuid = sqlx::query_scalar(
+                    "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, $2, $3) RETURNING id",
+                )
+                .bind(utilisateur_id)
+                .bind(type_compte)
+                .bind(mot_de_passe::hacher(MOT_DE_PASSE).unwrap())
+                .fetch_one(&db)
+                .await
+                .unwrap();
+                compte_id
+            }
+        };
+        let administrateur = creer("+22670021020", "adm.extr@example.org", "administrateur_laaficare").await;
+        let professionnel = creer("+22670021021", "pro.extr@example.org", "professionnel").await;
+        let fenetre = |minutes: i32| {
+            let db = state.db.clone();
+            async move {
+                sqlx::query(
+                    "UPDATE compte SET reenrolement_autorise_jusqu_au = now() + make_interval(mins => $2) WHERE id = $1",
+                )
+                .bind(administrateur)
+                .bind(minutes)
+                .execute(&db)
+                .await
+                .unwrap();
+            }
+        };
+        let refuse = |resultat: Result<Uuid, Response>| resultat.is_err_and(|r| r.status() == StatusCode::UNAUTHORIZED);
+        let en_tete = |sorte: SorteJeton, compte_id: Uuid, sid: Option<Uuid>| {
+            format!("Bearer {}", state.jwt.emettre(sorte, compte_id, 0, None, sid).unwrap())
+        };
+        let st = &state;
+        let inter = |valeur: String| async move {
+            IntermediaireAdministrateur::from_request_parts(&mut parts(Some(&valeur)), st)
+                .await
+                .map(|e| e.compte_id)
+                .map_err(IntoResponse::into_response)
+        };
+        let reenrolement = |valeur: String| async move {
+            ReenrolementAdministrateur::from_request_parts(&mut parts(Some(&valeur)), st)
+                .await
+                .map(|e| e.compte_id)
+                .map_err(IntoResponse::into_response)
+        };
+        let acces = |valeur: String| async move {
+            AdministrateurAuthentifie::from_request_parts(&mut parts(Some(&valeur)), st)
+                .await
+                .map(|e| e.compte_id)
+                .map_err(IntoResponse::into_response)
+        };
+
+        // Jeton intermédiaire : accepté pour l'administrateur ; refusé pour
+        // un professionnel (mauvais type de compte) et pour un jeton
+        // intermédiaire professionnel (mauvaise sorte).
+        assert_eq!(inter(en_tete(SorteJeton::SecondFacteurAdministrateur, administrateur, None)).await.unwrap(), administrateur);
+        assert!(refuse(inter(en_tete(SorteJeton::SecondFacteurAdministrateur, professionnel, None)).await));
+        assert!(refuse(inter(en_tete(SorteJeton::SecondFacteurProfessionnel, administrateur, None)).await));
+
+        // Réenrôlement : refusé sans fenêtre, accepté pendant, refusé après.
+        let jeton_reenrolement = en_tete(SorteJeton::ReenrolementAdministrateur, administrateur, None);
+        assert!(refuse(reenrolement(jeton_reenrolement.clone()).await), "sans fenêtre");
+        fenetre(10).await;
+        assert_eq!(reenrolement(jeton_reenrolement.clone()).await.unwrap(), administrateur);
+        fenetre(-1).await;
+        assert!(refuse(reenrolement(jeton_reenrolement.clone()).await), "fenêtre expirée");
+        fenetre(10).await;
+
+        // Jeton d'accès sans TOTP actif : refusé (Y4).
+        let session_id = session::ouvrir(&state.db, administrateur, None).await.unwrap().session_id;
+        let jeton_acces = en_tete(SorteJeton::Administrateur, administrateur, Some(session_id));
+        assert!(refuse(acces(jeton_acces.clone()).await), "aucun TOTP actif");
+
+        // TOTP activé : le jeton de réenrôlement tombe, le jeton d'accès passe.
+        let cle = laaficare_backend::config::CleTotp::depuis_octets([7; 32]);
+        let activation = totp::commencer_activation(&state.db, cle.octets(), administrateur, MOT_DE_PASSE).await.unwrap();
+        let code = totp_rs::Builder::new()
+            .with_secret(totp_rs::Secret::try_from_base32(&activation.cle_base32).unwrap())
+            .build()
+            .unwrap()
+            .generate(jsonwebtoken::get_current_timestamp())
+            .to_string();
+        totp::confirmer_activation(&state.db, cle.octets(), administrateur, &code, totp::Autorisation::ReenrolementAdministrateur)
+            .await
+            .unwrap();
+        assert!(refuse(reenrolement(jeton_reenrolement).await), "TOTP actif");
+        assert_eq!(acces(jeton_acces.clone()).await.unwrap(), administrateur);
+
+        // Session fermée : refusé aussitôt.
+        sqlx::query("UPDATE session SET revoquee_le = now(), motif_revocation = 'deconnexion' WHERE id = $1")
+            .bind(session_id)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        assert!(refuse(acces(jeton_acces).await), "session fermée");
     }
 
     /// Un jeton d'accès encore valide (moins de 15 min) dont la session a
