@@ -48,6 +48,7 @@ erDiagram
 | nom, prénom | facultatifs au tout début (voir ci-dessous) |
 | téléphone | **obligatoire et unique** : une seule personne par numéro, au format international (`+226…`) |
 | email | facultatif, unique sans tenir compte des majuscules |
+| email vérifié le | date à laquelle la personne a prouvé qu'elle reçoit les messages de cette adresse ; vide sinon. Un compte professionnel ou administrateur dont l'email n'est pas vérifié ne peut pas se connecter. **Garanti par la base** : une identité ne naît jamais vérifiée, et tout changement d'email (même de majuscules) efface la vérification (migration 0016). |
 | code SMS en cours | son empreinte et sa date d'expiration (5 minutes) |
 
 Une identité est créée dès qu'un numéro inconnu demande un code SMS pour s'inscrire, avec le téléphone seul. Le nom et le prénom sont ajoutés quand l'inscription est validée.
