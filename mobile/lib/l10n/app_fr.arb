@@ -83,6 +83,18 @@
   "@erreurSessionFermee": {
     "description": "Session fermée par le serveur (renouvellement refusé, docs/api.md §1.7)."
   },
+  "ecranAVenir": "Cet écran n'est pas encore disponible.",
+  "@ecranAVenir": {
+    "description": "Écran en attente de sa maquette."
+  },
+  "accueilTitre": "Accueil",
+  "@accueilTitre": {
+    "description": "Titre de l'accueil (provisoire)."
+  },
+  "boutonSeDeconnecter": "Se déconnecter",
+  "@boutonSeDeconnecter": {
+    "description": "Déconnexion de cet appareil (accueil provisoire)."
+  },
   "telephoneVide": "Saisissez votre numéro de téléphone.",
   "@telephoneVide": {
     "description": "Contrôle local avant l'envoi : champ téléphone vide."
