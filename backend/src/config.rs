@@ -1,6 +1,9 @@
 //! Lecture de la configuration du serveur depuis les variables d'environnement.
 
 use std::env;
+use std::fmt;
+
+use zeroize::Zeroizing;
 
 // Pas de `#[derive(Debug)]` volontaire : `database_url` contient le mot de
 // passe de la base. Sans `Debug`, un `{:?}` oublié dans un log ne peut pas le
@@ -12,7 +15,29 @@ pub struct Config {
     /// Clé AES-256 du chiffrement des secrets TOTP (décision Z4), distincte
     /// du secret JWT. Sa perte rend tous les TOTP inutilisables : en
     /// production, elle est sauvegardée à part (section 14).
-    pub totp_cle_chiffrement: [u8; 32],
+    pub totp_cle_chiffrement: CleTotp,
+}
+
+/// Clé AES-256 des secrets TOTP (décision F6, 2026-10-15). `Debug` affiche
+/// `***` ; ni `Display` ni `Serialize` : la seule lecture est `octets()`, au
+/// moment de chiffrer ou de déchiffrer. Effacée de la mémoire à sa
+/// libération (`Zeroizing`, crate `zeroize`).
+pub struct CleTotp(Zeroizing<[u8; 32]>);
+
+impl CleTotp {
+    pub fn depuis_octets(octets: [u8; 32]) -> Self {
+        CleTotp(Zeroizing::new(octets))
+    }
+
+    pub fn octets(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for CleTotp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("***")
+    }
 }
 
 // `thiserror` (déjà dans le Cargo.toml) : chaque variante porte le message
@@ -88,13 +113,14 @@ fn valider_secret_jwt(valeur: String) -> Result<String, ConfigError> {
 // standard, sans nouvelle dépendance. Les caractères sont vérifiés un par un
 // avant `from_str_radix`, qui accepterait un « + » initial (doc
 // `u8::from_str_radix`).
-fn decoder_cle_totp(valeur: &str) -> Result<[u8; 32], ConfigError> {
+fn decoder_cle_totp(valeur: &str) -> Result<CleTotp, ConfigError> {
     let octets = valeur.as_bytes();
     if octets.len() != 64 || !octets.iter().all(u8::is_ascii_hexdigit) {
         return Err(ConfigError::CleTotpInvalide);
     }
-    let mut cle = [0u8; 32];
-    for (octet, paire) in cle.iter_mut().zip(octets.chunks_exact(2)) {
+    // Décodée directement dans le `Zeroizing` : pas de copie intermédiaire.
+    let mut cle = CleTotp(Zeroizing::new([0u8; 32]));
+    for (octet, paire) in cle.0.iter_mut().zip(octets.chunks_exact(2)) {
         // Toujours de l'ASCII hexadécimal ici : ni l'UTF-8 ni la conversion
         // ne peuvent échouer.
         let paire = std::str::from_utf8(paire).map_err(|_| ConfigError::CleTotpInvalide)?;
@@ -110,9 +136,21 @@ mod tests {
     #[test]
     fn cle_totp_hexadecimale_decodee() {
         let cle = decoder_cle_totp(&"0aFf".repeat(16)).unwrap();
-        assert_eq!(cle[0], 0x0a);
-        assert_eq!(cle[1], 0xff);
-        assert_eq!(cle[31], 0xff);
+        assert_eq!(cle.octets()[0], 0x0a);
+        assert_eq!(cle.octets()[1], 0xff);
+        assert_eq!(cle.octets()[31], 0xff);
+    }
+
+    /// Décision F6 : la clé n'apparaît jamais dans `Debug`, ni en octets ni
+    /// en hexadécimal.
+    #[test]
+    fn cle_totp_masquee_dans_debug() {
+        let hexadecimal = "3c".repeat(32);
+        let cle = decoder_cle_totp(&hexadecimal).unwrap();
+        let affichage = format!("{cle:?}");
+        assert_eq!(affichage, "***");
+        assert!(!affichage.contains(&hexadecimal) && !affichage.contains("60"), "{affichage}");
+        assert_eq!(format!("{:?}", CleTotp::depuis_octets([7; 32])), "***");
     }
 
     #[test]

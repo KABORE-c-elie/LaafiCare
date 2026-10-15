@@ -192,6 +192,7 @@ Résumé :
 | POST | `/api/sessions/deconnexion` | tout le monde, avec un jeton de renouvellement | fonctionne (section 1.7) |
 | POST | `/api/sessions/deconnexion-partout` | jeton `laaficare:patient` | fonctionne (section 1.7) |
 | POST | `/api/professionnels/connexion` | tout le monde | fonctionne (section 2.4) ; pas encore testable sans compte professionnel (étapes 3.6.5 et 3.7) |
+| POST | `/api/professionnels/connexion/second-facteur` | jeton intermédiaire `laaficare:second_facteur_professionnel` | fonctionne (section 2.4) ; même remarque |
 | POST | `/api/assurance-munaseb/remboursements/simuler-acte` | jeton en exercice, agent MUNASEB | **hors service** |
 | GET | `/api/assurance-munaseb/remboursements` | jeton en exercice, agent MUNASEB | **hors service** |
 | GET | `/api/assurance-munaseb/remboursements/{id}` | jeton en exercice, agent MUNASEB | **hors service** |
@@ -594,7 +595,7 @@ L'email est comparé sans les espaces autour et sans tenir compte des majuscules
 | Code | `code` | Cas |
 |---|---|---|
 | 200 | — | `{"etape": "complete", "jeton_acces", "expire_dans", "jeton_renouvellement"}` (section 1.7) : session ouverte de 12 h au plus, 1 h sans renouvellement ; jeton d'accès `laaficare:professionnel_sans_affectation`, qui servira à lister ses établissements et à en choisir un (étape 3.9) |
-| 200 | — | `{"etape": "second_facteur", "jeton_intermediaire": "<JWT>"}` : second facteur actif ; jeton `laaficare:second_facteur_professionnel` de 5 min, à échanger contre la paire avec le code (route prévue, étape 3.6.3). Aucune session n'est encore ouverte. |
+| 200 | — | `{"etape": "second_facteur", "jeton_intermediaire": "<JWT>"}` : second facteur actif ; jeton `laaficare:second_facteur_professionnel` de 5 min, à échanger contre la paire avec le code (route suivante). Aucune session n'est encore ouverte. |
 | 401 | `identifiants_invalides` | tous les refus : email inconnu, mauvais mot de passe, compte verrouillé ou désactivé ; message « Email ou mot de passe incorrect. », même temps de réponse |
 | 403 | `email_non_verifie` | mot de passe correct, mais email jamais vérifié (ou plus vérifié après un changement) ; message « Votre email n'est pas encore vérifié. Ouvrez le lien que nous vous avons envoyé, ou demandez-en un nouveau. » |
 | 500 | `erreur_interne` | panne |
@@ -603,6 +604,38 @@ L'email est comparé sans les espaces autour et sans tenir compte des majuscules
 - Le **403** n'arrive qu'après un mot de passe correct : seul le détenteur du mot de passe l'apprend. La vérification de l'email (lien valable 24 h) arrive à l'étape 3.7 ; la route qui renvoie un lien aussi.
 - **Verrouillage** : après 5 échecs, 15 minutes ; la réponse reste 401 `identifiants_invalides`. La récupération du mot de passe se fera par email (étape 3.12).
 - **Pas encore testable dans Postman** : aucune route ne crée de compte professionnel avant l'outil du premier administrateur (étape 3.6.5) et la création d'un établissement (étape 3.7).
+
+#### `POST /api/professionnels/connexion/second-facteur`
+
+Second temps de la connexion, quand la première étape a répondu `"etape": "second_facteur"`.
+
+- **Appelant** : en-tête `Authorization: Bearer <jeton_intermediaire>` (le jeton reçu à la première étape, valable 5 minutes).
+- **Corps** : **un seul** des deux champs :
+
+```json
+{ "code": "123456" }
+```
+
+ou
+
+```json
+{ "code_secours": "ABCDE-FGHIJ" }
+```
+
+- **Réponses** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 200 | — | `{"etape": "complete", "jeton_acces", "expire_dans", "jeton_renouvellement"}` (section 1.7) : session ouverte, jeton d'accès `laaficare:professionnel_sans_affectation` |
+| 401 | `code_invalide` | code faux, code de secours faux ou déjà utilisé, ou compte verrouillé ; message « Code incorrect. », une seule réponse dans tous ces cas |
+| 401 | `jeton_invalide` | jeton intermédiaire expiré, d'une autre sorte, **déjà utilisé**, émis avant une réinitialisation du mot de passe, compte désactivé, ou email plus vérifié |
+| 422 | `donnees_invalides` | les deux champs, ou aucun |
+| 500 | `erreur_interne` | panne |
+
+- **Le jeton intermédiaire ne sert qu'une fois** : après un succès, il est refusé, même avec un autre code valable. Un **code faux ne le consomme pas** : la personne peut retaper son code tant que le jeton est valable (5 minutes) et que le compte n'est pas verrouillé.
+- **Verrouillage** : chaque code ou code de secours faux compte dans le **même compteur que le mot de passe** (5 essais, puis 15 minutes). Obtenir le jeton intermédiaire compte aussi : le mot de passe correct ne remet pas le compteur à zéro tant que le code n'est pas donné.
+- Sur 401 `code_invalide` : l'application vide le champ du code et laisse la personne réessayer. Sur 401 `jeton_invalide` : elle revient à l'écran de connexion.
+- **Limite connue** : une nouvelle connexion du même compte dans **la même seconde** qu'un second facteur réussi donne un jeton intermédiaire refusé à tort (401 `jeton_invalide`) ; la personne se reconnecte une seconde plus tard.
 
 ---
 
@@ -617,7 +650,7 @@ L'email est comparé sans les espaces autour et sans tenir compte des majuscules
 | `chemin_invalide` | 400 | routes avec `{id}` |
 | `parametre_invalide` | 400 | liste des remboursements |
 | `telephone_invalide` | 422 | routes patient |
-| `code_invalide` | 401 | inscription, réinitialisation |
+| `code_invalide` | 401 | inscription, réinitialisation, second facteur professionnel |
 | `trop_de_demandes` | 429 | demande de code (avec `Retry-After`), inscription et réinitialisation (sans) |
 | `telephone_deja_utilise` | 409 | inscription |
 | `telephone_inconnu` | 404 | réinitialisation |
@@ -641,7 +674,7 @@ Rien de cette section n'existe dans le code. **Les chemins, corps et réponses n
 ### 4.1 Authentification professionnelle et administrateur (étape 3.6)
 
 - ✅ Connexion professionnelle : **codée**, section 2.4.
-- **Second temps de la connexion** (étape 3.6.3) : la route qui reçoit le code TOTP ou un code de secours, avec le jeton intermédiaire, et rend la paire de jetons. Vaudra aussi pour le patient qui aura activé le TOTP.
+- ✅ Second temps de la connexion professionnelle : **codé**, section 2.4. La même forme vaudra pour le patient qui aura activé le TOTP (après l'étape 3.11).
 - Connexion administrateur LaafiCare (étape 3.6.4) : même forme, TOTP toujours exigé ; un administrateur sans TOTP actif reçoit un jeton de réenrôlement qui ne sert qu'à en activer un.
 
 ### 4.2 Second facteur TOTP

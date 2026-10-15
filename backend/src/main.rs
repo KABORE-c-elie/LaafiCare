@@ -12,7 +12,7 @@ use axum::{Json, Router, extract::State, http::StatusCode, routing::get, routing
 use serde::Serialize;
 use sqlx::PgPool;
 
-use laaficare_backend::config::Config;
+use laaficare_backend::config::{CleTotp, Config};
 use laaficare_backend::db;
 use laaficare_backend::jwt::JwtService;
 use laaficare_backend::sms::{self, SmsSender};
@@ -27,11 +27,16 @@ use laaficare_backend::sms::{self, SmsSender};
 // `pub(crate)` sur la struct et ses champs : `routes_patient` (autre
 // module du même binaire) doit pouvoir construire un handler `State<AppState>`
 // et lire `state.db`/`state.jwt`/`state.sms`.
+//
+// Pas de `Debug`, volontairement (décision F6) : l'état contient la clé TOTP
+// et le secret JWT. `cle_totp` derrière un `Arc` : une seule copie de la
+// clé, partagée entre les requêtes, effacée de la mémoire à l'arrêt.
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) db: PgPool,
     pub(crate) jwt: JwtService,
     pub(crate) sms: Arc<dyn SmsSender>,
+    pub(crate) cle_totp: Arc<CleTotp>,
 }
 
 // Struct typée plutôt qu'un `json!` en ligne : le compilateur fixe le format
@@ -157,13 +162,14 @@ async fn main() {
         .route("/api/sessions/deconnexion", post(routes_session::deconnexion))
         .route("/api/sessions/deconnexion-partout", post(routes_session::deconnexion_partout))
         .route("/api/professionnels/connexion", post(routes_professionnel::se_connecter))
+        .route("/api/professionnels/connexion/second-facteur", post(routes_professionnel::second_facteur))
         .route("/api/patients/otp", post(routes_patient::demander_otp))
         .route("/api/patients/inscription", post(routes_patient::creer_compte))
         .route(
             "/api/patients/mot-de-passe/reinitialiser",
             post(routes_patient::reinitialiser_mot_de_passe),
         )
-        .with_state(AppState { db: pool, jwt, sms });
+        .with_state(AppState { db: pool, jwt, sms, cle_totp: Arc::new(config.totp_cle_chiffrement) });
 
     // 127.0.0.1 : cohérent avec PostgreSQL exposé en local seulement. À
     // élargir quand l'app mobile aura besoin d'un accès depuis le réseau.

@@ -132,6 +132,61 @@ impl FromRequestParts<AppState> for PatientAuthentifie {
     }
 }
 
+/// Jeton intermédiaire du second facteur professionnel (étape 3.6.3) :
+/// mot de passe correct, code TOTP ou code de secours encore à saisir.
+#[derive(Debug)]
+pub struct IntermediaireProfessionnel {
+    pub compte_id: Uuid,
+    /// Date d'émission du jeton : `auth_professionnel::terminer_connexion`
+    /// le consomme (usage unique, F5 b).
+    pub iat: u64,
+}
+
+impl FromRequestParts<AppState> for IntermediaireProfessionnel {
+    type Rejection = RefusAuthentification;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        let TypedHeader(Authorization(bearer)) = parts
+            .extract::<TypedHeader<Authorization<Bearer>>>()
+            .await
+            .map_err(|_| RefusAuthentification::IdentifiantsAbsents)?;
+
+        // Sorte `second_facteur_professionnel` uniquement (J1), 5 min.
+        let claims = state
+            .jwt
+            .verifier(bearer.token(), SorteJeton::SecondFacteurProfessionnel)
+            .map_err(|_| RefusAuthentification::JetonInvalide)?;
+        let iat = i64::try_from(claims.iat).map_err(|_| RefusAuthentification::JetonInvalide)?;
+
+        // En une requête, avant tout essai de code :
+        // - compte professionnel actif, même `version_jeton` (une
+        //   réinitialisation du mot de passe invalide le jeton) ;
+        // - email toujours vérifié (R0 : il a pu changer dans les 5 min) ;
+        // - jeton jamais consommé (F5 b) : `iat` plus grand que le dernier
+        //   jeton consommé. Les deux valeurs viennent de l'horloge du
+        //   serveur Rust (migration 0018). La consommation elle-même est
+        //   faite plus tard, en une requête conditionnelle qui couvre deux
+        //   requêtes simultanées.
+        // Un refus est un jeton invalide (RFC 6750 §3.1) : 401, et
+        // l'application revient à l'écran de connexion.
+        let compte: Option<Uuid> = sqlx::query_scalar(
+            "SELECT c.id FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
+             WHERE c.id = $1 AND c.type_compte = 'professionnel' AND c.statut = 'actif' AND c.version_jeton = $2 \
+               AND u.email_verifie_le IS NOT NULL \
+               AND (c.second_facteur_dernier_iat IS NULL OR c.second_facteur_dernier_iat < $3)",
+        )
+        .bind(claims.sub)
+        .bind(claims.ver)
+        .bind(iat)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| RefusAuthentification::Interne(e.to_string()))?;
+        let compte_id = compte.ok_or(RefusAuthentification::JetonInvalide)?;
+
+        Ok(IntermediaireProfessionnel { compte_id, iat: claims.iat })
+    }
+}
+
 /// Agent MUNASEB authentifié : jeton valide, rôle `agent_assurance_munaseb`,
 /// et compte agent toujours présent en base.
 #[derive(Debug)]
@@ -194,7 +249,12 @@ mod tests {
     const SECRET: &str = "secret-de-test-long-de-32-caracteres!";
 
     fn etat(db: PgPool) -> AppState {
-        AppState { db, jwt: JwtService::new(SECRET), sms: Arc::new(SmsSenderConsole) }
+        AppState {
+            db,
+            jwt: JwtService::new(SECRET),
+            sms: Arc::new(SmsSenderConsole),
+            cle_totp: Arc::new(laaficare_backend::config::CleTotp::depuis_octets([7; 32])),
+        }
     }
 
     fn parts(authorization: Option<&str>) -> Parts {
@@ -348,6 +408,89 @@ mod tests {
         modifier("UPDATE compte SET statut = 'desactive' WHERE id = $1").await;
         let refus = extraire_patient(&state, Some(&nouveau)).await.unwrap_err();
         assert_eq!(refus.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// Extracteur du jeton intermédiaire professionnel : accepté seulement
+    /// pour un compte professionnel actif, même version, email vérifié, et
+    /// jamais consommé ; tout autre cas 401.
+    #[sqlx::test]
+    #[ignore]
+    async fn intermediaire_professionnel_en_base(pool: PgPool) {
+        let state = etat(pool);
+        let utilisateur_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO utilisateur (telephone, email) VALUES ('+22670021010', 'inter.pro@example.org') RETURNING id",
+        )
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1")
+            .bind(utilisateur_id)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        let compte_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'professionnel', 'x') RETURNING id",
+        )
+        .bind(utilisateur_id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+        let jeton = state.jwt.emettre(SorteJeton::SecondFacteurProfessionnel, compte_id, 0, None, None).unwrap();
+        let iat = state.jwt.verifier(&jeton, SorteJeton::SecondFacteurProfessionnel).unwrap().iat as i64;
+        let en_tete = format!("Bearer {jeton}");
+        let extraire_inter = || async {
+            IntermediaireProfessionnel::from_request_parts(&mut parts(Some(&en_tete)), &state)
+                .await
+                .map_err(IntoResponse::into_response)
+        };
+        let executer = |sql: &'static str, valeur: i64| {
+            let db = state.db.clone();
+            async move { sqlx::query(sql).bind(compte_id).bind(valeur).execute(&db).await.unwrap() }
+        };
+        let refuse = |resultat: Result<IntermediaireProfessionnel, Response>| {
+            resultat.is_err_and(|r| r.status() == StatusCode::UNAUTHORIZED)
+        };
+
+        // Accepté.
+        let accepte = extraire_inter().await.unwrap();
+        assert_eq!((accepte.compte_id, accepte.iat as i64), (compte_id, iat));
+
+        // Usage unique : un jeton dont l'`iat` a déjà été consommé est refusé
+        // avant tout essai de code ; un `iat` plus récent que le dernier
+        // consommé est accepté.
+        executer("UPDATE compte SET second_facteur_dernier_iat = $2 WHERE id = $1", iat).await;
+        assert!(refuse(extraire_inter().await), "jeton déjà consommé");
+        executer("UPDATE compte SET second_facteur_dernier_iat = $2 WHERE id = $1", iat - 1).await;
+        assert!(extraire_inter().await.is_ok(), "jeton plus récent que le dernier consommé");
+
+        // Version augmentée, email plus vérifié, compte désactivé : refusés.
+        executer("UPDATE compte SET version_jeton = version_jeton + $2 WHERE id = $1", 1).await;
+        assert!(refuse(extraire_inter().await), "version");
+        executer("UPDATE compte SET version_jeton = version_jeton - $2 WHERE id = $1", 1).await;
+        sqlx::query("UPDATE utilisateur SET email_verifie_le = NULL WHERE id = $1")
+            .bind(utilisateur_id)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        assert!(refuse(extraire_inter().await), "email plus vérifié");
+        sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1")
+            .bind(utilisateur_id)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE compte SET statut = 'desactive' WHERE id = $1")
+            .bind(compte_id)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        assert!(refuse(extraire_inter().await), "compte désactivé");
+
+        // Une autre sorte de jeton (ici patient) : refusée sans regarder la base.
+        let patient = state.jwt.emettre(SorteJeton::Patient, compte_id, 0, None, Some(Uuid::from_u128(9))).unwrap();
+        let refus = IntermediaireProfessionnel::from_request_parts(&mut parts(Some(&format!("Bearer {patient}"))), &state)
+            .await
+            .map_err(IntoResponse::into_response);
+        assert!(refuse(refus));
     }
 
     /// Un jeton d'accès encore valide (moins de 15 min) dont la session a

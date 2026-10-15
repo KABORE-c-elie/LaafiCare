@@ -142,6 +142,15 @@ Les professionnels se connectent par **email**, les patients par **téléphone**
 
 **À la connexion professionnelle**, les mêmes règles que pour le patient : une seule réponse pour un email inconnu, un mauvais mot de passe, un compte bloqué ou désactivé, avec le même temps de réponse ; verrouillage après 5 essais. Le message « email pas encore vérifié » n'apparaît qu'après un mot de passe correct : seul le détenteur du mot de passe l'apprend. En cas de panne, la réponse ne contient jamais l'email ni le mot de passe saisis, et les journaux non plus.
 
+**Second temps de la connexion professionnelle** (quand le second facteur est actif) : après le mot de passe, la personne reçoit un jeton intermédiaire valable 5 minutes, qui ne sert qu'à envoyer son code (de l'application d'authentification, ou de secours). Règles :
+
+- une seule réponse, « Code incorrect. », pour un code faux, un code de secours faux ou un compte bloqué ;
+- chaque code faux compte dans le **même verrouillage que le mot de passe** (5 essais, puis 15 minutes) ;
+- le jeton intermédiaire **ne sert qu'une fois** : la base retient l'heure d'émission du dernier jeton utilisé, et refuse tout jeton qui n'est pas plus récent (migration 0018). Deux envois simultanés du même jeton n'ouvrent qu'une session. Un code faux, lui, ne consomme pas le jeton ;
+- les heures comparées viennent toutes de l'horloge du serveur d'application, jamais de celle de la base : deux horloges peuvent dériver l'une par rapport à l'autre.
+
+**La clé de chiffrement des secrets TOTP** est gardée en mémoire dans un type qui l'efface à l'arrêt et qui affiche `***` si on tente de l'écrire dans un journal ; l'état partagé du serveur, qui la contient avec le secret JWT, ne peut pas être affiché du tout. Fichiers : [`config.rs`](../backend/src/config.rs), [`main.rs`](../backend/src/main.rs).
+
 Un établissement n'a **accès à aucune donnée de patient tant que l'équipe LaafiCare ne l'a pas validé**.
 
 ## 8. Ce que la base de données garantit elle-même

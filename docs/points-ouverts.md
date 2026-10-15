@@ -45,6 +45,12 @@ Réglé par l'option 3, décidée le 2026-10-12 : jetons d'accès de 15 minutes,
 
 **À revoir plus tard**, si ces fausses alertes deviennent fréquentes : **d'abord mesurer leur nombre**, avant de changer la tolérance de 30 secondes (sa durée, ou le nombre de réutilisations permises).
 
+### Connexion refusée à tort dans la même seconde qu'un second facteur réussi
+
+**Limite connue, acceptée le 2026-10-15 (étape 3.6.3).** Le jeton intermédiaire du second facteur ne sert qu'une fois : la base retient l'heure d'émission (à la seconde près) du dernier jeton utilisé et refuse tout jeton qui n'est pas plus récent (migration 0018). Si la même personne se reconnecte **dans la même seconde** qu'un second facteur réussi, son nouveau jeton porte la même heure et il est **refusé à tort** (401 `jeton_invalide`). Il lui suffit de se reconnecter une seconde plus tard.
+
+**À revoir** si cela gêne en pratique : un identifiant unique par jeton intermédiaire (champ `jti`, RFC 7519 §4.1.7), enregistré à son usage, lèverait la limite.
+
 ### Empreinte du code reçu par SMS
 
 Le code est enregistré en SHA-256 simple. Avec seulement un million de codes possibles, une copie volée de la base permettrait de retrouver un code encore valable.

@@ -60,10 +60,11 @@ Une même identité peut avoir **plusieurs comptes**, un par type : `patient`, `
 - **son propre mot de passe** (empreinte Argon2id) ;
 - **son propre compteur d'essais** et sa date de fin de verrouillage (5 essais, 15 minutes) ;
 - un **statut** (`actif` ou `desactive`) ;
-- une **version de jeton**, augmentée à chaque changement sensible, pour invalider les anciennes connexions.
+- une **version de jeton**, augmentée à chaque changement sensible, pour invalider les anciennes connexions ;
+- l'**heure d'émission du dernier jeton intermédiaire utilisé** (`second_facteur_dernier_iat`, en secondes, vide tant qu'aucun second facteur n'a réussi) : un jeton intermédiaire qui n'est pas plus récent est refusé, il ne sert donc qu'une fois.
 
-Règle garantie par la base : **un seul compte de chaque type par personne**.
-Fichiers : [`verrouillage.rs`](../backend/src/verrouillage.rs), [`auth_patient.rs`](../backend/src/auth_patient.rs), [`auth_professionnel.rs`](../backend/src/auth_professionnel.rs). Migration 0011.
+Règles garanties par la base : **un seul compte de chaque type par personne** ; `second_facteur_dernier_iat` vide ou positif.
+Fichiers : [`verrouillage.rs`](../backend/src/verrouillage.rs), [`auth_patient.rs`](../backend/src/auth_patient.rs), [`auth_professionnel.rs`](../backend/src/auth_professionnel.rs). Migrations 0011 et 0018.
 
 ### `envoi_otp` : les codes SMS envoyés
 
@@ -269,5 +270,6 @@ Le numéro de CNIB de chaque administrateur LaafiCare, **unique**, au format de 
 | 0015 | Sessions et jetons de renouvellement |
 | 0016 | Vérification de l'email (jamais vérifié à la création, effacée à chaque changement d'email) |
 | 0017 | Motif de fermeture de session `email_non_verifie` |
+| 0018 | Jeton intermédiaire à usage unique (`compte.second_facteur_dernier_iat`) |
 
 Une migration déjà appliquée ne change plus jamais : toute évolution passe par une nouvelle migration. Un test vérifie aussi qu'aucun caractère invisible ne s'y glisse ([`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs)).

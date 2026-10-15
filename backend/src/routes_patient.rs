@@ -249,7 +249,12 @@ mod tests {
         use laaficare_backend::sms::SmsSenderConsole;
         use std::sync::Arc;
 
-        let state = AppState { db: pool, jwt: JwtService::new(&"a".repeat(32)), sms: Arc::new(SmsSenderConsole) };
+        let state = AppState {
+            db: pool,
+            jwt: JwtService::new(&"a".repeat(32)),
+            sms: Arc::new(SmsSenderConsole),
+            cle_totp: Arc::new(laaficare_backend::config::CleTotp::depuis_octets([7; 32])),
+        };
         let (code, _) = auth_patient::demander_otp(&state.db, "70 02 20 01").await.unwrap();
         let naissance = NaiveDate::from_ymd_opt(1995, 4, 12).unwrap();
         let jeton = auth_patient::creer_compte(
