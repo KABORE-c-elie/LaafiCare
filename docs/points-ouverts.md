@@ -4,7 +4,7 @@ Ce document liste ce qui reste à décider ou à construire avant que LaafiCare 
 
 Les décisions déjà prises sont dans `CLAUDE.md` (sections 12 et 14), qui reste la référence. Ce document est mis à jour à chaque décision qui ferme ou ouvre un point.
 
-État au 2026-10-11.
+État au 2026-10-15.
 
 ---
 
@@ -122,6 +122,21 @@ En production, le serveur n'accepte que des connexions chiffrées (HTTPS) : jeto
 - Chiffrement du disque de la base.
 - Fournisseurs réels : SMS (codes, invitations) et email (réinitialisation, vérification de l'email). Crate et fournisseur à présenter.
 - Fichiers déposés par les structures : réécriture des images, antivirus, désactivation du contenu actif des PDF (OWASP).
+
+### Éléments à découper en étapes
+
+**Noté le 2026-10-15.** La mise en production n'est pas encore découpée en étapes, comme le sont celles du backoffice (CLAUDE.md, section 12). Voici les éléments déjà connus, repris de ce document, à découper plus tard en étapes ordonnées, chacune présentée et validée avant d'être faite :
+
+- **Cadre légal** : formalité auprès de la CIL (déclaration ou autorisation), hébergement des données de santé dans le pays, aucun transfert vers l'étranger sans autorisation (section 3, « Cadre légal »).
+- **Comptes PostgreSQL** : un compte sans droits d'administration pour le serveur ; un compte séparé pour les outils locaux, seul autorisé à écrire la fenêtre de réenrôlement (section 2).
+- **HTTPS** obligatoire.
+- **Sauvegardes** chiffrées, dans le pays, avec essais de restauration ; sauvegarde à part de la clé `TOTP_CLE_CHIFFREMENT`.
+- **Chiffrement du disque** de la base.
+- **Fournisseurs réels** d'envoi de SMS et d'email (crate et fournisseur à présenter).
+- **Limite du nombre de demandes par adresse IP** sur les routes de connexion et de réinitialisation.
+- **Liste de mots de passe interdits** (NIST SP 800-63B rév. 4).
+- **Stockage du jeton de renouvellement dans un navigateur** (applications web), à décider à part.
+- **Fichiers déposés par les structures** : réécriture des images, antivirus, contenu actif des PDF.
 
 ---
 
