@@ -18,10 +18,6 @@
   "@champTelephone": {
     "description": "Libellé du champ téléphone (maquette)."
   },
-  "prefixeTelephone": "+226",
-  "@prefixeTelephone": {
-    "description": "Préfixe fixe du Burkina Faso devant la saisie du numéro (maquette ; seul préfixe en V1)."
-  },
   "indicationTelephone": "70 00 00 00",
   "@indicationTelephone": {
     "description": "Exemple fictif affiché dans le champ téléphone vide (maquette)."
