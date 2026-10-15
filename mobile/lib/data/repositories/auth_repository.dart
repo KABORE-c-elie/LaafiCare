@@ -132,10 +132,25 @@ class AuthRepository extends ChangeNotifier {
   /// Le jeton n'est pas lu ni vérifié ici (docs/api.md §1.2 : l'application
   /// ne lit pas son contenu) ; s'il a expiré, la première route protégée
   /// répondra 401, et le gestionnaire de session renouvellera.
+  ///
+  /// Une erreur imprévue pendant cette lecture mène à l'état « déconnecté »
+  /// (décision du porteur : l'application ne doit jamais rester bloquée sur
+  /// l'écran de démarrage). L'erreur n'est pas cachée : elle est signalée par
+  /// FlutterError.reportError, comme une erreur du framework.
   Future<void> initialiser() async {
-    _changerEtat(await _session.estOuverte()
-        ? EtatSession.connecte
-        : EtatSession.deconnecte);
+    try {
+      _changerEtat(await _session.estOuverte()
+          ? EtatSession.connecte
+          : EtatSession.deconnecte);
+    } catch (erreur, pile) {
+      FlutterError.reportError(FlutterErrorDetails(
+        exception: erreur,
+        stack: pile,
+        library: 'LaafiCare',
+        context: ErrorDescription('pendant la lecture de la session'),
+      ));
+      _changerEtat(EtatSession.deconnecte);
+    }
   }
 
   /// Envoie un code par SMS (docs/api.md §2.2.1). Un 429 remonte en

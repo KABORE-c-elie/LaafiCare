@@ -1,122 +1,98 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' as http;
+
+import 'config/configuration.dart';
+import 'data/repositories/auth_repository.dart';
+import 'data/services/client_api.dart';
+import 'data/services/gestionnaire_session.dart';
+import 'data/services/stockage_jeton.dart';
+import 'l10n/app_localizations.dart';
+import 'routing/routeur.dart';
+import 'ui/core/theme/theme_laaficare.dart';
 
 void main() {
-  runApp(const MyApp());
-}
+  // Le stockage sécurisé passe par des canaux de plateforme : le moteur doit
+  // être prêt avant la première lecture.
+  WidgetsFlutterBinding.ensureInitialized();
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
-  // This widget is the root of your application.
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
-      ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
-    );
+  final Configuration configuration;
+  try {
+    configuration = Configuration.charger();
+  } on ErreurConfiguration catch (erreur) {
+    // Adresse de l'API absente ou refusée (ex. http en version publiée) :
+    // l'application ne démarre pas, et dit pourquoi.
+    runApp(_ErreurDemarrage(erreur.message));
+    return;
   }
+
+  final client =
+      ClientApi(configuration: configuration, client: http.Client());
+  final auth = AuthRepository(
+    client: client,
+    session: GestionnaireSession(client: client, stockage: StockageJeton()),
+  );
+  runApp(ApplicationLaafiCare(auth: auth));
+  // Lecture de la session pendant l'écran de démarrage : le routeur quitte
+  // « / » dès que l'état est connu (refreshListenable). En cas d'erreur
+  // imprévue, l'état passe à « déconnecté » (AuthRepository.initialiser).
+  unawaited(auth.initialiser());
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
+class ApplicationLaafiCare extends StatefulWidget {
+  const ApplicationLaafiCare({super.key, required this.auth});
 
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+  final AuthRepository auth;
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<ApplicationLaafiCare> createState() => _ApplicationLaafiCareState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _ApplicationLaafiCareState extends State<ApplicationLaafiCare> {
+  // Créé une seule fois : recréer le GoRouter à chaque reconstruction
+  // perdrait la pile des pages.
+  late final GoRouter _routeur = creerRouteur(widget.auth);
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
+  @override
+  void dispose() {
+    _routeur.dispose();
+    super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
-    return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
-          children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+  Widget build(BuildContext context) => MaterialApp.router(
+        routerConfig: _routeur,
+        onGenerateTitle: (context) => Textes.of(context).nomApplication,
+        theme: ThemeLaafiCare.clair,
+        localizationsDelegates: Textes.localizationsDelegates,
+        supportedLocales: Textes.supportedLocales,
+        // Bandeau « DEBUG » masqué. Doc de
+        // MaterialApp.debugShowCheckedModeBanner : « This is on by default
+        // (in debug mode), to turn it off, set the constructor argument to
+        // false. » ; « In release mode this has no effect. »
+        debugShowCheckedModeBanner: false,
+      );
+}
+
+/// Configuration inutilisable : message pour la personne qui a lancé
+/// l'application (développement), sans traduction ni thème.
+class _ErreurDemarrage extends StatelessWidget {
+  const _ErreurDemarrage(this.message);
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) => MaterialApp(
+        debugShowCheckedModeBanner: false,
+        home: Scaffold(
+          body: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(message),
             ),
-          ],
+          ),
         ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ),
-    );
-  }
+      );
 }
