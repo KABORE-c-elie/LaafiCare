@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../theme/theme_laaficare.dart';
+import 'page_adaptable.dart';
 
 /// Écran en attente de sa maquette. Empilé (context.push), il a une flèche
 /// retour : l'AppBar l'ajoute d'elle-même quand la page peut être fermée
@@ -18,9 +19,9 @@ class EcranAVenir extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(title: Text(titre)),
-        body: Padding(
-          padding: const EdgeInsets.all(Espacements.marge),
-          child: Column(
+        // Toutes tailles d'écran (PageAdaptable).
+        body: PageAdaptable(
+          contenu: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(Textes.of(context).ecranAVenir),

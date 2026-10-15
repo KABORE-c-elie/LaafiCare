@@ -171,6 +171,12 @@ abstract final class Espacements {
 
   /// Marge intérieure du bloc de message d'erreur (maquettes).
   static const paddingMessage = 12.0;
+
+  /// Largeur maximale du contenu sur grand écran (tablette, paysage,
+  /// pliable). Doc Flutter, « Large screens & foldables » : « neither text
+  /// nor boxes should take up the full screen width » ; elle ne donne pas de
+  /// valeur pour un formulaire : 480 est un choix du porteur.
+  static const largeurMaxContenu = 480.0;
 }
 
 /// Couleurs hors ColorScheme (ThemeExtension, doc :

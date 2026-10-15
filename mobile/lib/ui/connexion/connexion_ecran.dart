@@ -4,6 +4,7 @@ import '../../l10n/app_localizations.dart';
 import '../core/theme/theme_laaficare.dart';
 import '../core/widgets/logo_laafi.dart';
 import '../core/widgets/message_erreur.dart';
+import '../core/widgets/page_adaptable.dart';
 import 'connexion_view_model.dart';
 
 /// Écran de connexion du patient (maquette validée par le porteur).
@@ -51,164 +52,159 @@ class _ConnexionEcranState extends State<ConnexionEcran> {
     final theme = Theme.of(context);
     final schema = theme.colorScheme;
     return Scaffold(
-      body: SafeArea(
-        child: ListenableBuilder(
-          listenable: widget.vm,
-          builder: (context, _) {
-            final vm = widget.vm;
-            final erreur = vm.erreur;
-            final erreurTelephone = erreur == ErreurConnexion.telephoneVide ||
-                erreur == ErreurConnexion.telephoneInvalide;
-            final erreurMotDePasse = erreur != null && !erreurTelephone;
-            return CustomScrollView(
-              slivers: [
-                SliverPadding(
-                  padding: const EdgeInsets.all(Espacements.marge),
-                  sliver: SliverFillRemaining(
-                    hasScrollBody: false,
-                    child: AutofillGroup(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: LogoLaafi(libelle: t.nomApplication),
-                          ),
-                          const SizedBox(height: Espacements.entreSections),
-                          Semantics(
-                            header: true,
-                            child: Text(t.connexionTitre,
-                                style: theme.textTheme.headlineSmall),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(t.connexionSousTitre,
-                              style: theme.textTheme.bodyLarge
-                                  ?.copyWith(color: schema.onSurfaceVariant)),
-                          const SizedBox(height: Espacements.entreSections),
+      body: ListenableBuilder(
+        listenable: widget.vm,
+        builder: (context, _) {
+          final vm = widget.vm;
+          final erreur = vm.erreur;
+          final erreurTelephone = erreur == ErreurConnexion.telephoneVide ||
+              erreur == ErreurConnexion.telephoneInvalide;
+          final erreurMotDePasse = erreur != null && !erreurTelephone;
+          // Toutes tailles d'écran : défilement, largeur limitée, carte des
+          // urgences en bas s'il y a de la place (PageAdaptable).
+          return PageAdaptable(
+            bas: _CarteUrgences(
+              titre: t.urgencesTitre,
+              resume: t.urgencesResume,
+              surAppui: widget.surUrgences,
+            ),
+            contenu: AutofillGroup(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: LogoLaafi(libelle: t.nomApplication),
+                  ),
+                  const SizedBox(height: Espacements.entreSections),
+                  Semantics(
+                    header: true,
+                    child: Text(t.connexionTitre,
+                        style: theme.textTheme.headlineSmall),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(t.connexionSousTitre,
+                      style: theme.textTheme.bodyLarge
+                          ?.copyWith(color: schema.onSurfaceVariant)),
+                  const SizedBox(height: Espacements.entreSections),
 
-                          // Téléphone : indicatif fixe +226, séparé par un
-                          // trait. Libellé et champ fusionnés pour le lecteur
-                          // d'écran (_ChampNomme).
-                          _ChampNomme(
-                            libelle: t.champTelephone,
-                            champ: TextField(
-                              controller: _telephone,
-                              keyboardType: TextInputType.phone,
-                              textInputAction: TextInputAction.next,
-                              autofillHints: const [
-                                AutofillHints.telephoneNumberNational,
-                              ],
-                              onChanged: (_) => vm.effacerErreur(),
-                              decoration: InputDecoration(
-                                hintText: t.indicationTelephone,
-                                prefixIcon:
-                                    const _Indicatif(ConnexionViewModel.indicatif),
-                                error: erreurTelephone ? _sansTexte : null,
-                              ),
-                            ),
-                          ),
-                          if (erreurTelephone) ...[
-                            const SizedBox(height: 8),
-                            MessageErreur(_texteErreur(t, erreur!)),
-                          ],
-                          const SizedBox(height: Espacements.marge),
-
-                          // Mot de passe, avec le bouton œil.
-                          _ChampNomme(
-                            libelle: t.champMotDePasse,
-                            champ: TextField(
-                              controller: _motDePasse,
-                              obscureText: !vm.motDePasseVisible,
-                              textInputAction: TextInputAction.done,
-                              autofillHints: const [AutofillHints.password],
-                              onChanged: (_) => vm.effacerErreur(),
-                              onSubmitted: (_) => _envoyer(),
-                              decoration: InputDecoration(
-                                error: erreurMotDePasse ? _sansTexte : null,
-                                suffixIcon: IconButton(
-                                  // tooltip : libellé lu par le lecteur
-                                  // d'écran.
-                                  tooltip: vm.motDePasseVisible
-                                      ? t.masquerMotDePasse
-                                      : t.afficherMotDePasse,
-                                  icon: Icon(vm.motDePasseVisible
-                                      ? Icons.visibility_off_outlined
-                                      : Icons.visibility_outlined),
-                                  onPressed: vm.basculerMotDePasse,
-                                ),
-                              ),
-                            ),
-                          ),
-                          if (erreurMotDePasse) ...[
-                            const SizedBox(height: 8),
-                            MessageErreur(_texteErreur(t, erreur)),
-                          ],
-
-                          // Lien aligné à droite, zone touchable de 48.
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: TextButton(
-                              style: TextButton.styleFrom(
-                                minimumSize: const Size(
-                                    Espacements.zoneTouchable,
-                                    Espacements.zoneTouchable),
-                              ),
-                              onPressed: widget.surMotDePasseOublie,
-                              child: Text(t.motDePasseOublie),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          FilledButton(
-                            onPressed: vm.enCours ? null : _envoyer,
-                            child: vm.enCours
-                                ? Semantics(
-                                    label: t.boutonSeConnecter,
-                                    child: const SizedBox.square(
-                                      dimension: 24,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2),
-                                    ),
-                                  )
-                                : Text(t.boutonSeConnecter),
-                          ),
-                          const SizedBox(height: Espacements.entreSections),
-                          Row(
-                            children: [
-                              const Expanded(child: Divider()),
-                              Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: Espacements.marge),
-                                child: Text(t.pasEncoreDeCompte,
-                                    style: theme.textTheme.bodySmall?.copyWith(
-                                        color: schema.onSurfaceVariant)),
-                              ),
-                              const Expanded(child: Divider()),
-                            ],
-                          ),
-                          const SizedBox(height: Espacements.entreSections),
-                          FilledButton.tonal(
-                            style: StylesBoutons.secondaire(context),
-                            onPressed: widget.surCreerCompte,
-                            child: Text(t.boutonCreerCompte),
-                          ),
-
-                          // Pousse la carte en bas de l'écran.
-                          const Spacer(),
-                          const SizedBox(height: Espacements.entreSections),
-                          _CarteUrgences(
-                            titre: t.urgencesTitre,
-                            resume: t.urgencesResume,
-                            surAppui: widget.surUrgences,
-                          ),
-                        ],
+                  // Téléphone : indicatif fixe +226, séparé par un trait.
+                  // Le champ est lu avec son nom par le lecteur d'écran
+                  // (_ChampNomme).
+                  _ChampNomme(
+                    libelle: t.champTelephone,
+                    champ: TextField(
+                      controller: _telephone,
+                      keyboardType: TextInputType.phone,
+                      textInputAction: TextInputAction.next,
+                      autofillHints: const [
+                        AutofillHints.telephoneNumberNational,
+                      ],
+                      onChanged: (_) => vm.effacerErreur(),
+                      decoration: InputDecoration(
+                        hintText: t.indicationTelephone,
+                        prefixIcon:
+                            const _Indicatif(ConnexionViewModel.indicatif),
+                        error: erreurTelephone ? _sansTexte : null,
                       ),
                     ),
                   ),
-                ),
-              ],
-            );
-          },
-        ),
+                  if (erreurTelephone) ...[
+                    const SizedBox(height: 8),
+                    MessageErreur(_texteErreur(t, erreur!)),
+                  ],
+                  const SizedBox(height: Espacements.marge),
+
+                  // Mot de passe, avec le bouton œil.
+                  _ChampNomme(
+                    libelle: t.champMotDePasse,
+                    champ: TextField(
+                      controller: _motDePasse,
+                      obscureText: !vm.motDePasseVisible,
+                      textInputAction: TextInputAction.done,
+                      autofillHints: const [AutofillHints.password],
+                      onChanged: (_) => vm.effacerErreur(),
+                      onSubmitted: (_) => _envoyer(),
+                      decoration: InputDecoration(
+                        error: erreurMotDePasse ? _sansTexte : null,
+                        suffixIcon: IconButton(
+                          // tooltip : libellé lu par le lecteur d'écran.
+                          tooltip: vm.motDePasseVisible
+                              ? t.masquerMotDePasse
+                              : t.afficherMotDePasse,
+                          icon: Icon(vm.motDePasseVisible
+                              ? Icons.visibility_off_outlined
+                              : Icons.visibility_outlined),
+                          onPressed: vm.basculerMotDePasse,
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (erreurMotDePasse) ...[
+                    const SizedBox(height: 8),
+                    MessageErreur(_texteErreur(t, erreur)),
+                  ],
+
+                  // Lien aligné à droite, zone touchable de 48.
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      style: TextButton.styleFrom(
+                        minimumSize: const Size(
+                            Espacements.zoneTouchable,
+                            Espacements.zoneTouchable),
+                      ),
+                      onPressed: widget.surMotDePasseOublie,
+                      child: Text(t.motDePasseOublie),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  FilledButton(
+                    onPressed: vm.enCours ? null : _envoyer,
+                    child: vm.enCours
+                        ? Semantics(
+                            label: t.boutonSeConnecter,
+                            child: const SizedBox.square(
+                              dimension: 24,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          )
+                        : Text(t.boutonSeConnecter),
+                  ),
+                  const SizedBox(height: Espacements.entreSections),
+
+                  // Un trait sur toute la largeur, le texte centré par-dessus
+                  // sur la couleur du fond : le texte ne passe à la ligne que
+                  // si toute la largeur ne suffit pas (petit écran, texte
+                  // agrandi), jamais de débordement.
+                  Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      const Divider(),
+                      ColoredBox(
+                        color: theme.scaffoldBackgroundColor,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: Espacements.marge),
+                          child: Text(t.pasEncoreDeCompte,
+                              textAlign: TextAlign.center,
+                              style: theme.textTheme.bodySmall
+                                  ?.copyWith(color: schema.onSurfaceVariant)),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: Espacements.entreSections),
+                  FilledButton.tonal(
+                    style: StylesBoutons.secondaire(context),
+                    onPressed: widget.surCreerCompte,
+                    child: Text(t.boutonCreerCompte),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }
