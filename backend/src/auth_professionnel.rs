@@ -1,175 +1,394 @@
-//! `AuthProfessionnelService` (section 11 du CLAUDE.md) : identifiant
-//! `email` + `motDePasseHash` (Argon2id) + verrouillage 5 tentatives / 15
-//! min (BF-01). **Fichier à réécrire à l'étape 3.6.2** sur la table
-//! `compte` (migration 0011) : il lit encore des colonnes retirées de
-//! `utilisateur`, son test en base échoue (échec attendu).
+//! Connexion professionnelle (étape 3.6.2, décisions P1 à P7 du
+//! 2026-10-15) : email + mot de passe sur le compte `professionnel`,
+//! verrouillage BF-01 (`verrouillage.rs`), email vérifié (R0), second
+//! facteur (Z10), puis session (`session.rs`, jeton
+//! `laaficare:professionnel_sans_affectation`, J5).
 //!
-//! **`se_connecter` ne connaît aucun rôle.** Ce service vérifie une
-//! identité (`utilisateur`) seule -- il n'existe encore aucune table de
-//! rôle non-Patient (`AgentAssurance` est l'étape suivante du plan, section
-//! 12). Il renvoie l'`utilisateur_id` vérifié, jamais un JWT : c'est au
-//! futur service spécifique au rôle de confirmer l'appartenance à ce rôle
-//! et d'appeler `JwtService::emettre(id, role)` avec le bon `role` --
-//! exactement comme `jwt.rs` accepte déjà un `role: &str` sans le connaître
-//! à l'avance. Bâtir `AuthProfessionnelService` avant `AgentAssurance` n'a
-//! de sens que si ce découplage est respecté.
+//! La logique commune prend le type de compte en paramètre (P6) ; seule la
+//! connexion professionnelle est publique. Celle des administrateurs
+//! viendra à l'étape 3.6.4 avec sa règle propre : sans TOTP actif, pas de
+//! jeton complet mais un jeton de réenrôlement (Y4).
 //!
 //! **Récupération du mot de passe** : par email uniquement (décisions R1 à
-//! R9, étape 3.12). La récupération par OTP a été supprimée le 2026-10-08 :
-//! l'OTP ne sert plus qu'au compte patient (section 14).
+//! R9, étape 3.12). L'OTP ne sert qu'au compte patient (section 14).
 
-use chrono::{DateTime, Duration, Utc};
+use std::fmt;
+
 use sqlx::PgPool;
 use sqlx::types::Uuid;
+use zeroize::Zeroize;
 
-use crate::mot_de_passe;
+use crate::jwt::{JwtService, SorteJeton};
+use crate::session::{self, PaireJetons};
+use crate::verrouillage::{self, ErreurConnexion, Verification};
 
-// BF-01, section 11 du CLAUDE.md -- pas une valeur arbitraire de bibliothèque.
-const MAX_TENTATIVES: i16 = 5;
-const DUREE_VERROUILLAGE_MIN: i64 = 15;
+/// Jeton intermédiaire du second facteur (5 min) : même traitement que le
+/// jeton de renouvellement (`session.rs`). `Debug` affiche `***`, ni
+/// `Display` ni `Serialize` : la seule lecture est `en_clair()`, au moment
+/// de construire la réponse. Effacé de la mémoire à sa libération.
+pub struct JetonIntermediaire(String);
+
+impl JetonIntermediaire {
+    pub fn en_clair(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for JetonIntermediaire {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("***")
+    }
+}
+
+impl Drop for JetonIntermediaire {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+/// Résultat d'une connexion réussie (mot de passe correct, email vérifié).
+pub enum ConnexionProfessionnelle {
+    /// Pas de TOTP actif : session ouverte, paire de jetons.
+    Complete(PaireJetons),
+    /// TOTP actif : jeton intermédiaire, à échanger contre la paire avec le
+    /// code (étape 3.6.3). Aucune session n'est encore ouverte.
+    SecondFacteur { jeton_intermediaire: JetonIntermediaire },
+}
+
+// Écrit à la main : `PaireJetons` n'a volontairement pas de `Debug`, et
+// aucun jeton ne doit apparaître.
+impl fmt::Debug for ConnexionProfessionnelle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConnexionProfessionnelle::Complete(_) => f.write_str("Complete(***)"),
+            ConnexionProfessionnelle::SecondFacteur { jeton_intermediaire } => f
+                .debug_struct("SecondFacteur")
+                .field("jeton_intermediaire", jeton_intermediaire)
+                .finish(),
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ErreurAuthProfessionnel {
-    /// Couvre à la fois « email inconnu » et « mot de passe incorrect » --
-    /// volontairement non distingués sur `se_connecter`, pour ne pas
-    /// permettre à un attaquant de découvrir quels emails sont enregistrés
-    /// en sondant la connexion (pratique standard, pas propre à ce projet).
+    /// Email inconnu, mauvais mot de passe, compte verrouillé ou désactivé :
+    /// jamais distingués (décisions P1 et L1), même temps de réponse.
     #[error("Email ou mot de passe incorrect.")]
     IdentifiantsInvalides,
 
-    #[error("compte verrouillé, réessayer plus tard")]
-    CompteVerrouille,
+    /// Mot de passe correct, email jamais vérifié (R0, P3) : seul le
+    /// détenteur du mot de passe l'apprend.
+    #[error("Votre email n'est pas encore vérifié. Ouvrez le lien que nous vous avons envoyé, ou demandez-en un nouveau.")]
+    EmailNonVerifie,
 
+    /// Seulement la nature de l'échec, un texte fixe : jamais l'email ni le
+    /// mot de passe saisis, garanti par le type (`&'static str`, aucun
+    /// texte construit à partir des données).
     #[error("erreur interne : {0}")]
-    Interne(String),
+    Interne(&'static str),
 }
 
-impl From<sqlx::Error> for ErreurAuthProfessionnel {
-    fn from(erreur: sqlx::Error) -> Self {
-        ErreurAuthProfessionnel::Interne(erreur.to_string())
+/// Nature d'une erreur SQLx, sans son message : un message de PostgreSQL
+/// peut reprendre une valeur. Seule cette nature va aux journaux.
+fn nature_sqlx(erreur: &sqlx::Error) -> String {
+    match erreur {
+        sqlx::Error::Database(e) => format!("base de données, code {}", e.code().as_deref().unwrap_or("inconnu")),
+        sqlx::Error::PoolTimedOut => "délai d'attente de la base dépassé".to_string(),
+        sqlx::Error::PoolClosed => "connexions à la base fermées".to_string(),
+        sqlx::Error::Io(_) => "entrée-sortie avec la base".to_string(),
+        _ => "autre erreur de la base".to_string(),
     }
 }
 
-/// Connexion par email + mot de passe, avec verrouillage BF-01. Renvoie
-/// l'`utilisateur_id` vérifié (voir doc de module -- pas de JWT ici).
+fn interne_sqlx(etape: &'static str, erreur: &sqlx::Error) -> ErreurAuthProfessionnel {
+    tracing::error!(etape, nature = %nature_sqlx(erreur), "connexion professionnelle : erreur interne");
+    ErreurAuthProfessionnel::Interne(etape)
+}
+
+/// Erreur dont le détail n'est pas journalisé : il peut venir d'un module
+/// qui ne garantit pas l'absence de données saisies.
+fn interne(etape: &'static str) -> ErreurAuthProfessionnel {
+    tracing::error!(etape, "connexion professionnelle : erreur interne");
+    ErreurAuthProfessionnel::Interne(etape)
+}
+
+/// Connexion d'un professionnel (`POST /api/professionnels/connexion`).
 pub async fn se_connecter(
     pool: &PgPool,
+    jwt: &JwtService,
     email: &str,
     mot_de_passe: &str,
-) -> Result<Uuid, ErreurAuthProfessionnel> {
-    let ligne: Option<(Uuid, Option<String>, i16, Option<DateTime<Utc>>)> = sqlx::query_as(
-        "SELECT id, mot_de_passe_hash, tentatives_echouees, verrouille_jusqua \
-         FROM utilisateur WHERE lower(email) = lower($1)",
+) -> Result<ConnexionProfessionnelle, ErreurAuthProfessionnel> {
+    connexion_par_email(pool, jwt, "professionnel", SorteJeton::SecondFacteurProfessionnel, email, mot_de_passe).await
+}
+
+/// Logique commune (P6). `type_compte` : valeur de `compte.type_compte` ;
+/// `sorte_intermediaire` : jeton remis si un TOTP est actif.
+async fn connexion_par_email(
+    pool: &PgPool,
+    jwt: &JwtService,
+    type_compte: &'static str,
+    sorte_intermediaire: SorteJeton,
+    email: &str,
+    mot_de_passe: &str,
+) -> Result<ConnexionProfessionnelle, ErreurAuthProfessionnel> {
+    // Email comparé sans les espaces autour de la saisie et sans tenir
+    // compte des majuscules (J6). Au plus une ligne : un seul compte par
+    // type et par identité (migration 0011, `un_compte_par_type`), une
+    // seule identité par email (migration 0001, index unique sur
+    // `lower(email)`) — à condition que les emails soient enregistrés sans
+    // espaces autour, ce que doit garantir le code qui crée les comptes
+    // (3.7, 3.10).
+    let compte: Option<(Uuid, bool, i32)> = sqlx::query_as(
+        "SELECT c.id, u.email_verifie_le IS NOT NULL, c.version_jeton \
+         FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
+         WHERE lower(u.email) = lower(btrim($1)) AND c.type_compte = $2",
     )
     .bind(email)
+    .bind(type_compte)
     .fetch_optional(pool)
-    .await?;
+    .await
+    .map_err(|e| interne_sqlx("recherche du compte", &e))?;
 
-    // Email inconnu : même erreur que « mauvais mot de passe » (voir
-    // ErreurAuthProfessionnel::IdentifiantsInvalides).
-    let Some((utilisateur_id, hash, tentatives, verrouille_jusqua)) = ligne else {
-        return Err(ErreurAuthProfessionnel::IdentifiantsInvalides);
-    };
+    // Verrouillage BF-01, faux hachage si le compte n'existe pas (même
+    // temps de réponse), compteur remis à zéro seulement sans TOTP actif
+    // (règle V1) : tout est fait par `verrouillage::verifier`.
+    let verification = verrouillage::verifier(pool, compte.map(|(id, _, _)| id), mot_de_passe)
+        .await
+        .map_err(|erreur| match erreur {
+            ErreurConnexion::IdentifiantsInvalides => ErreurAuthProfessionnel::IdentifiantsInvalides,
+            ErreurConnexion::Interne(_) => interne("vérification du mot de passe"),
+        })?;
 
-    if let Some(jusqua) = verrouille_jusqua {
-        if Utc::now() < jusqua {
-            return Err(ErreurAuthProfessionnel::CompteVerrouille);
-        }
+    // `verifier` n'accepte qu'un compte existant : `compte` est présent.
+    let (compte_id, email_verifie, version_jeton) = compte.ok_or_else(|| interne("compte vérifié introuvable"))?;
+
+    // R0, P4 : contrôlé avant de délivrer un jeton intermédiaire.
+    if !email_verifie {
+        return Err(ErreurAuthProfessionnel::EmailNonVerifie);
     }
 
-    // Pas de mot de passe défini (ex. identité créée mais jamais complétée) :
-    // aucun mot de passe ne peut jamais correspondre.
-    let Some(hash) = hash else {
-        return Err(ErreurAuthProfessionnel::IdentifiantsInvalides);
-    };
-
-    let correct = mot_de_passe::verifier(mot_de_passe, &hash)
-        .map_err(|e| ErreurAuthProfessionnel::Interne(e.to_string()))?;
-
-    if !correct {
-        let nouvelles_tentatives = tentatives + 1;
-        if nouvelles_tentatives >= MAX_TENTATIVES {
-            let jusqua = Utc::now() + Duration::minutes(DUREE_VERROUILLAGE_MIN);
-            sqlx::query("UPDATE utilisateur SET tentatives_echouees = 0, verrouille_jusqua = $1 WHERE id = $2")
-                .bind(jusqua)
-                .bind(utilisateur_id)
-                .execute(pool)
-                .await?;
-        } else {
-            sqlx::query("UPDATE utilisateur SET tentatives_echouees = $1 WHERE id = $2")
-                .bind(nouvelles_tentatives)
-                .bind(utilisateur_id)
-                .execute(pool)
-                .await?;
+    match verification {
+        Verification::SecondFacteurRequis(_) => {
+            let jeton = jwt
+                .emettre(sorte_intermediaire, compte_id, version_jeton, None, None)
+                .map_err(|_| interne("émission du jeton intermédiaire"))?;
+            Ok(ConnexionProfessionnelle::SecondFacteur { jeton_intermediaire: JetonIntermediaire(jeton) })
         }
-        return Err(ErreurAuthProfessionnel::IdentifiantsInvalides);
+        Verification::Complete(_) => {
+            let paire = session::ouvrir(pool, compte_id, None)
+                .await
+                .and_then(|active| active.en_paire(jwt))
+                .map_err(|_| interne("ouverture de session"))?;
+            Ok(ConnexionProfessionnelle::Complete(paire))
+        }
     }
-
-    // Connexion réussie : remet le compteur à zéro (aussi utile si le
-    // compte n'était plus verrouillé mais gardait un compteur partiel).
-    sqlx::query("UPDATE utilisateur SET tentatives_echouees = 0, verrouille_jusqua = NULL WHERE id = $1")
-        .bind(utilisateur_id)
-        .execute(pool)
-        .await?;
-
-    Ok(utilisateur_id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mot_de_passe;
 
-    // Base temporaire par test, jamais la base de développement : voir
-    // « Tests et environnement », section 12 du CLAUDE.md. Ce service ne
-    // connaît aucun rôle : la ligne `utilisateur` de test est créée
-    // directement en SQL.
+    // Base temporaire par test ; données fictives.
+
+    const BON: &str = "Exemple#2026";
+    const MAUVAIS: &str = "Mauvais#2026";
+
+    fn jwt() -> JwtService {
+        JwtService::new(&"a".repeat(32))
+    }
+
+    async fn identite(pool: &PgPool, telephone: &str, email: &str, verifie: bool) -> Uuid {
+        let id: Uuid = sqlx::query_scalar("INSERT INTO utilisateur (telephone, email) VALUES ($1, $2) RETURNING id")
+            .bind(telephone)
+            .bind(email)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        if verifie {
+            sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1")
+                .bind(id)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        id
+    }
+
+    async fn compte(pool: &PgPool, utilisateur_id: Uuid, type_compte: &str) -> Uuid {
+        sqlx::query_scalar(
+            "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, $2, $3) RETURNING id",
+        )
+        .bind(utilisateur_id)
+        .bind(type_compte)
+        .bind(mot_de_passe::hacher(BON).unwrap())
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn professionnel(pool: &PgPool, telephone: &str, email: &str, verifie: bool) -> Uuid {
+        let id = identite(pool, telephone, email, verifie).await;
+        compte(pool, id, "professionnel").await
+    }
+
+    async fn tentatives(pool: &PgPool, compte_id: Uuid) -> i16 {
+        sqlx::query_scalar("SELECT tentatives_echouees FROM compte WHERE id = $1")
+            .bind(compte_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// TOTP actif posé en SQL : le contenu n'est jamais déchiffré ici.
+    async fn activer_totp(pool: &PgPool, compte_id: Uuid) {
+        sqlx::query(
+            "INSERT INTO second_facteur_totp (compte_id, secret_chiffre, nonce, version_cle, statut, date_activation) \
+             VALUES ($1, decode(repeat('00', 36), 'hex'), decode(repeat('00', 12), 'hex'), 1, 'actif', now())",
+        )
+        .bind(compte_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    fn refuse(resultat: Result<ConnexionProfessionnelle, ErreurAuthProfessionnel>) -> bool {
+        matches!(resultat, Err(ErreurAuthProfessionnel::IdentifiantsInvalides))
+    }
+
     #[sqlx::test]
     #[ignore]
-    async fn se_connecter_et_recuperation_en_base(pool: PgPool) {
-        let email = "test.auth.pro@example.org";
-        let telephone = "+22670002002";
-        // Échoue dès cette insertion (colonne `mot_de_passe_hash` retirée
-        // par la migration 0011) : test réécrit à l'étape 3.6.2.
-        let hash = mot_de_passe::hacher("motdepasseinitial123").unwrap();
+    async fn refus_identiques(pool: PgPool) {
+        let jwt = jwt();
+        let compte_id = professionnel(&pool, "+22670050001", "pro.refus@example.org", true).await;
 
-        let utilisateur_id: Uuid = sqlx::query_scalar(
-            "INSERT INTO utilisateur (nom, prenom, telephone, email, mot_de_passe_hash) \
-             VALUES ('Pro', 'Test', $1, $2, $3) RETURNING id",
+        assert!(refuse(se_connecter(&pool, &jwt, "inconnu@example.org", BON).await), "email inconnu");
+        assert!(refuse(se_connecter(&pool, &jwt, "pro.refus@example.org", MAUVAIS).await), "mauvais mot de passe");
+
+        sqlx::query("UPDATE compte SET statut = 'desactive' WHERE id = $1").bind(compte_id).execute(&pool).await.unwrap();
+        assert!(refuse(se_connecter(&pool, &jwt, "pro.refus@example.org", BON).await), "compte désactivé");
+        sqlx::query("UPDATE compte SET statut = 'actif' WHERE id = $1").bind(compte_id).execute(&pool).await.unwrap();
+
+        for _ in 0..5 {
+            assert!(refuse(se_connecter(&pool, &jwt, "pro.refus@example.org", MAUVAIS).await));
+        }
+        assert!(refuse(se_connecter(&pool, &jwt, "pro.refus@example.org", BON).await), "compte verrouillé");
+        assert_eq!(ErreurAuthProfessionnel::IdentifiantsInvalides.to_string(), "Email ou mot de passe incorrect.");
+    }
+
+    #[sqlx::test]
+    #[ignore]
+    async fn compte_patient_seul_refuse(pool: PgPool) {
+        let id = identite(&pool, "+22670050002", "patient.seul@example.org", true).await;
+        compte(&pool, id, "patient").await;
+        assert!(refuse(se_connecter(&pool, &jwt(), "patient.seul@example.org", BON).await));
+    }
+
+    #[sqlx::test]
+    #[ignore]
+    async fn connexion_complete_et_email_normalise(pool: PgPool) {
+        let jwt = jwt();
+        let compte_id = professionnel(&pool, "+22670050003", "pro.complet@example.org", true).await;
+
+        let connexion = se_connecter(&pool, &jwt, "  Pro.Complet@Example.ORG ", BON).await.unwrap();
+        let ConnexionProfessionnelle::Complete(paire) = connexion else {
+            panic!("connexion complète attendue");
+        };
+        let claims = jwt.verifier(&paire.jeton_acces, SorteJeton::ProfessionnelSansAffectation).unwrap();
+        assert_eq!((claims.sub, claims.aff), (compte_id, None));
+        assert_eq!(paire.jeton_renouvellement.en_clair().len(), 64);
+
+        // Session de 12 h (professionnel), désignée par le `sid` du jeton.
+        let douze_heures: bool = sqlx::query_scalar(
+            "SELECT expire_le - creee_le = interval '12 hours' FROM session WHERE id = $1 AND compte_id = $2",
         )
-        .bind(telephone)
-        .bind(email)
-        .bind(&hash)
+        .bind(claims.sid)
+        .bind(compte_id)
         .fetch_one(&pool)
         .await
         .unwrap();
+        assert!(douze_heures);
+    }
 
-        // --- connexion ---
-        assert!(matches!(
-            se_connecter(&pool, email, "mauvais-mot-de-passe").await,
-            Err(ErreurAuthProfessionnel::IdentifiantsInvalides)
-        ));
-        assert!(matches!(
-            se_connecter(&pool, "inconnu@example.org", "peu-importe").await,
-            Err(ErreurAuthProfessionnel::IdentifiantsInvalides)
-        ));
-
-        let id_verifie = se_connecter(&pool, email, "motdepasseinitial123").await.unwrap();
-        assert_eq!(id_verifie, utilisateur_id);
-
-        // --- verrouillage (5 échecs) ---
-        for _ in 0..5 {
-            let _ = se_connecter(&pool, email, "mauvais-mot-de-passe").await;
+    #[sqlx::test]
+    #[ignore]
+    async fn email_non_verifie_sans_totp_remet_le_compteur_a_zero(pool: PgPool) {
+        let jwt = jwt();
+        let compte_id = professionnel(&pool, "+22670050004", "pro.nonverifie@example.org", false).await;
+        for _ in 0..2 {
+            assert!(refuse(se_connecter(&pool, &jwt, "pro.nonverifie@example.org", MAUVAIS).await));
         }
-        assert!(matches!(
-            se_connecter(&pool, email, "motdepasseinitial123").await,
-            Err(ErreurAuthProfessionnel::CompteVerrouille)
-        ), "le bon mot de passe doit aussi être refusé pendant le verrouillage");
+        assert_eq!(tentatives(&pool, compte_id).await, 2);
 
-        // débloque manuellement pour la suite du test (pas d'attente de 15 min)
-        sqlx::query("UPDATE utilisateur SET tentatives_echouees = 0, verrouille_jusqua = NULL WHERE id = $1")
-            .bind(utilisateur_id)
-            .execute(&pool)
+        assert!(matches!(
+            se_connecter(&pool, &jwt, "pro.nonverifie@example.org", BON).await,
+            Err(ErreurAuthProfessionnel::EmailNonVerifie)
+        ));
+        assert_eq!(tentatives(&pool, compte_id).await, 0, "mot de passe correct, pas de TOTP");
+        let sessions: i64 = sqlx::query_scalar("SELECT count(*) FROM session WHERE compte_id = $1")
+            .bind(compte_id)
+            .fetch_one(&pool)
             .await
             .unwrap();
+        assert_eq!(sessions, 0, "aucune session pour un email non vérifié");
+    }
+
+    #[sqlx::test]
+    #[ignore]
+    async fn email_non_verifie_avec_totp_ne_remet_pas_le_compteur_a_zero(pool: PgPool) {
+        let compte_id = professionnel(&pool, "+22670050005", "pro.totp.nonverifie@example.org", false).await;
+        activer_totp(&pool, compte_id).await;
+        assert!(matches!(
+            se_connecter(&pool, &jwt(), "pro.totp.nonverifie@example.org", BON).await,
+            Err(ErreurAuthProfessionnel::EmailNonVerifie)
+        ));
+        assert_eq!(tentatives(&pool, compte_id).await, 1, "règle V1 : pas de remise à zéro avec un TOTP actif");
+    }
+
+    #[sqlx::test]
+    #[ignore]
+    async fn totp_actif_jeton_intermediaire_sans_session(pool: PgPool) {
+        let jwt = jwt();
+        let compte_id = professionnel(&pool, "+22670050006", "pro.totp@example.org", true).await;
+        activer_totp(&pool, compte_id).await;
+
+        let connexion = se_connecter(&pool, &jwt, "pro.totp@example.org", BON).await.unwrap();
+        let affichage = format!("{connexion:?}");
+        let ConnexionProfessionnelle::SecondFacteur { jeton_intermediaire } = &connexion else {
+            panic!("second facteur attendu");
+        };
+        let claims = jwt.verifier(jeton_intermediaire.en_clair(), SorteJeton::SecondFacteurProfessionnel).unwrap();
+        assert_eq!((claims.sub, claims.sid, claims.aff), (compte_id, None, None));
+        assert_eq!(claims.exp - claims.iat, 5 * 60);
+
+        // Le jeton n'apparaît jamais dans `Debug`.
+        assert!(!affichage.contains(jeton_intermediaire.en_clair()), "{affichage}");
+        assert!(affichage.contains("***"), "{affichage}");
+        assert_eq!(format!("{jeton_intermediaire:?}"), "***");
+
+        let sessions: i64 = sqlx::query_scalar("SELECT count(*) FROM session WHERE compte_id = $1")
+            .bind(compte_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(sessions, 0, "aucune session avant le code TOTP");
+    }
+
+    /// Point 2 du porteur : une erreur interne provoquée (connexions à la
+    /// base fermées) ne contient ni l'email ni le mot de passe saisis.
+    #[sqlx::test]
+    #[ignore]
+    async fn erreur_interne_sans_donnee_saisie(pool: PgPool) {
+        let email = "secret.saisi@example.org";
+        let mot_de_passe = "MotDePasse#Secret1";
+        pool.close().await;
+
+        let erreur = se_connecter(&pool, &jwt(), email, mot_de_passe).await.unwrap_err();
+        assert!(matches!(erreur, ErreurAuthProfessionnel::Interne(_)), "{erreur:?}");
+        for texte in [erreur.to_string(), format!("{erreur:?}")] {
+            assert!(!texte.contains(email) && !texte.contains("secret.saisi"), "{texte}");
+            assert!(!texte.contains(mot_de_passe), "{texte}");
+        }
     }
 }
