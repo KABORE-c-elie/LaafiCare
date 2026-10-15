@@ -168,6 +168,9 @@ abstract final class Espacements {
   static const rayonBouton = 12.0;
   static const rayonChamp = 16.0;
   static const rayonCarte = 16.0;
+
+  /// Marge intérieure du bloc de message d'erreur (maquettes).
+  static const paddingMessage = 12.0;
 }
 
 /// Couleurs hors ColorScheme (ThemeExtension, doc :
