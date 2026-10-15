@@ -2,7 +2,7 @@
 
 Ce document décrit les routes de l'API Rust/Axum telles qu'elles sont **codées aujourd'hui**, puis celles qui sont **seulement prévues**. Les applications Angular (web) et Flutter (mobile) s'appuient sur lui. Il est mis à jour avec chaque ajout ou modification d'une route.
 
-État au 2026-10-14, branche `dev`.
+État au 2026-10-15, branche `dev`.
 
 Toutes les valeurs des exemples sont fictives.
 
@@ -154,9 +154,11 @@ Chaque connexion ouvre une **session** (une par appareil). Le jeton d'accès por
 
 | Route | Appelant | Corps | Réponses |
 |---|---|---|---|
-| `POST /api/sessions/renouveler` | tout le monde, **sans** en-tête `Authorization` (le jeton d'accès peut être expiré) | `{"jeton_renouvellement": "…"}` | 200 : nouvelle paire, même forme que ci-dessus sans `etape` ; 401 `jeton_invalide` : jeton inconnu, expiré, session révoquée ou expirée, ou vol détecté |
+| `POST /api/sessions/renouveler` | tout le monde, **sans** en-tête `Authorization` (le jeton d'accès peut être expiré) | `{"jeton_renouvellement": "…"}` | 200 : nouvelle paire, même forme que ci-dessus sans `etape` ; 401 `jeton_invalide` : jeton inconnu, expiré, session révoquée ou expirée, vol détecté, ou (professionnel, administrateur) email qui n'est plus vérifié, auquel cas la session est fermée |
 | `POST /api/sessions/deconnexion` | tout le monde | `{"jeton_renouvellement": "…"}` | **toujours 204**, même pour un jeton inconnu : se déconnecter n'échoue jamais |
 | `POST /api/sessions/deconnexion-partout` | jeton d'accès `laaficare:patient` **valide** (si expiré : renouveler d'abord) | aucun | 204 : toutes les sessions du compte sont fermées, sur tous les appareils ; 401 comme pour toute route protégée (section 1.2) |
+
+**Limite actuelle pour les professionnels** : `renouveler` et `deconnexion` fonctionnent déjà pour une session professionnelle. En revanche, `deconnexion-partout` n'accepte encore qu'un jeton **patient** : elle s'ouvrira aux professionnels à l'étape 3.9, avec leur extracteur. D'ici là, l'application web déconnecte l'appareil courant avec `deconnexion`.
 
 Erreurs de lecture de la requête (corps JSON mal formé, champ manquant) : section 1.4.
 
@@ -189,6 +191,7 @@ Résumé :
 | POST | `/api/sessions/renouveler` | tout le monde, avec un jeton de renouvellement | fonctionne (section 1.7) |
 | POST | `/api/sessions/deconnexion` | tout le monde, avec un jeton de renouvellement | fonctionne (section 1.7) |
 | POST | `/api/sessions/deconnexion-partout` | jeton `laaficare:patient` | fonctionne (section 1.7) |
+| POST | `/api/professionnels/connexion` | tout le monde | fonctionne (section 2.4) ; pas encore testable sans compte professionnel (étapes 3.6.5 et 3.7) |
 | POST | `/api/assurance-munaseb/remboursements/simuler-acte` | jeton en exercice, agent MUNASEB | **hors service** |
 | GET | `/api/assurance-munaseb/remboursements` | jeton en exercice, agent MUNASEB | **hors service** |
 | GET | `/api/assurance-munaseb/remboursements/{id}` | jeton en exercice, agent MUNASEB | **hors service** |
@@ -573,6 +576,34 @@ Toutes : jeton agent MUNASEB ; l'agent qui agit est enregistré dans l'historiqu
 | 422 | `motif_trop_long` | motif de plus de 1 000 caractères |
 | 500 | `erreur_interne` | panne |
 
+### 2.4 Professionnels : connexion
+
+#### `POST /api/professionnels/connexion`
+
+- **Appelant** : tout le monde, sans jeton.
+- **Corps** :
+
+```json
+{ "email": "pro.exemple@example.org", "mot_de_passe": "Exemple#2026" }
+```
+
+L'email est comparé sans les espaces autour et sans tenir compte des majuscules.
+
+- **Réponses** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 200 | — | `{"etape": "complete", "jeton_acces", "expire_dans", "jeton_renouvellement"}` (section 1.7) : session ouverte de 12 h au plus, 1 h sans renouvellement ; jeton d'accès `laaficare:professionnel_sans_affectation`, qui servira à lister ses établissements et à en choisir un (étape 3.9) |
+| 200 | — | `{"etape": "second_facteur", "jeton_intermediaire": "<JWT>"}` : second facteur actif ; jeton `laaficare:second_facteur_professionnel` de 5 min, à échanger contre la paire avec le code (route prévue, étape 3.6.3). Aucune session n'est encore ouverte. |
+| 401 | `identifiants_invalides` | tous les refus : email inconnu, mauvais mot de passe, compte verrouillé ou désactivé ; message « Email ou mot de passe incorrect. », même temps de réponse |
+| 403 | `email_non_verifie` | mot de passe correct, mais email jamais vérifié (ou plus vérifié après un changement) ; message « Votre email n'est pas encore vérifié. Ouvrez le lien que nous vous avons envoyé, ou demandez-en un nouveau. » |
+| 500 | `erreur_interne` | panne |
+
+- **L'application teste toujours `etape`**, même si aucun professionnel ne peut encore activer de second facteur (après l'étape 3.11).
+- Le **403** n'arrive qu'après un mot de passe correct : seul le détenteur du mot de passe l'apprend. La vérification de l'email (lien valable 24 h) arrive à l'étape 3.7 ; la route qui renvoie un lien aussi.
+- **Verrouillage** : après 5 échecs, 15 minutes ; la réponse reste 401 `identifiants_invalides`. La récupération du mot de passe se fera par email (étape 3.12).
+- **Pas encore testable dans Postman** : aucune route ne crée de compte professionnel avant l'outil du premier administrateur (étape 3.6.5) et la création d'un établissement (étape 3.7).
+
 ---
 
 ## 3. Codes d'erreur : index
@@ -592,6 +623,7 @@ Toutes : jeton agent MUNASEB ; l'agent qui agit est enregistré dans l'historiqu
 | `telephone_inconnu` | 404 | réinitialisation |
 | `mot_de_passe_non_conforme` | 422 | inscription, réinitialisation |
 | `identifiants_invalides` | 401 | connexions |
+| `email_non_verifie` | 403 | connexion professionnelle |
 | `montant_invalide`, `nip_invalide`, `partenaire_suspendu`, `non_couvert`, `en_carence` | 422 | simuler-acte |
 | `patient_inconnu`, `partenaire_inconnu` | 404 | simuler-acte |
 | `reference_acte_deja_utilisee` | 409 | simuler-acte |
@@ -608,10 +640,9 @@ Rien de cette section n'existe dans le code. **Les chemins, corps et réponses n
 
 ### 4.1 Authentification professionnelle et administrateur (étape 3.6)
 
-- Connexion professionnelle par **email + mot de passe** ; mêmes règles que le patient : réponse unique `identifiants_invalides`, message « Email ou mot de passe incorrect. », verrouillage 5 / 15 min.
-- **Connexion en deux temps** quand le second facteur est actif : un mot de passe correct donne un **jeton intermédiaire** de courte durée, accepté seulement par la route qui reçoit le code TOTP ou un code de secours. Vaut aussi pour le patient qui a activé le TOTP.
-- Connexion administrateur LaafiCare : TOTP toujours exigé.
-- Nouvelle forme du jeton : il portera la `version_jeton` du compte (un jeton est refusé après réinitialisation du mot de passe ou bascule) et, côté professionnel, l'affectation active.
+- ✅ Connexion professionnelle : **codée**, section 2.4.
+- **Second temps de la connexion** (étape 3.6.3) : la route qui reçoit le code TOTP ou un code de secours, avec le jeton intermédiaire, et rend la paire de jetons. Vaudra aussi pour le patient qui aura activé le TOTP.
+- Connexion administrateur LaafiCare (étape 3.6.4) : même forme, TOTP toujours exigé ; un administrateur sans TOTP actif reçoit un jeton de réenrôlement qui ne sert qu'à en activer un.
 
 ### 4.2 Second facteur TOTP
 

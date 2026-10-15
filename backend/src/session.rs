@@ -76,7 +76,8 @@ impl TypeCompte {
     }
 }
 
-/// Motifs de révocation d'une session (CHECK de la migration 0015).
+/// Motifs de révocation d'une session (CHECK `session_motif_revocation_check`,
+/// migrations 0015 et 0017).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MotifRevocation {
     Deconnexion,
@@ -85,6 +86,7 @@ pub enum MotifRevocation {
     RejeuDetecte,
     ChangementAffectation,
     DesactivationCompte,
+    EmailNonVerifie,
 }
 
 impl MotifRevocation {
@@ -96,6 +98,7 @@ impl MotifRevocation {
             MotifRevocation::RejeuDetecte => "rejeu_detecte",
             MotifRevocation::ChangementAffectation => "changement_affectation",
             MotifRevocation::DesactivationCompte => "desactivation_compte",
+            MotifRevocation::EmailNonVerifie => "email_non_verifie",
         }
     }
 }
@@ -194,6 +197,12 @@ pub enum ErreurSession {
     /// au client que `JetonInvalide`.
     #[error("rejeu d'un jeton de renouvellement détecté, session révoquée")]
     RejeuDetecte,
+    /// Compte professionnel ou administrateur dont l'email n'est plus
+    /// vérifié : la session a été fermée (motif `email_non_verifie`), et
+    /// cette fermeture est déjà enregistrée. Même réponse au client que
+    /// `JetonInvalide`.
+    #[error("email du compte non vérifié, session fermée")]
+    EmailNonVerifie,
     #[error("erreur interne : {0}")]
     Interne(String),
 }
@@ -390,26 +399,40 @@ pub async fn renouveler(pool: &PgPool, jeton: &str) -> Result<SessionActive, Err
         None => false,
     };
 
-    // 3. La session, puis le compte en simple lecture (jamais verrouillé ici).
-    let (compte_id, affectation_id, session_active, type_compte, statut, version_jeton): (
-        Uuid,
-        Option<Uuid>,
-        bool,
-        String,
-        String,
-        i32,
-    ) = sqlx::query_as(
-        "SELECT s.compte_id, s.affectation_id, s.revoquee_le IS NULL AND s.expire_le > now(), \
-                c.type_compte, c.statut, c.version_jeton \
-         FROM session s JOIN compte c ON c.id = s.compte_id WHERE s.id = $1 FOR UPDATE OF s",
-    )
-    .bind(session_id)
-    .fetch_one(&mut *tx)
-    .await?;
+    // 3. La session, puis le compte et l'identité en simple lecture (jamais
+    //    verrouillés ici : l'ordre des verrous reste « jeton avant session »).
+    type LigneSession = (Uuid, Option<Uuid>, bool, String, String, i32, bool);
+    let (compte_id, affectation_id, session_active, type_compte, statut, version_jeton, email_verifie): LigneSession =
+        sqlx::query_as(
+            "SELECT s.compte_id, s.affectation_id, s.revoquee_le IS NULL AND s.expire_le > now(), \
+                    c.type_compte, c.statut, c.version_jeton, u.email_verifie_le IS NOT NULL \
+             FROM session s JOIN compte c ON c.id = s.compte_id JOIN utilisateur u ON u.id = c.utilisateur_id \
+             WHERE s.id = $1 FOR UPDATE OF s",
+        )
+        .bind(session_id)
+        .fetch_one(&mut *tx)
+        .await?;
     if !session_active || statut != "actif" {
         return Err(ErreurSession::JetonInvalide);
     }
     let type_compte = TypeCompte::depuis(&type_compte)?;
+
+    // Email d'un professionnel ou d'un administrateur qui n'est plus vérifié
+    // (changement d'email, migration 0016) : la session est fermée, sinon
+    // elle continuerait jusqu'à 12 h ou 24 h (décision du 2026-10-15).
+    // Fermeture validée en base avant l'erreur, comme pour le rejeu (S3).
+    // L'email d'un patient est facultatif et jamais vérifié : non concerné.
+    if type_compte != TypeCompte::Patient && !email_verifie {
+        sqlx::query(
+            "UPDATE session SET revoquee_le = now(), motif_revocation = $2 WHERE id = $1 AND revoquee_le IS NULL",
+        )
+        .bind(session_id)
+        .bind(MotifRevocation::EmailNonVerifie.as_str())
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        return Err(ErreurSession::EmailNonVerifie);
+    }
 
     let tolerance = utilise && !reutilise && dans_tolerance && !successeur_a_servi;
     if annule || (utilise && !tolerance) {
@@ -935,6 +958,63 @@ mod tests {
             restantes.push(existe);
         }
         assert_eq!(restantes, vec![false, false, true, false, true]);
+    }
+
+    /// Identité avec un email, vérifié ou non, et un compte du type donné.
+    async fn compte_avec_email(pool: &PgPool, telephone: &str, email: &str, verifie: bool, type_compte: &str) -> Uuid {
+        let utilisateur_id: Uuid =
+            sqlx::query_scalar("INSERT INTO utilisateur (telephone, email) VALUES ($1, $2) RETURNING id")
+                .bind(telephone)
+                .bind(email)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        if verifie {
+            sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1")
+                .bind(utilisateur_id)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query_scalar(
+            "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, $2, 'x') RETURNING id",
+        )
+        .bind(utilisateur_id)
+        .bind(type_compte)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// Décision du 2026-10-15 : la vérification de l'email effacée (comme
+    /// après un changement d'email), le renouvellement d'une session
+    /// professionnelle est refusé et la session fermée, en base.
+    #[sqlx::test]
+    #[ignore]
+    async fn email_non_verifie_ferme_la_session_professionnelle(pool: PgPool) {
+        let compte_id = compte_avec_email(&pool, "+22670030023", "pro.session@example.org", true, "professionnel").await;
+        let session = ouvrir(&pool, compte_id, None).await.unwrap();
+        let a = session.jeton_renouvellement.en_clair().to_owned();
+        let b = renouveler(&pool, &a).await.unwrap().jeton_renouvellement.en_clair().to_owned();
+
+        sqlx::query("UPDATE utilisateur SET email_verifie_le = NULL WHERE id = (SELECT utilisateur_id FROM compte WHERE id = $1)")
+            .bind(compte_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(matches!(renouveler(&pool, &b).await, Err(ErreurSession::EmailNonVerifie)));
+        assert_eq!(motif(&pool, session.session_id).await.as_deref(), Some("email_non_verifie"));
+        assert!(est_invalide(renouveler(&pool, &b).await), "la session fermée n'accepte plus rien");
+    }
+
+    /// L'email d'un patient est facultatif et jamais vérifié : il renouvelle
+    /// normalement.
+    #[sqlx::test]
+    #[ignore]
+    async fn patient_avec_email_non_verifie_renouvelle(pool: PgPool) {
+        let compte_id = compte_avec_email(&pool, "+22670030024", "patient.session@example.org", false, "patient").await;
+        let a = ouvrir(&pool, compte_id, None).await.unwrap().jeton_renouvellement.en_clair().to_owned();
+        renouveler(&pool, &a).await.unwrap();
     }
 
     #[sqlx::test]

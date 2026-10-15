@@ -58,7 +58,7 @@ Le code est enregistré en SHA-256 simple. Avec seulement un million de codes po
 - **Liste de mots de passe interdits** (exigée par la norme NIST SP 800-63B rév. 4) : source à choisir, liste intégrée ou service externe.
 - **Sauvegarde de la clé `TOTP_CLE_CHIFFREMENT`**, à part et en lieu sûr, jamais avec la base. La perdre rendrait tous les seconds facteurs inutilisables.
 - **Outils de l'équipe LaafiCare**, à concevoir :
-  - changer l'email d'un professionnel qui a perdu l'accès à sa boîte, après vérification de sa pièce d'identité (CNIB), avec une trace ;
+  - changer l'email d'un professionnel qui a perdu l'accès à sa boîte, après vérification de sa pièce d'identité (CNIB), avec une trace. L'outil **fermera toutes les sessions du compte** (`fermer_toutes`, avec un nouveau motif à prévoir alors) ; la vérification de l'email est déjà effacée par la base à chaque changement (migration 0016) ;
   - déconnecter de force un compte compromis ;
   - changer le numéro de CNIB d'un administrateur (renouvellement de la carte, future carte de l'AES).
 - **Désactivation du second facteur par les structures validées** (vérification de la CNIB à l'accueil) : à rediscuter. En V1, seule l'équipe LaafiCare le désactive.

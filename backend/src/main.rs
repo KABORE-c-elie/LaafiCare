@@ -2,6 +2,7 @@ mod erreur_api;
 mod extracteur_jwt;
 mod routes_patient;
 mod routes_remboursement_munaseb;
+mod routes_professionnel;
 mod routes_session;
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -155,6 +156,7 @@ async fn main() {
         .route("/api/sessions/renouveler", post(routes_session::renouveler))
         .route("/api/sessions/deconnexion", post(routes_session::deconnexion))
         .route("/api/sessions/deconnexion-partout", post(routes_session::deconnexion_partout))
+        .route("/api/professionnels/connexion", post(routes_professionnel::se_connecter))
         .route("/api/patients/otp", post(routes_patient::demander_otp))
         .route("/api/patients/inscription", post(routes_patient::creer_compte))
         .route(

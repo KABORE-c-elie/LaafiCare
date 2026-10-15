@@ -138,6 +138,10 @@ Une personne peut avoir un compte patient, un compte professionnel et, pour l'é
 
 Les professionnels se connectent par **email**, les patients par **téléphone**. Le SMS ne sert qu'aux patients.
 
+**L'email d'un professionnel doit être vérifié** : la personne prouve qu'elle reçoit les messages de cette adresse, en ouvrant un lien à usage unique valable 24 heures (source : NIST SP 800-63A rév. 4, §3.8 ; le lien arrive à l'étape 3.7). Tant que ce n'est pas fait, le compte ne peut pas se connecter. La base garantit qu'une identité ne naît jamais vérifiée, et que **tout changement d'email efface la vérification**. Une session professionnelle ouverte s'arrête alors à son prochain renouvellement, au plus tard 15 minutes après. Fichiers : [`auth_professionnel.rs`](../backend/src/auth_professionnel.rs), [`session.rs`](../backend/src/session.rs). Migrations 0016 et 0017.
+
+**À la connexion professionnelle**, les mêmes règles que pour le patient : une seule réponse pour un email inconnu, un mauvais mot de passe, un compte bloqué ou désactivé, avec le même temps de réponse ; verrouillage après 5 essais. Le message « email pas encore vérifié » n'apparaît qu'après un mot de passe correct : seul le détenteur du mot de passe l'apprend. En cas de panne, la réponse ne contient jamais l'email ni le mot de passe saisis, et les journaux non plus.
+
 Un établissement n'a **accès à aucune donnée de patient tant que l'équipe LaafiCare ne l'a pas validé**.
 
 ## 8. Ce que la base de données garantit elle-même

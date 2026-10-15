@@ -63,7 +63,29 @@ Une même identité peut avoir **plusieurs comptes**, un par type : `patient`, `
 - une **version de jeton**, augmentée à chaque changement sensible, pour invalider les anciennes connexions.
 
 Règle garantie par la base : **un seul compte de chaque type par personne**.
-Fichiers : [`verrouillage.rs`](../backend/src/verrouillage.rs), [`auth_patient.rs`](../backend/src/auth_patient.rs). Migration 0011.
+Fichiers : [`verrouillage.rs`](../backend/src/verrouillage.rs), [`auth_patient.rs`](../backend/src/auth_patient.rs), [`auth_professionnel.rs`](../backend/src/auth_professionnel.rs). Migration 0011.
+
+### `envoi_otp` : les codes SMS envoyés
+
+Une ligne par code SMS envoyé (l'identité et la date, **jamais le numéro**), pour limiter les envois : 60 secondes entre deux codes, 5 par heure. Les lignes de plus d'une heure sont effacées à chaque envoi. Migration 0014.
+
+### `session` et `jeton_renouvellement` : les connexions ouvertes
+
+Une **session** par connexion, donc par appareil, avec sa date de fin (30 jours pour un patient, 12 h pour un professionnel, 24 h pour un administrateur). Les **jetons de renouvellement** de la session ne sont jamais enregistrés en clair, seulement leur empreinte ; chacun ne sert qu'une fois.
+
+Une session fermée garde la date et le **motif** de sa fermeture :
+
+| Motif | Quand |
+|---|---|
+| `deconnexion` | la personne se déconnecte de cet appareil |
+| `deconnexion_partout` | la personne se déconnecte de tous ses appareils |
+| `reinitialisation_mot_de_passe` | le mot de passe a été réinitialisé : toutes les sessions sont fermées |
+| `rejeu_detecte` | un ancien jeton de renouvellement, déjà remplacé, a été présenté à nouveau (vol possible, ou réseau très instable) |
+| `changement_affectation` | prévu : un professionnel change d'établissement ou de rôle (étape 3.9) |
+| `desactivation_compte` | prévu : le compte est désactivé |
+| `email_non_verifie` | l'email d'un professionnel ou d'un administrateur n'est plus vérifié (après un changement d'email) |
+
+Règles garanties par la base : une session fermée a toujours un motif ; la liste des motifs est fermée ; une affectation de session appartient forcément au compte de la session. Les sessions terminées sont effacées après 30 jours (6 mois pour `rejeu_detecte`). Fichier : [`session.rs`](../backend/src/session.rs). Migrations 0015 et 0017.
 
 ## 2. Patients
 
@@ -243,5 +265,9 @@ Le numéro de CNIB de chaque administrateur LaafiCare, **unique**, au format de 
 | 0011 | Comptes séparés (patient, professionnel, administrateur) |
 | 0012 | Établissements, pièces, registre des autorisations, décisions, affectations, invitations |
 | 0013 | Second facteur, codes de secours, désactivations, profil administrateur |
+| 0014 | Limites du code SMS (envois, essais) |
+| 0015 | Sessions et jetons de renouvellement |
+| 0016 | Vérification de l'email (jamais vérifié à la création, effacée à chaque changement d'email) |
+| 0017 | Motif de fermeture de session `email_non_verifie` |
 
 Une migration déjà appliquée ne change plus jamais : toute évolution passe par une nouvelle migration. Un test vérifie aussi qu'aucun caractère invisible ne s'y glisse ([`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs)).

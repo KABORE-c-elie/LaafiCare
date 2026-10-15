@@ -57,7 +57,7 @@ pub async fn renouveler(
         .and_then(|active| active.en_paire(&state.jwt));
     match resultat {
         Ok(paire) => reponse_paire(StatusCode::OK, &paire, None),
-        Err(ErreurSession::JetonInvalide | ErreurSession::RejeuDetecte) => reponse_erreur(
+        Err(ErreurSession::JetonInvalide | ErreurSession::RejeuDetecte | ErreurSession::EmailNonVerifie) => reponse_erreur(
             StatusCode::UNAUTHORIZED,
             "jeton_invalide",
             "jeton de renouvellement invalide ou expiré",
