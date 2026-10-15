@@ -46,3 +46,7 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Traductions générées par gen-l10n à partir de lib/l10n/app_fr.arb (seule
+# source) ; recréées par flutter pub get et flutter run.
+/lib/l10n/app_localizations*.dart

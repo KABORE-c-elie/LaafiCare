@@ -1,0 +1,15 @@
+# Traductions : outil officiel gen-l10n, français seulement pour l'instant.
+# https://docs.flutter.dev/ui/accessibility-and-internationalization/internationalization
+# Les fichiers générés (lib/l10n/app_localizations*.dart) sont recréés par
+# flutter pub get et flutter run ; ils sont ignorés par Git, le .arb reste la
+# seule source (décision du porteur).
+arb-dir: lib/l10n
+template-arb-file: app_fr.arb
+output-localization-file: app_localizations.dart
+# « The Dart class name to use for the output localization and localizations
+# delegate classes » : nommée en français, comme le reste du code.
+output-class: Textes
+# « If this value is false, then a null check is performed on the returned
+# value of Localizations.of(context), removing the need for null checking in
+# user code » : le français est toujours fourni.
+nullable-getter: false

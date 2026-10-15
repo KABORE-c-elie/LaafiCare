@@ -1,0 +1,98 @@
+{
+  "@@locale": "fr",
+
+  "nomApplication": "LaafiCare",
+  "@nomApplication": {
+    "description": "Nom de l'application."
+  },
+
+  "connexionTitre": "Se connecter",
+  "@connexionTitre": {
+    "description": "Titre de l'écran de connexion (maquette)."
+  },
+  "connexionSousTitre": "Avec votre numéro de téléphone et votre mot de passe.",
+  "@connexionSousTitre": {
+    "description": "Sous-titre de l'écran de connexion (maquette)."
+  },
+  "champTelephone": "Numéro de téléphone",
+  "@champTelephone": {
+    "description": "Libellé du champ téléphone (maquette)."
+  },
+  "prefixeTelephone": "+226",
+  "@prefixeTelephone": {
+    "description": "Préfixe fixe du Burkina Faso devant la saisie du numéro (maquette ; seul préfixe en V1)."
+  },
+  "indicationTelephone": "70 00 00 00",
+  "@indicationTelephone": {
+    "description": "Exemple fictif affiché dans le champ téléphone vide (maquette)."
+  },
+  "champMotDePasse": "Mot de passe",
+  "@champMotDePasse": {
+    "description": "Libellé du champ mot de passe (maquette)."
+  },
+  "afficherMotDePasse": "Afficher le mot de passe",
+  "@afficherMotDePasse": {
+    "description": "Libellé d'accessibilité du bouton œil quand le mot de passe est masqué (maquette)."
+  },
+  "masquerMotDePasse": "Masquer le mot de passe",
+  "@masquerMotDePasse": {
+    "description": "Libellé d'accessibilité du bouton œil quand le mot de passe est visible."
+  },
+  "motDePasseOublie": "Mot de passe oublié ?",
+  "@motDePasseOublie": {
+    "description": "Lien vers le mot de passe oublié, qui lève aussi le verrouillage du compte (CLAUDE.md §14)."
+  },
+  "boutonSeConnecter": "Se connecter",
+  "@boutonSeConnecter": {
+    "description": "Bouton principal de l'écran de connexion (maquette)."
+  },
+  "pasEncoreDeCompte": "Pas encore de compte ?",
+  "@pasEncoreDeCompte": {
+    "description": "Séparateur avant le bouton de création de compte (maquette)."
+  },
+  "boutonCreerCompte": "Créer mon compte",
+  "@boutonCreerCompte": {
+    "description": "Bouton secondaire vers l'inscription (maquette)."
+  },
+  "urgencesTitre": "Numéros d'urgence",
+  "@urgencesTitre": {
+    "description": "Titre de la carte des numéros d'urgence, accessible sans compte (maquette)."
+  },
+  "urgencesResume": "15 SAMU, 18 pompiers, 17 police",
+  "@urgencesResume": {
+    "description": "Résumé de la carte des numéros d'urgence (maquette)."
+  },
+
+  "erreurIdentifiants": "Numéro ou mot de passe incorrect. Après plusieurs essais, la connexion est bloquée quelques minutes : utilisez « Mot de passe oublié ? » si besoin.",
+  "@erreurIdentifiants": {
+    "description": "Code identifiants_invalides (docs/api.md §2.2.3) : tous les refus de connexion, compte verrouillé compris. Texte du porteur, identique dans tous les cas : il ne dit jamais si ce compte-ci est verrouillé, ni s'il existe (CLAUDE.md §14)."
+  },
+  "erreurTelephoneInvalide": "Ce numéro de téléphone n'est pas reconnu. Vérifiez-le, puis réessayez.",
+  "@erreurTelephoneInvalide": {
+    "description": "Code telephone_invalide (docs/api.md §1.6)."
+  },
+  "erreurReseau": "Impossible de joindre le serveur. Vérifiez votre connexion internet, puis réessayez.",
+  "@erreurReseau": {
+    "description": "Pas de réseau, serveur injoignable ou délai dépassé (texte du porteur)."
+  },
+  "erreurServeur": "Le service est momentanément indisponible. Réessayez dans quelques instants.",
+  "@erreurServeur": {
+    "description": "erreur_interne, reponse_illisible et tout autre code non prévu."
+  },
+  "erreurEtapeNonGeree": "Cette étape de connexion n'est pas encore prise en charge par l'application. Mettez l'application à jour.",
+  "@erreurEtapeNonGeree": {
+    "description": "La connexion demande une étape inconnue de l'application (ex. second_facteur, docs/api.md §1.7)."
+  },
+  "erreurSessionFermee": "Votre session a pris fin. Reconnectez-vous.",
+  "@erreurSessionFermee": {
+    "description": "Session fermée par le serveur (renouvellement refusé, docs/api.md §1.7)."
+  },
+  "telephoneVide": "Saisissez votre numéro de téléphone.",
+  "@telephoneVide": {
+    "description": "Contrôle local avant l'envoi : champ téléphone vide."
+  },
+  "motDePasseVide": "Saisissez votre mot de passe.",
+  "@motDePasseVide": {
+    "description": "Contrôle local avant l'envoi : champ mot de passe vide."
+  }
+}
