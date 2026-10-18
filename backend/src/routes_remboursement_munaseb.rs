@@ -1,12 +1,13 @@
 //! Routes HTTP des demandes de remboursement MUNASEB (section 12), toutes
-//! réservées aux agents MUNASEB (extracteur `AgentAssuranceMunasebAuthentifie`).
-//! Même principe que les autres fichiers de routes : désérialiser, appeler
-//! le service de `demande_remboursement_munaseb`, traduire le résultat --
-//! aucune logique métier ici.
+//! réservées aux agents MUNASEB en exercice (extracteur `AgentMunaseb`,
+//! étape 3.9). Même principe que les autres fichiers de routes :
+//! désérialiser, appeler le service de `demande_remboursement_munaseb`,
+//! traduire le résultat -- aucune logique métier ici.
 //!
-//! Regroupées dans ce fichier (décision L6). La connexion de l'agent passe
-//! par la connexion professionnelle et le choix de l'affectation (étapes
-//! 3.6 et 3.9).
+//! Regroupées dans ce fichier (décision L6). L'agent se connecte par la
+//! connexion professionnelle, puis active son affectation
+//! `agent_assurance_munaseb` (étape 3.9) ; chaque transition est
+//! enregistrée avec cette affectation (J8).
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -19,7 +20,7 @@ use crate::AppState;
 use crate::erreur_api::{
     CheminApi, ErreurApi, JsonApi, ReponseErreur, RequeteApi, reponse_erreur, reponse_erreur_interne,
 };
-use crate::extracteur_jwt::AgentAssuranceMunasebAuthentifie;
+use crate::extracteur_jwt::AgentMunaseb;
 use laaficare_backend::demande_remboursement_munaseb::{
     self as remboursement, Acte, DetailDemande, ErreurDemandeRemboursement, ErreurTransition, ResumeDemande,
     StatutDemande, TypeActeMunaseb,
@@ -71,7 +72,7 @@ pub struct SimulerActeReponse {
 /// requête avant l'appel du handler (condition posée pour
 /// `PatientInconnu` : jamais exposé sans authentification).
 pub async fn simuler_acte(
-    _agent: AgentAssuranceMunasebAuthentifie,
+    _agent: AgentMunaseb,
     State(state): State<AppState>,
     JsonApi(corps): JsonApi<SimulerActeRequete>,
 ) -> Result<Json<SimulerActeReponse>, ReponseErreur> {
@@ -116,7 +117,7 @@ pub struct ListeReponse {
 
 /// `GET /api/assurance-munaseb/remboursements?statut=&limite=&apres=`
 pub async fn lister(
-    _agent: AgentAssuranceMunasebAuthentifie,
+    _agent: AgentMunaseb,
     State(state): State<AppState>,
     RequeteApi(filtre): RequeteApi<FiltreListe>,
 ) -> Result<Json<ListeReponse>, ReponseErreur> {
@@ -138,7 +139,7 @@ pub async fn lister(
 
 /// `GET /api/assurance-munaseb/remboursements/{id}` -- détail et historique.
 pub async fn detail(
-    _agent: AgentAssuranceMunasebAuthentifie,
+    _agent: AgentMunaseb,
     State(state): State<AppState>,
     CheminApi(demande_id): CheminApi<Uuid>,
 ) -> Result<Json<DetailDemande>, ReponseErreur> {
@@ -172,11 +173,11 @@ fn mapper_erreur_transition(erreur: ErreurTransition) -> ReponseErreur {
 
 /// `POST …/remboursements/{id}/prendre-en-charge`
 pub async fn prendre_en_charge(
-    agent: AgentAssuranceMunasebAuthentifie,
+    AgentMunaseb(agent): AgentMunaseb,
     State(state): State<AppState>,
     CheminApi(demande_id): CheminApi<Uuid>,
 ) -> Result<StatusCode, ReponseErreur> {
-    remboursement::prendre_en_charge(&state.db, demande_id, agent.utilisateur_id)
+    remboursement::prendre_en_charge(&state.db, demande_id, agent)
         .await
         .map_err(mapper_erreur_transition)?;
     Ok(StatusCode::NO_CONTENT)
@@ -190,11 +191,11 @@ pub struct ValidationReponse {
 /// `POST …/remboursements/{id}/valider` -- renvoie le montant remboursé
 /// (décision V3) : l'agent voit tout de suite si le plafond l'a limité.
 pub async fn valider(
-    agent: AgentAssuranceMunasebAuthentifie,
+    AgentMunaseb(agent): AgentMunaseb,
     State(state): State<AppState>,
     CheminApi(demande_id): CheminApi<Uuid>,
 ) -> Result<Json<ValidationReponse>, ReponseErreur> {
-    let montant_rembourse_fcfa = remboursement::valider(&state.db, demande_id, agent.utilisateur_id)
+    let montant_rembourse_fcfa = remboursement::valider(&state.db, demande_id, agent)
         .await
         .map_err(mapper_erreur_transition)?;
     Ok(Json(ValidationReponse { montant_rembourse_fcfa }))
@@ -207,12 +208,12 @@ pub struct RejetRequete {
 
 /// `POST …/remboursements/{id}/rejeter`, corps `{"motif": "…"}`
 pub async fn rejeter(
-    agent: AgentAssuranceMunasebAuthentifie,
+    AgentMunaseb(agent): AgentMunaseb,
     State(state): State<AppState>,
     CheminApi(demande_id): CheminApi<Uuid>,
     JsonApi(corps): JsonApi<RejetRequete>,
 ) -> Result<StatusCode, ReponseErreur> {
-    remboursement::rejeter(&state.db, demande_id, agent.utilisateur_id, &corps.motif)
+    remboursement::rejeter(&state.db, demande_id, agent, &corps.motif)
         .await
         .map_err(mapper_erreur_transition)?;
     Ok(StatusCode::NO_CONTENT)
@@ -220,11 +221,11 @@ pub async fn rejeter(
 
 /// `POST …/remboursements/{id}/payer`
 pub async fn payer(
-    agent: AgentAssuranceMunasebAuthentifie,
+    AgentMunaseb(agent): AgentMunaseb,
     State(state): State<AppState>,
     CheminApi(demande_id): CheminApi<Uuid>,
 ) -> Result<StatusCode, ReponseErreur> {
-    remboursement::marquer_payee(&state.db, demande_id, agent.utilisateur_id)
+    remboursement::marquer_payee(&state.db, demande_id, agent)
         .await
         .map_err(mapper_erreur_transition)?;
     Ok(StatusCode::NO_CONTENT)
@@ -255,6 +256,160 @@ mod tests {
             assert_eq!(corps.debut_couverture, est_carence.then_some(debut));
             assert!(!corps.erreur.contains("secret"));
         }
+    }
+
+    /// D5 avec deux structures MUNASEB (décision du porteur, 2026-10-18) :
+    /// sur la même demande, l'agent de la MUNASEB en attente de validation
+    /// est refusé (403) avant l'appel de la route, la demande ne change pas ;
+    /// l'agent de la MUNASEB validée la prend en charge, et l'historique
+    /// garde son affectation (J8).
+    #[sqlx::test]
+    #[ignore]
+    async fn transition_par_l_agent_de_la_seule_munaseb_validee(pool: sqlx::PgPool) {
+        use axum::extract::FromRequestParts;
+        use axum::http::{Request, header::AUTHORIZATION};
+        use axum::response::IntoResponse;
+        use laaficare_backend::config::CleTotp;
+        use laaficare_backend::jwt::{JwtService, SorteJeton};
+        use laaficare_backend::session;
+        use laaficare_backend::sms::SmsSenderConsole;
+        use std::sync::Arc;
+
+        let state = AppState {
+            db: pool,
+            jwt: JwtService::new(&"a".repeat(32)),
+            sms: Arc::new(SmsSenderConsole),
+            cle_totp: Arc::new(CleTotp::depuis_octets([7; 32])),
+        };
+        let db = &state.db;
+        let scalaire = |requete: &'static str, telephone: &'static str| async move {
+            sqlx::query_scalar::<_, Uuid>(requete).bind(telephone).fetch_one(db).await.unwrap()
+        };
+
+        // Demande en attente (données fictives).
+        let personne = scalaire("INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('OUEDRAOGO', 'Awa', $1) RETURNING id", "+22670190001").await;
+        let patient: Uuid = sqlx::query_scalar(
+            "INSERT INTO patient (utilisateur_id, nip, date_naissance, lieu_naissance) \
+             VALUES ($1, '0000000000000000', '2000-01-01', 'Ouagadougou') RETURNING id",
+        )
+        .bind(personne)
+        .fetch_one(db)
+        .await
+        .unwrap();
+        let contrat: Uuid = sqlx::query_scalar(
+            "INSERT INTO contrat_assurance_munaseb (patient_id, numero_carte, ufr, universite, num_matricule) \
+             VALUES ($1, 'TEST-D5', 'UFR', 'Université', 'M-D5') RETURNING id",
+        )
+        .bind(patient)
+        .fetch_one(db)
+        .await
+        .unwrap();
+        let periode: Uuid = sqlx::query_scalar(
+            "INSERT INTO periode_adhesion_munaseb (contrat_id, date_paiement, date_debut, date_fin) \
+             VALUES ($1, '2026-01-01', '2026-01-01', '2026-12-31') RETURNING id",
+        )
+        .bind(contrat)
+        .fetch_one(db)
+        .await
+        .unwrap();
+        let partenaire = scalaire(
+            "INSERT INTO partenaire_sante_munaseb (nom, type, ville, telephone) \
+             VALUES ('Pharmacie de test', 'pharmacie', 'Ouagadougou', $1) RETURNING id",
+            "+22670190002",
+        )
+        .await;
+        let demande: Uuid = sqlx::query_scalar(
+            "INSERT INTO demande_remboursement_munaseb \
+             (partenaire_id, type_acte, reference_acte, date_acte, montant_acte_fcfa, montant_demande_fcfa, periode_id) \
+             VALUES ($1, 'pharmacie', 'REF-D5', '2026-06-01', 1000, 800, $2) RETURNING id",
+        )
+        .bind(partenaire)
+        .bind(periode)
+        .fetch_one(db)
+        .await
+        .unwrap();
+
+        // Deux structures MUNASEB : la base n'en admet qu'une validée.
+        let agent_en_exercice = |telephone: &'static str, statut: &'static str| {
+            let state = state.clone();
+            async move {
+                let identite: Uuid = sqlx::query_scalar(
+                    "INSERT INTO utilisateur (telephone, email) VALUES ($1, $1 || '@example.org') RETURNING id",
+                )
+                .bind(telephone)
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+                sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1")
+                    .bind(identite)
+                    .execute(&state.db)
+                    .await
+                    .unwrap();
+                let compte: Uuid = sqlx::query_scalar(
+                    "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'professionnel', 'x') RETURNING id",
+                )
+                .bind(identite)
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+                let structure: Uuid = sqlx::query_scalar(
+                    "INSERT INTO structure (type_structure, nom, telephone, commune, province, latitude, longitude, createur_compte_id, statut) \
+                     VALUES ('munaseb', 'MUNASEB', '+22670000000', 'Ouagadougou', 'Kadiogo', 12.371400, -1.519700, $1, $2) RETURNING id",
+                )
+                .bind(compte)
+                .bind(statut)
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+                let affectation: Uuid = sqlx::query_scalar(
+                    "INSERT INTO affectation (compte_id, structure_id, role) VALUES ($1, $2, 'agent_assurance_munaseb') RETURNING id",
+                )
+                .bind(compte)
+                .bind(structure)
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+                let session = session::ouvrir(&state.db, compte, Some(affectation)).await.unwrap();
+                let jeton = state
+                    .jwt
+                    .emettre(SorteJeton::ProfessionnelEnExercice, compte, 0, Some(affectation), Some(session.session_id))
+                    .unwrap();
+                (affectation, format!("Bearer {jeton}"))
+            }
+        };
+        let (affectation_a, jeton_a) = agent_en_exercice("+22670190003", "validee").await;
+        let (_, jeton_b) = agent_en_exercice("+22670190004", "en_attente").await;
+        let extraire = |en_tete: String| {
+            let state = state.clone();
+            async move {
+                let mut parts = Request::builder().header(AUTHORIZATION, en_tete).body(()).unwrap().into_parts().0;
+                AgentMunaseb::from_request_parts(&mut parts, &state).await
+            }
+        };
+        let statut_demande = || async {
+            sqlx::query_scalar::<_, String>("SELECT statut FROM demande_remboursement_munaseb WHERE id = $1")
+                .bind(demande)
+                .fetch_one(db)
+                .await
+                .unwrap()
+        };
+
+        let refus = extraire(jeton_b).await.map_err(IntoResponse::into_response).unwrap_err();
+        assert_eq!(refus.status(), StatusCode::FORBIDDEN);
+        assert_eq!(statut_demande().await, "en_attente", "la demande n'a pas changé");
+
+        let agent_a = extraire(jeton_a).await.unwrap();
+        let statut = prendre_en_charge(agent_a, State(state.clone()), CheminApi(demande)).await.unwrap();
+        assert_eq!(statut, StatusCode::NO_CONTENT);
+        assert_eq!(statut_demande().await, "en_cours");
+        let par: Option<Uuid> = sqlx::query_scalar(
+            "SELECT agent_affectation_id FROM historique_statut_demande WHERE demande_id = $1 AND statut_precedent IS NOT NULL",
+        )
+        .bind(demande)
+        .fetch_one(db)
+        .await
+        .unwrap();
+        assert_eq!(par, Some(affectation_a));
     }
 
     #[test]

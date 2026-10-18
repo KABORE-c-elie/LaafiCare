@@ -10,9 +10,10 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
-use crate::erreur_api::{JsonApi, ReponseErreur, reponse_erreur, reponse_erreur_interne};
-use crate::extracteur_jwt::{IntermediaireProfessionnel, RefusAuthentification};
+use crate::erreur_api::{CheminApi, JsonApi, ReponseErreur, reponse_erreur, reponse_erreur_interne};
+use crate::extracteur_jwt::{IntermediaireProfessionnel, ProfessionnelConnecte, RefusAuthentification};
 use crate::routes_session::reponse_paire;
+use laaficare_backend::affectation::{self, AffectationListee, ErreurActivation};
 use laaficare_backend::auth_professionnel::{
     self, ConnexionProfessionnelle, ErreurAuthProfessionnel, ErreurSecondFacteur, JetonIntermediaire,
     SaisieSecondFacteur,
@@ -140,6 +141,64 @@ pub(crate) async fn terminer_second_facteur(
     {
         Ok(paire) => reponse_paire(StatusCode::OK, &paire, Some("complete")),
         Err(erreur) => reponse_erreur_second_facteur(erreur, contexte),
+    }
+}
+
+// ---------------------------------------------------------------------
+// Affectations (étape 3.9, D1 à D3)
+// ---------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct ListeAffectations {
+    affectations: Vec<AffectationListee>,
+}
+
+/// `GET /api/professionnels/affectations` -- jeton sans affectation ou en
+/// exercice (D2). 200 avec les affectations **actives** du compte, chacune
+/// avec `exercable`.
+pub async fn lister_affectations(professionnel: ProfessionnelConnecte, State(state): State<AppState>) -> Response {
+    match affectation::lister(&state.db, professionnel.compte_id).await {
+        Ok(affectations) => (StatusCode::OK, Json(ListeAffectations { affectations })).into_response(),
+        Err(erreur) => reponse_erreur_interne("liste des affectations", &erreur.to_string()).into_response(),
+    }
+}
+
+fn reponse_erreur_activation(erreur: ErreurActivation) -> Response {
+    match erreur {
+        // Inexistante ou d'un autre compte : jamais distingués (D1).
+        ErreurActivation::AffectationInconnue => {
+            reponse_erreur(StatusCode::NOT_FOUND, "affectation_inconnue", erreur.to_string()).into_response()
+        }
+        ErreurActivation::NonExercable => {
+            reponse_erreur(StatusCode::FORBIDDEN, "affectation_non_exercable", erreur.to_string()).into_response()
+        }
+        // Session fermée entre le contrôle du jeton et l'activation.
+        ErreurActivation::SessionFermee => RefusAuthentification::JetonInvalide.into_response(),
+        ErreurActivation::Interne(detail) => reponse_erreur_interne("activation d'une affectation", &detail).into_response(),
+    }
+}
+
+/// `POST /api/professionnels/affectations/{id}/activer` -- jeton sans
+/// affectation ou en exercice (D2), sans corps. 200 avec une nouvelle paire
+/// de jetons, d'une session de cette affectation (D3 a : l'ancienne session
+/// est fermée, la nouvelle garde sa date de fin). 404
+/// `affectation_inconnue`, 403 `affectation_non_exercable`.
+pub async fn activer_affectation(
+    professionnel: ProfessionnelConnecte,
+    State(state): State<AppState>,
+    CheminApi(affectation_id): CheminApi<sqlx::types::Uuid>,
+) -> Response {
+    let activee = affectation::activer(&state.db, professionnel.compte_id, professionnel.session_id, affectation_id)
+        .await
+        .map_err(reponse_erreur_activation)
+        .and_then(|session| {
+            session
+                .en_paire(&state.jwt)
+                .map_err(|e| reponse_erreur_interne("jetons de l'affectation", &e.to_string()).into_response())
+        });
+    match activee {
+        Ok(paire) => reponse_paire(StatusCode::OK, &paire, None),
+        Err(reponse) => reponse,
     }
 }
 

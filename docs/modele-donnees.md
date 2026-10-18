@@ -173,6 +173,8 @@ Fichier : [`demande_remboursement_munaseb.rs`](../backend/src/demande_remboursem
 
 Une ligne par changement de statut, création comprise, avec l'agent qui l'a fait et la date. **Ces lignes ne peuvent être ni modifiées ni supprimées** : la base le refuse (migration 0010).
 
+Depuis la migration 0021, l'agent est désigné par son **affectation** (l'affectation, son établissement et son rôle, `agent_assurance_munaseb`) : on sait qui a agi et dans quel établissement. Les lignes plus anciennes gardent l'ancienne désignation, par la personne seule. Règles garanties par la base : une création n'a pas d'agent ; toute nouvelle transition a une affectation existante, de cet établissement et de ce rôle.
+
 ### `notification` : les messages au patient
 
 Chaque changement de statut d'une demande crée une notification, que l'application patient affichera : titre, message, lue ou non. Le texte reste **volontairement vague** (ni type d'acte, ni nom de l'établissement), car il pourrait un jour s'afficher sur l'écran verrouillé du téléphone. Une notification qui échoue n'annule jamais la demande.
@@ -227,7 +229,7 @@ Règles garanties par la base :
 - elle ne se modifie **qu'une fois**, pour sa clôture (avec la date et l'auteur) ; tout le reste est figé ;
 - **pas de réactivation** : une personne qui revient reçoit une nouvelle affectation, et l'historique garde toutes les périodes.
 
-C'est ce qui permettra, plus tard, de savoir pour chaque acte médical qui l'a fait et dans quel établissement.
+C'est ce qui permettra, plus tard, de savoir pour chaque acte médical qui l'a fait et dans quel établissement. C'est déjà le cas des décisions des agents MUNASEB (migration 0021). Après sa connexion, un professionnel **active** l'une de ses affectations : sa session porte alors cette affectation, et une nouvelle activation ouvre une nouvelle session (fichier [`affectation.rs`](../backend/src/affectation.rs)).
 
 ### `invitation` : faire entrer quelqu'un dans un établissement
 
@@ -287,5 +289,6 @@ Règles garanties par la base : **jamais modifiées ni supprimées** ; seulement
 | 0018 | Jeton intermédiaire à usage unique (`compte.second_facteur_dernier_iat`) |
 | 0019 | Fenêtre de réenrôlement d'un administrateur (`compte.reenrolement_autorise_jusqu_au`) |
 | 0020 | Codes envoyés par email (`jeton_email`), motif de session `desactivation_totp`, traces de la création et de la reprise des administrateurs |
+| 0021 | Historique des demandes MUNASEB : l'agent désigné par son affectation (établissement et rôle) |
 
 Une migration déjà appliquée ne change plus jamais : toute évolution passe par une nouvelle migration. Un test vérifie aussi qu'aucun caractère invisible ne s'y glisse ([`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs)).

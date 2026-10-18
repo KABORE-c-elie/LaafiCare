@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 use crate::erreur_api::{JsonApi, reponse_erreur, reponse_erreur_interne};
-use crate::extracteur_jwt::PatientAuthentifie;
+use crate::extracteur_jwt::CompteConnecte;
 use laaficare_backend::session::{self, ErreurSession, MotifRevocation, PaireJetons};
 
 #[derive(Serialize)]
@@ -83,12 +83,13 @@ pub async fn deconnexion(
 /// `POST /api/sessions/deconnexion-partout` -- jeton d'accès valide exigé
 /// (s'il a expiré, le client renouvelle d'abord). Ferme toutes les sessions
 /// du compte et augmente `version_jeton`, dans une transaction, le compte
-/// verrouillé avant les sessions (règle S2). Seuls les comptes patients
-/// ont une session dans cette étape.
-pub async fn deconnexion_partout(patient: PatientAuthentifie, State(state): State<AppState>) -> Response {
+/// verrouillé avant les sessions (règle S2). Ouverte à tous les comptes
+/// depuis l'étape 3.9 (D8) : patient, professionnel avec ou sans
+/// affectation, administrateur (`CompteConnecte`).
+pub async fn deconnexion_partout(compte: CompteConnecte, State(state): State<AppState>) -> Response {
     let resultat = async {
         let mut tx = state.db.begin().await?;
-        session::fermer_toutes(&mut tx, patient.compte_id, MotifRevocation::DeconnexionPartout, true).await?;
+        session::fermer_toutes(&mut tx, compte.compte_id, MotifRevocation::DeconnexionPartout, true).await?;
         tx.commit().await
     }
     .await;

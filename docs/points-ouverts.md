@@ -61,6 +61,10 @@ Réglé par l'option 3, décidée le 2026-10-12 : jetons d'accès de 15 minutes,
 - **Fait pour la désactivation** (2026-10-18, étape 3.6.5) : `desactiver_totp` prévient la personne à son email, si elle en a un.
 - **Reste pour l'enregistrement** : la confirmation du réenrôlement (`POST /api/administrateurs/reenrolement/confirmer`, étape 3.6.4) ne prévient pas encore la personne. À faire à l'étape 3.7, quand le serveur enverra des emails.
 
+### Essai manuel à faire : parcours du premier administrateur (étape 3.6.5)
+
+**Noté le 2026-10-18.** Le parcours « Créer le premier administrateur » du README (outil dans PowerShell, puis connexion, réenrôlement et second temps dans Postman) **n'a pas encore été essayé à la main** : Postman ne répondait pas, à vérifier par le porteur. La logique est couverte par les tests automatiques, mais pas la saisie masquée dans un vrai terminal ni l'enregistrement dans une application d'authentification. À faire avant de s'appuyer sur un compte administrateur réel.
+
 ### Toujours au moins deux administrateurs avec un second facteur actif
 
 **Règle d'organisation notée le 2026-10-18.** `desactiver_totp` exige un **autre** administrateur que la personne visée (Z9, refusé par la base sinon). Si le seul administrateur perd son téléphone et ses codes de secours, plus personne ne peut lui rouvrir l'accès : l'administration est bloquée. **Aucune procédure d'urgence n'est prévue** (décision du porteur) : l'équipe doit toujours garder **au moins deux administrateurs avec un second facteur actif**, créés avec l'outil `creer_administrateur`.
@@ -190,6 +194,7 @@ Un soignant a besoin du NIP pour ouvrir le dossier. Le patient peut être trop m
 - Suspension d'un contrat : à concevoir.
 - Types d'actes sans valeur dans les sources : dentaire et prothèses, accouchement et consultations prénatales, chirurgie, frais funéraires, radiologie.
 - Partenaires de la MUNASEB et structures : à rapprocher (un partenaire deviendra un lien entre la MUNASEB et une structure).
+- **Rattacher les contrats et les demandes à une structure, avant d'admettre un second assureur** (noté le 2026-10-18, étape 3.9). Aujourd'hui, un contrat et une demande de remboursement ne disent pas à quelle mutuelle ils appartiennent : MUNASEB est câblée en dur. Un agent ne touche que les demandes de sa mutuelle parce qu'il doit exercer dans une structure MUNASEB validée et que la base n'en admet qu'une (index `structure_une_seule_munaseb_validee`, migration 0012). Avec le futur module « Assurance » générique, plusieurs assureurs existeront : il faudra alors rattacher chaque contrat (et donc ses demandes) à la structure de son assureur, et ne permettre une transition qu'à un agent de cette structure.
 
 ---
 

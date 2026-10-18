@@ -177,6 +177,11 @@ async fn main() {
         .route("/api/sessions/deconnexion-partout", post(routes_session::deconnexion_partout))
         .route("/api/professionnels/connexion", post(routes_professionnel::se_connecter))
         .route("/api/professionnels/connexion/second-facteur", post(routes_professionnel::second_facteur))
+        .route("/api/professionnels/affectations", get(routes_professionnel::lister_affectations))
+        .route(
+            "/api/professionnels/affectations/{id}/activer",
+            post(routes_professionnel::activer_affectation),
+        )
         .route("/api/administrateurs/connexion", post(routes_administrateur::se_connecter))
         .route("/api/administrateurs/connexion/second-facteur", post(routes_administrateur::second_facteur))
         .route(

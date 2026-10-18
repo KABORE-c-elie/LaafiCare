@@ -489,23 +489,43 @@ fn exiger_statut(demande: &DemandeVerrouillee, autorises: &[StatutDemande]) -> R
     }
 }
 
+/// Rôle d'affectation des agents MUNASEB (migration 0012), le seul que
+/// l'historique accepte (migration 0021).
+pub const ROLE_AGENT: &str = "agent_assurance_munaseb";
+
+/// L'affectation de l'agent qui fait une transition (J8, étape 3.9) : qui,
+/// et dans quel établissement. Fournie par l'extracteur `AgentMunaseb`, qui
+/// a vérifié le rôle `agent_assurance_munaseb` dans une structure MUNASEB
+/// validée et sous licence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AffectationAgent {
+    pub affectation_id: Uuid,
+    pub structure_id: Uuid,
+}
+
 /// Ligne d'historique, dans la transaction de l'appelant. Création :
 /// `precedent` et `agent` à `None` (contrainte `agent_si_transition`).
+/// Transition : l'affectation de l'agent, ses trois colonnes ensemble (clé
+/// étrangère MATCH FULL, migration 0021) ; `agent_utilisateur_id` n'est plus
+/// rempli, il ne sert qu'aux lignes d'avant la 0021 (J8).
 async fn historiser(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     demande_id: Uuid,
     precedent: Option<&str>,
     nouveau: StatutDemande,
-    agent_utilisateur_id: Option<Uuid>,
+    agent: Option<AffectationAgent>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO historique_statut_demande (demande_id, statut_precedent, statut_nouveau, agent_utilisateur_id) \
-         VALUES ($1, $2, $3, $4)",
+        "INSERT INTO historique_statut_demande \
+         (demande_id, statut_precedent, statut_nouveau, agent_affectation_id, agent_structure_id, agent_role) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(demande_id)
     .bind(precedent)
     .bind(nouveau.as_str())
-    .bind(agent_utilisateur_id)
+    .bind(agent.map(|a| a.affectation_id))
+    .bind(agent.map(|a| a.structure_id))
+    .bind(agent.map(|_| ROLE_AGENT))
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -532,7 +552,7 @@ async fn notifier(pool: &PgPool, utilisateur_id: Uuid, message: &str, demande_id
 pub async fn prendre_en_charge(
     pool: &PgPool,
     demande_id: Uuid,
-    agent_utilisateur_id: Uuid,
+    agent: AffectationAgent,
 ) -> Result<(), ErreurTransition> {
     let mut tx = pool.begin().await?;
     let demande = verrouiller_demande(&mut tx, demande_id).await?;
@@ -542,7 +562,7 @@ pub async fn prendre_en_charge(
         .bind(demande_id)
         .execute(&mut *tx)
         .await?;
-    historiser(&mut tx, demande_id, Some(&demande.statut), StatutDemande::EnCours, Some(agent_utilisateur_id)).await?;
+    historiser(&mut tx, demande_id, Some(&demande.statut), StatutDemande::EnCours, Some(agent)).await?;
     tx.commit().await?;
 
     notifier(pool, demande.utilisateur_id, StatutDemande::EnCours.message_notification(), demande_id).await;
@@ -556,7 +576,7 @@ pub async fn prendre_en_charge(
 pub async fn valider(
     pool: &PgPool,
     demande_id: Uuid,
-    agent_utilisateur_id: Uuid,
+    agent: AffectationAgent,
 ) -> Result<i32, ErreurTransition> {
     let mut tx = pool.begin().await?;
     // Ordre des verrous : la demande d'abord...
@@ -581,7 +601,7 @@ pub async fn valider(
     .bind(montant_rembourse)
     .execute(&mut *tx)
     .await?;
-    historiser(&mut tx, demande_id, Some(&demande.statut), StatutDemande::Valide, Some(agent_utilisateur_id)).await?;
+    historiser(&mut tx, demande_id, Some(&demande.statut), StatutDemande::Valide, Some(agent)).await?;
     tx.commit().await?;
 
     let message = if montant_rembourse == 0 {
@@ -598,7 +618,7 @@ pub async fn valider(
 pub async fn rejeter(
     pool: &PgPool,
     demande_id: Uuid,
-    agent_utilisateur_id: Uuid,
+    agent: AffectationAgent,
     motif: &str,
 ) -> Result<(), ErreurTransition> {
     let motif = motif.trim();
@@ -619,7 +639,7 @@ pub async fn rejeter(
         .bind(motif)
         .execute(&mut *tx)
         .await?;
-    historiser(&mut tx, demande_id, Some(&demande.statut), StatutDemande::Rejete, Some(agent_utilisateur_id)).await?;
+    historiser(&mut tx, demande_id, Some(&demande.statut), StatutDemande::Rejete, Some(agent)).await?;
     tx.commit().await?;
 
     notifier(pool, demande.utilisateur_id, StatutDemande::Rejete.message_notification(), demande_id).await;
@@ -632,7 +652,7 @@ pub async fn rejeter(
 pub async fn marquer_payee(
     pool: &PgPool,
     demande_id: Uuid,
-    agent_utilisateur_id: Uuid,
+    agent: AffectationAgent,
 ) -> Result<(), ErreurTransition> {
     let mut tx = pool.begin().await?;
     let demande = verrouiller_demande(&mut tx, demande_id).await?;
@@ -642,7 +662,7 @@ pub async fn marquer_payee(
         .bind(demande_id)
         .execute(&mut *tx)
         .await?;
-    historiser(&mut tx, demande_id, Some(&demande.statut), StatutDemande::Paye, Some(agent_utilisateur_id)).await?;
+    historiser(&mut tx, demande_id, Some(&demande.statut), StatutDemande::Paye, Some(agent)).await?;
     tx.commit().await?;
 
     // Toujours Some en statut Validé (contrainte montant_rembourse_si_valide_ou_paye).
@@ -787,9 +807,14 @@ pub async fn detail_demande(pool: &PgPool, demande_id: Uuid) -> Result<Option<De
         .fetch_one(pool)
         .await?;
 
+    // L'agent d'une transition se lit par son affectation (J8, migration
+    // 0021) ; les lignes d'avant la 0021 n'ont que `agent_utilisateur_id`.
     let historique = sqlx::query_as::<_, LigneHistorique>(
         "SELECT h.statut_precedent, h.statut_nouveau, h.date_changement, u.nom AS agent_nom, u.prenom AS agent_prenom \
-         FROM historique_statut_demande h LEFT JOIN utilisateur u ON u.id = h.agent_utilisateur_id \
+         FROM historique_statut_demande h \
+         LEFT JOIN affectation a ON a.id = h.agent_affectation_id \
+         LEFT JOIN compte ca ON ca.id = a.compte_id \
+         LEFT JOIN utilisateur u ON u.id = COALESCE(ca.utilisateur_id, h.agent_utilisateur_id) \
          WHERE h.demande_id = $1 ORDER BY h.date_changement, h.id",
     )
     .bind(demande_id)
@@ -857,6 +882,52 @@ mod tests {
             .map(|d| format!("{payload}{d}"))
             .find(|nip| nip::valider(nip))
             .unwrap()
+    }
+
+    /// Agent MUNASEB : identité, compte professionnel et affectation
+    /// `agent_assurance_munaseb` dans la structure MUNASEB validée, créée au
+    /// premier appel (la base n'en admet qu'une, migration 0012).
+    async fn agent_munaseb(pool: &PgPool, telephone: &str, nom: &str, prenom: &str) -> AffectationAgent {
+        let utilisateur_id: Uuid =
+            sqlx::query_scalar("INSERT INTO utilisateur (nom, prenom, telephone) VALUES ($1, $2, $3) RETURNING id")
+                .bind(nom)
+                .bind(prenom)
+                .bind(telephone)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let compte_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'professionnel', 'x') RETURNING id",
+        )
+        .bind(utilisateur_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let existante: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM structure WHERE type_structure = 'munaseb' AND statut = 'validee'")
+                .fetch_optional(pool)
+                .await
+                .unwrap();
+        let structure_id = match existante {
+            Some(id) => id,
+            None => sqlx::query_scalar(
+                "INSERT INTO structure (type_structure, nom, telephone, commune, province, latitude, longitude, createur_compte_id, statut) \
+                 VALUES ('munaseb', 'MUNASEB', '+22670000000', 'Ouagadougou', 'Kadiogo', 12.371400, -1.519700, $1, 'validee') RETURNING id",
+            )
+            .bind(compte_id)
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        };
+        let affectation_id: Uuid =
+            sqlx::query_scalar("INSERT INTO affectation (compte_id, structure_id, role) VALUES ($1, $2, $3) RETURNING id")
+                .bind(compte_id)
+                .bind(structure_id)
+                .bind(ROLE_AGENT)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        AffectationAgent { affectation_id, structure_id }
     }
 
     fn acte(nip: &str, partenaire_id: Uuid, reference: &str, type_acte: TypeActeMunaseb, montant: i32) -> Acte {
@@ -1140,18 +1211,16 @@ mod tests {
         // --- historique non modifiable (migration 0010) ---
         // Ligne posée à la main : l'écriture de l'historique par
         // creer_depuis_acte et les transitions arrive à l'étape suivante.
-        let agent: Uuid = sqlx::query_scalar(
-            "INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('Test', 'Agent', '+22670010013') RETURNING id",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let agent = agent_munaseb(&pool, "+22670010013", "Test", "Agent").await;
         sqlx::query(
-            "INSERT INTO historique_statut_demande (demande_id, statut_precedent, statut_nouveau, agent_utilisateur_id) \
-             VALUES ($1, 'en_attente', 'en_cours', $2)",
+            "INSERT INTO historique_statut_demande \
+             (demande_id, statut_precedent, statut_nouveau, agent_affectation_id, agent_structure_id, agent_role) \
+             VALUES ($1, 'en_attente', 'en_cours', $2, $3, $4)",
         )
         .bind(id)
-        .bind(agent)
+        .bind(agent.affectation_id)
+        .bind(agent.structure_id)
+        .bind(ROLE_AGENT)
         .execute(&pool)
         .await
         .unwrap();
@@ -1241,7 +1310,7 @@ mod tests {
 
     async fn historique(pool: &PgPool, demande_id: Uuid) -> Vec<(Option<String>, String, Option<Uuid>)> {
         sqlx::query_as(
-            "SELECT statut_precedent, statut_nouveau, agent_utilisateur_id FROM historique_statut_demande \
+            "SELECT statut_precedent, statut_nouveau, agent_affectation_id FROM historique_statut_demande \
              WHERE demande_id = $1 ORDER BY date_changement, id",
         )
         .bind(demande_id)
@@ -1263,12 +1332,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        let agent: Uuid = sqlx::query_scalar(
-            "INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('Test', 'Agent', '+22670012098') RETURNING id",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let agent = agent_munaseb(&pool, "+22670012098", "Test", "Agent").await;
 
         let creer = |reference: &'static str, montant: i32| {
             let pool = pool.clone();
@@ -1330,9 +1394,9 @@ mod tests {
             historique(&pool, b).await,
             vec![
                 (None, "en_attente".to_string(), None),
-                (Some("en_attente".to_string()), "en_cours".to_string(), Some(agent)),
-                (Some("en_cours".to_string()), "valide".to_string(), Some(agent)),
-                (Some("valide".to_string()), "paye".to_string(), Some(agent)),
+                (Some("en_attente".to_string()), "en_cours".to_string(), Some(agent.affectation_id)),
+                (Some("en_cours".to_string()), "valide".to_string(), Some(agent.affectation_id)),
+                (Some("valide".to_string()), "paye".to_string(), Some(agent.affectation_id)),
             ]
         );
 
@@ -1370,12 +1434,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        let agent: Uuid = sqlx::query_scalar(
-            "INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('Test', 'Agent', '+22670013098') RETURNING id",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let agent = agent_munaseb(&pool, "+22670013098", "Test", "Agent").await;
 
         // 100 000 x 80 % = 80 000 chacune ; ensemble 160 000 > plafond.
         let mut demandes = Vec::new();
@@ -1413,12 +1472,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        let agent: Uuid = sqlx::query_scalar(
-            "INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('Ouedraogo', 'Awa', '+22670014098') RETURNING id",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let agent = agent_munaseb(&pool, "+22670014098", "Ouedraogo", "Awa").await;
 
         let mut ids = Vec::new();
         for reference in ["LEC-1", "LEC-2", "LEC-3"] {

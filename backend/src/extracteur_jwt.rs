@@ -1,9 +1,8 @@
 //! Extracteurs d'authentification des routes protégées (BF-01).
 //!
 //! Un extracteur par rôle (décision J2) : une route qui déclare
-//! `AgentAssuranceMunasebAuthentifie` en paramètre ne peut pas oublier de
-//! vérifier le rôle -- sans jeton valide du bon rôle, le handler n'est
-//! jamais appelé.
+//! `AgentMunaseb` en paramètre ne peut pas oublier de vérifier le rôle --
+//! sans jeton valide du bon rôle, le handler n'est jamais appelé.
 //!
 //! Sources suivies :
 //! - axum 0.8.9, `FromRequestParts` (docs.rs) : extracteur personnalisé qui
@@ -29,6 +28,8 @@ use sqlx::types::Uuid;
 
 use crate::AppState;
 use crate::erreur_api::reponse_erreur;
+use laaficare_backend::affectation::{self, ControleExercice, Exercice};
+use laaficare_backend::demande_remboursement_munaseb::{AffectationAgent, ROLE_AGENT};
 use laaficare_backend::jwt::SorteJeton;
 
 /// Motif de refus d'une requête protégée. Messages génériques : la réponse
@@ -311,48 +312,165 @@ impl FromRequestParts<AppState> for AdministrateurAuthentifie {
     }
 }
 
-/// Agent MUNASEB authentifié : jeton valide, rôle `agent_assurance_munaseb`,
-/// et compte agent toujours présent en base.
+/// Professionnel connecté, avec ou sans affectation (étape 3.9, D2) : pour
+/// lister ses affectations et en activer une. **Exception assumée à J1**,
+/// limitée à ces deux routes : deux sortes de jeton sont acceptées,
+/// `professionnel_sans_affectation` (juste après la connexion) et
+/// `professionnel_en_exercice` (changer de structure sans mot de passe,
+/// J5). Chacune est vérifiée avec sa propre audience, l'une après l'autre.
 #[derive(Debug)]
-pub struct AgentAssuranceMunasebAuthentifie {
-    pub utilisateur_id: Uuid,
+pub struct ProfessionnelConnecte {
+    pub compte_id: Uuid,
+    pub session_id: Uuid,
 }
 
-impl FromRequestParts<AppState> for AgentAssuranceMunasebAuthentifie {
+impl FromRequestParts<AppState> for ProfessionnelConnecte {
     type Rejection = RefusAuthentification;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let TypedHeader(Authorization(bearer)) = parts
-            .extract::<TypedHeader<Authorization<Bearer>>>()
-            .await
-            .map_err(|_| RefusAuthentification::IdentifiantsAbsents)?;
+        let bearer = bearer_de(parts).await?;
+        let claims = state
+            .jwt
+            .verifier(bearer.token(), SorteJeton::ProfessionnelSansAffectation)
+            .or_else(|_| state.jwt.verifier(bearer.token(), SorteJeton::ProfessionnelEnExercice))
+            .map_err(|_| RefusAuthentification::JetonInvalide)?;
+        let session_id = claims.sid.ok_or(RefusAuthentification::JetonInvalide)?;
 
-        // Signature HS256, expiration et audience vérifiées par `jwt.rs` :
-        // un jeton d'une autre sorte (patient, intermédiaire…) est un jeton
-        // invalide pour cette route (RFC 6750 §3.1, invalid_token), pas un
-        // manque de droits.
+        // À chaque requête : session du `sid` ouverte et de ce compte (son
+        // affectation n'est pas regardée : on peut quitter une affectation
+        // désactivée pour en choisir une autre), compte professionnel actif,
+        // même version, email toujours vérifié (R0).
+        let compte: Option<Uuid> = sqlx::query_scalar(
+            "SELECT c.id FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
+                                     JOIN session s ON s.compte_id = c.id \
+             WHERE c.id = $1 AND c.type_compte = 'professionnel' AND c.statut = 'actif' AND c.version_jeton = $2 \
+               AND u.email_verifie_le IS NOT NULL \
+               AND s.id = $3 AND s.revoquee_le IS NULL AND s.expire_le > now()",
+        )
+        .bind(claims.sub)
+        .bind(claims.ver)
+        .bind(session_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| RefusAuthentification::Interne(e.to_string()))?;
+        let compte_id = compte.ok_or(RefusAuthentification::JetonInvalide)?;
+        Ok(ProfessionnelConnecte { compte_id, session_id })
+    }
+}
+
+/// Professionnel en exercice (étape 3.9, D4) : jeton
+/// `laaficare:professionnel_en_exercice` seulement, dont l'affectation (`aff`)
+/// est vérifiée à chaque requête par `affectation::controler_exercice` :
+/// session ouverte et de cette affectation, compte actif, même version,
+/// email vérifié (401 sinon) ; affectation active, établissement validé,
+/// licence en cours à la date du Burkina (403 sinon : droit retiré, J1).
+#[derive(Debug)]
+pub struct ProfessionnelEnExercice(pub Exercice);
+
+impl FromRequestParts<AppState> for ProfessionnelEnExercice {
+    type Rejection = RefusAuthentification;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        let bearer = bearer_de(parts).await?;
         let claims = state
             .jwt
             .verifier(bearer.token(), SorteJeton::ProfessionnelEnExercice)
             .map_err(|_| RefusAuthentification::JetonInvalide)?;
+        // `jwt.rs` garantit déjà `aff` et `sid` pour cette sorte de jeton.
+        let (Some(affectation_id), Some(session_id)) = (claims.aff, claims.sid) else {
+            return Err(RefusAuthentification::JetonInvalide);
+        };
+        match affectation::controler_exercice(&state.db, claims.sub, claims.ver, session_id, affectation_id).await {
+            Ok(ControleExercice::Valide(exercice)) => Ok(ProfessionnelEnExercice(exercice)),
+            Ok(ControleExercice::JetonInvalide) => Err(RefusAuthentification::JetonInvalide),
+            Ok(ControleExercice::DroitRetire) => Err(RefusAuthentification::Interdit),
+            Err(e) => Err(RefusAuthentification::Interne(e.to_string())),
+        }
+    }
+}
 
-        // TEMPORAIRE jusqu'à l'étape 3.9 : la table `agent_assurance_munaseb`
-        // a été supprimée par la migration 0011, cette requête échoue donc
-        // (500) et les routes MUNASEB restent hors service. L'étape 3.9 la
-        // remplace par la vérification de l'affectation portée par le jeton
-        // (compte actif, version_jeton, affectation active, structure
-        // validée, licence en cours).
-        let utilisateur_id: Option<Uuid> = sqlx::query_scalar(
-            "SELECT c.utilisateur_id FROM compte c \
-             JOIN agent_assurance_munaseb a ON a.utilisateur_id = c.utilisateur_id WHERE c.id = $1",
+/// Agent MUNASEB en exercice (étape 3.9, D5), pour les routes des
+/// remboursements : un professionnel en exercice (tous les contrôles de
+/// `ProfessionnelEnExercice`) dont l'affectation a le rôle
+/// `agent_assurance_munaseb` dans une structure de type `munaseb`. Sinon :
+/// 403 `acces_refuse`.
+#[derive(Debug)]
+pub struct AgentMunaseb(pub AffectationAgent);
+
+impl FromRequestParts<AppState> for AgentMunaseb {
+    type Rejection = RefusAuthentification;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        let ProfessionnelEnExercice(exercice) = ProfessionnelEnExercice::from_request_parts(parts, state).await?;
+
+        // Contrôle de la structure (décision du porteur, 2026-10-18, option
+        // a). Une demande de remboursement n'est rattachée à aucune
+        // structure (migrations 0006, 0007, 0009 : MUNASEB est câblée en dur,
+        // section 12) : on ne peut pas comparer « la structure de la
+        // demande » à celle de l'agent. Ce contrôle suffit pourtant à ce
+        // qu'un agent ne touche que les demandes de sa mutuelle :
+        // - l'agent exerce dans une structure de type `munaseb`, validée et
+        //   sous licence (`ProfessionnelEnExercice`, ci-dessus) ;
+        // - la base n'admet qu'**une seule** structure MUNASEB `validee` ou
+        //   `suspendue` (index `structure_une_seule_munaseb_validee`,
+        //   migration 0012).
+        // Tout agent qui peut agir appartient donc à la seule MUNASEB qui
+        // puisse exister. Un agent d'une autre demande MUNASEB (brouillon,
+        // en attente) est refusé, puisque sa structure n'est pas validée. Le
+        // rattachement des contrats et des demandes à une structure viendra
+        // avec le module « Assurance » générique, avant d'admettre un second
+        // assureur (docs/points-ouverts.md).
+        if exercice.role != ROLE_AGENT || exercice.type_structure != "munaseb" {
+            return Err(RefusAuthentification::Interdit);
+        }
+        Ok(AgentMunaseb(AffectationAgent {
+            affectation_id: exercice.affectation_id,
+            structure_id: exercice.structure_id,
+        }))
+    }
+}
+
+/// N'importe quel compte connecté, pour `POST /api/sessions/deconnexion-partout`
+/// (étape 3.9, D8) : jeton d'accès patient, professionnel (avec ou sans
+/// affectation) ou administrateur, chacun vérifié avec sa propre audience.
+/// Seules la session et le compte sont vérifiés (session ouverte et de ce
+/// compte, compte actif, même version) : ni l'affectation, ni l'email, ni le
+/// TOTP. On doit pouvoir se déconnecter partout même si son affectation
+/// vient d'être désactivée.
+#[derive(Debug)]
+pub struct CompteConnecte {
+    pub compte_id: Uuid,
+}
+
+impl FromRequestParts<AppState> for CompteConnecte {
+    type Rejection = RefusAuthentification;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        const SORTES: [SorteJeton; 4] = [
+            SorteJeton::Patient,
+            SorteJeton::ProfessionnelSansAffectation,
+            SorteJeton::ProfessionnelEnExercice,
+            SorteJeton::Administrateur,
+        ];
+        let bearer = bearer_de(parts).await?;
+        let claims = SORTES
+            .iter()
+            .find_map(|sorte| state.jwt.verifier(bearer.token(), *sorte).ok())
+            .ok_or(RefusAuthentification::JetonInvalide)?;
+        let session_id = claims.sid.ok_or(RefusAuthentification::JetonInvalide)?;
+        let compte: Option<Uuid> = sqlx::query_scalar(
+            "SELECT c.id FROM compte c JOIN session s ON s.compte_id = c.id \
+             WHERE c.id = $1 AND c.statut = 'actif' AND c.version_jeton = $2 \
+               AND s.id = $3 AND s.revoquee_le IS NULL AND s.expire_le > now()",
         )
         .bind(claims.sub)
+        .bind(claims.ver)
+        .bind(session_id)
         .fetch_optional(&state.db)
         .await
         .map_err(|e| RefusAuthentification::Interne(e.to_string()))?;
-        let utilisateur_id = utilisateur_id.ok_or(RefusAuthentification::Interdit)?;
-
-        Ok(AgentAssuranceMunasebAuthentifie { utilisateur_id })
+        let compte_id = compte.ok_or(RefusAuthentification::JetonInvalide)?;
+        Ok(CompteConnecte { compte_id })
     }
 }
 
@@ -389,8 +507,8 @@ mod tests {
         requete.body(()).unwrap().into_parts().0
     }
 
-    async fn extraire(state: &AppState, authorization: Option<&str>) -> Result<AgentAssuranceMunasebAuthentifie, Response> {
-        AgentAssuranceMunasebAuthentifie::from_request_parts(&mut parts(authorization), state)
+    async fn extraire(state: &AppState, authorization: Option<&str>) -> Result<AgentMunaseb, Response> {
+        AgentMunaseb::from_request_parts(&mut parts(authorization), state)
             .await
             .map_err(IntoResponse::into_response)
     }
@@ -796,44 +914,158 @@ mod tests {
         assert!(refuse(extraire_patient(&state, Some(&en_tete(autre.session_id))).await), "session d'un autre compte");
     }
 
-    // Base temporaire par test, jamais la base de développement : voir
-    // « Tests et environnement », section 12 du CLAUDE.md.
-    #[sqlx::test]
-    #[ignore]
-    async fn agent_valide_puis_retire_en_base(pool: PgPool) {
-        let state = etat(pool);
+    // --- Étape 3.9 : professionnels en exercice et agents MUNASEB ---------
 
-        let utilisateur_id: Uuid = sqlx::query_scalar(
-            "INSERT INTO utilisateur (nom, prenom, telephone, email) \
-             VALUES ('Test', 'Extracteur', '+22670011011', 'test.extracteur@example.org') RETURNING id",
-        )
-        .fetch_one(&state.db)
-        .await
-        .unwrap();
-        sqlx::query("INSERT INTO agent_assurance_munaseb (utilisateur_id) VALUES ($1)")
+    /// Compte professionnel à l'email vérifié.
+    async fn professionnel(db: &PgPool, telephone: &str) -> Uuid {
+        let utilisateur_id: Uuid =
+            sqlx::query_scalar("INSERT INTO utilisateur (telephone, email) VALUES ($1, $1 || '@example.org') RETURNING id")
+                .bind(telephone)
+                .fetch_one(db)
+                .await
+                .unwrap();
+        sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1")
             .bind(utilisateur_id)
-            .execute(&state.db)
+            .execute(db)
             .await
             .unwrap();
+        sqlx::query_scalar(
+            "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'professionnel', 'x') RETURNING id",
+        )
+        .bind(utilisateur_id)
+        .fetch_one(db)
+        .await
+        .unwrap()
+    }
 
-        // Échoue dès l'insertion ci-dessus (table supprimée) : test réécrit
-        // à l'étape 3.9, avec les affectations.
+    async fn structure(db: &PgPool, createur: Uuid, type_structure: &str, statut: &str) -> Uuid {
+        sqlx::query_scalar(
+            "INSERT INTO structure (type_structure, nom, telephone, commune, province, latitude, longitude, createur_compte_id, statut) \
+             VALUES ($2, 'Structure', '+22670000000', 'Ouagadougou', 'Kadiogo', 12.371400, -1.519700, $1, $3) RETURNING id",
+        )
+        .bind(createur)
+        .bind(type_structure)
+        .bind(statut)
+        .fetch_one(db)
+        .await
+        .unwrap()
+    }
+
+    /// Affectation, session qui la porte, et en-tête du jeton en exercice.
+    /// La session est ouverte directement avec l'affectation : l'activation
+    /// refuserait une structure non validée, or ce test vérifie justement
+    /// que l'extracteur refuse un jeton qui en porterait une.
+    async fn en_exercice(state: &AppState, compte: Uuid, structure_id: Uuid, role: &str) -> (Uuid, String) {
+        let affectation_id: Uuid =
+            sqlx::query_scalar("INSERT INTO affectation (compte_id, structure_id, role) VALUES ($1, $2, $3) RETURNING id")
+                .bind(compte)
+                .bind(structure_id)
+                .bind(role)
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        let session = session::ouvrir(&state.db, compte, Some(affectation_id)).await.unwrap();
         let jeton = state
             .jwt
-            .emettre(SorteJeton::ProfessionnelEnExercice, utilisateur_id, 0, Some(Uuid::from_u128(7)), Some(Uuid::from_u128(9)))
+            .emettre(SorteJeton::ProfessionnelEnExercice, compte, 0, Some(affectation_id), Some(session.session_id))
             .unwrap();
-        let en_tete = format!("Bearer {jeton}");
+        (affectation_id, format!("Bearer {jeton}"))
+    }
 
-        let agent = extraire(&state, Some(&en_tete)).await.unwrap();
-        assert_eq!(agent.utilisateur_id, utilisateur_id);
+    fn statut(resultat: Result<AgentMunaseb, Response>) -> StatusCode {
+        match resultat {
+            Ok(_) => StatusCode::OK,
+            Err(reponse) => reponse.status(),
+        }
+    }
 
-        // Agent retiré : son jeton, encore valide, est refusé.
-        sqlx::query("DELETE FROM agent_assurance_munaseb WHERE utilisateur_id = $1")
-            .bind(utilisateur_id)
-            .execute(&state.db)
-            .await
+    /// D5, avec deux structures MUNASEB (décision du porteur, 2026-10-18) :
+    /// la base n'en admet qu'une validée ; l'agent d'une seconde, en attente
+    /// de validation, est refusé (403). Un autre rôle, ou un agent dans une
+    /// autre sorte de structure, aussi.
+    #[sqlx::test]
+    #[ignore]
+    async fn agent_munaseb_seulement_dans_la_munaseb_validee(pool: PgPool) {
+        let state = etat(pool);
+        let chef = professionnel(&state.db, "+22670180001").await;
+        let validee = structure(&state.db, chef, "munaseb", "validee").await;
+        let autre_chef = professionnel(&state.db, "+22670180002").await;
+        let en_attente = structure(&state.db, autre_chef, "munaseb", "en_attente").await;
+        let clinique = structure(&state.db, chef, "clinique", "validee").await;
+
+        let agent_a = professionnel(&state.db, "+22670180003").await;
+        let (affectation_a, en_tete_a) = en_exercice(&state, agent_a, validee, ROLE_AGENT).await;
+        let agent_b = professionnel(&state.db, "+22670180004").await;
+        let (_, en_tete_b) = en_exercice(&state, agent_b, en_attente, ROLE_AGENT).await;
+        let (_, responsable) = en_exercice(&state, chef, validee, "responsable").await;
+        let (_, dans_clinique) = en_exercice(&state, agent_a, clinique, ROLE_AGENT).await;
+
+        let AgentMunaseb(agent) = extraire(&state, Some(&en_tete_a)).await.unwrap();
+        assert_eq!(agent, AffectationAgent { affectation_id: affectation_a, structure_id: validee });
+        assert_eq!(statut(extraire(&state, Some(&en_tete_b)).await), StatusCode::FORBIDDEN, "MUNASEB en attente");
+        assert_eq!(statut(extraire(&state, Some(&responsable)).await), StatusCode::FORBIDDEN, "autre rôle");
+        assert_eq!(statut(extraire(&state, Some(&dans_clinique)).await), StatusCode::FORBIDDEN, "autre structure");
+
+        // Affectation désactivée : son jeton encore valable est refusé (403).
+        sqlx::query(
+            "UPDATE affectation SET statut = 'desactivee', desactivee_le = now(), desactivee_par_compte_id = $2 WHERE id = $1",
+        )
+        .bind(affectation_a)
+        .bind(chef)
+        .execute(&state.db)
+        .await
+        .unwrap();
+        assert_eq!(statut(extraire(&state, Some(&en_tete_a)).await), StatusCode::FORBIDDEN, "affectation désactivée");
+    }
+
+    /// D8 : `CompteConnecte` accepte les quatre jetons d'accès, et refuse une
+    /// session fermée ou un jeton intermédiaire.
+    #[sqlx::test]
+    #[ignore]
+    async fn compte_connecte_toutes_les_sortes(pool: PgPool) {
+        let state = etat(pool);
+        let compte = professionnel(&state.db, "+22670180005").await;
+        let clinique = structure(&state.db, compte, "clinique", "validee").await;
+        let (_, exercice) = en_exercice(&state, compte, clinique, "medecin").await;
+        let sans = session::ouvrir(&state.db, compte, None).await.unwrap();
+        let jeton_sans = state
+            .jwt
+            .emettre(SorteJeton::ProfessionnelSansAffectation, compte, 0, None, Some(sans.session_id))
             .unwrap();
-        let refus = extraire(&state, Some(&en_tete)).await.unwrap_err();
-        assert_eq!(refus.status(), StatusCode::FORBIDDEN);
+        let extraire_compte = |en_tete: String| {
+            let state = state.clone();
+            async move { CompteConnecte::from_request_parts(&mut parts(Some(&en_tete)), &state).await.map(|c| c.compte_id) }
+        };
+        assert_eq!(extraire_compte(exercice).await.unwrap(), compte);
+        assert_eq!(extraire_compte(format!("Bearer {jeton_sans}")).await.unwrap(), compte);
+
+        let intermediaire = state.jwt.emettre(SorteJeton::SecondFacteurProfessionnel, compte, 0, None, None).unwrap();
+        assert!(extraire_compte(format!("Bearer {intermediaire}")).await.is_err());
+        session::fermer(&state.db, sans.jeton_renouvellement.en_clair()).await.unwrap();
+        assert!(extraire_compte(format!("Bearer {jeton_sans}")).await.is_err(), "session fermée");
+    }
+
+    /// D2 : `ProfessionnelConnecte` accepte les jetons sans affectation et en
+    /// exercice, jamais un jeton patient.
+    #[sqlx::test]
+    #[ignore]
+    async fn professionnel_connecte_deux_sortes(pool: PgPool) {
+        let state = etat(pool);
+        let compte = professionnel(&state.db, "+22670180006").await;
+        let clinique = structure(&state.db, compte, "clinique", "validee").await;
+        let (_, exercice) = en_exercice(&state, compte, clinique, "medecin").await;
+        let sans = session::ouvrir(&state.db, compte, None).await.unwrap();
+        let jeton_sans = state
+            .jwt
+            .emettre(SorteJeton::ProfessionnelSansAffectation, compte, 0, None, Some(sans.session_id))
+            .unwrap();
+        let patient = state.jwt.emettre(SorteJeton::Patient, compte, 0, None, Some(sans.session_id)).unwrap();
+        let extraire_pro = |en_tete: String| {
+            let state = state.clone();
+            async move { ProfessionnelConnecte::from_request_parts(&mut parts(Some(&en_tete)), &state).await.map(|c| c.session_id) }
+        };
+        assert_eq!(extraire_pro(format!("Bearer {jeton_sans}")).await.unwrap(), sans.session_id);
+        assert!(extraire_pro(exercice).await.is_ok());
+        assert!(extraire_pro(format!("Bearer {patient}")).await.is_err());
     }
 }

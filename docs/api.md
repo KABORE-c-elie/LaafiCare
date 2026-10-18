@@ -44,7 +44,7 @@ Il existe **huit sortes de jetons**. Chaque route n'en accepte qu'une : un jeton
 |---|---|---|---|
 | `laaficare:patient` | routes du patient (`GET /api/patients/moi`, `deconnexion-partout`) | 15 min | émis par l'inscription, la connexion et le renouvellement ; refusé après une réinitialisation du mot de passe ou la fermeture de sa session |
 | `laaficare:professionnel_sans_affectation` | lister ses affectations, en activer une | 15 min | émis par la connexion professionnelle (section 2.4) ; routes des affectations à l'étape 3.9 |
-| `laaficare:professionnel_en_exercice` | routes métier (remboursements MUNASEB…) | 15 min | attendu par les routes MUNASEB ; émis à l'étape 3.9 |
+| `laaficare:professionnel_en_exercice` | routes métier (remboursements MUNASEB…) | 15 min | émis par l'activation d'une affectation (section 2.6) ; refusé (403) dès que l'affectation est désactivée, l'établissement suspendu ou la licence expirée |
 | `laaficare:administrateur` | routes de l'équipe LaafiCare | 15 min | émis par le second temps de la connexion administrateur (section 2.5) ; routes de l'équipe à l'étape 3.8 ; refusé dès que le TOTP du compte n'est plus actif |
 | `laaficare:second_facteur_patient`, `…_professionnel`, `…_administrateur` | saisir le code du second facteur, après un mot de passe correct | 5 min | professionnel et administrateur : émis (sections 2.4 et 2.5), **une seule utilisation réussie** ; patient : après l'étape 3.11 |
 | `laaficare:reenrolement_administrateur` | enregistrer un nouveau second facteur, rien d'autre | 10 min | émis par la connexion administrateur (section 2.5), seulement pendant une fenêtre ouverte par l'équipe ; refusé dès qu'un TOTP est actif ou que la fenêtre a expiré |
@@ -156,9 +156,9 @@ Chaque connexion ouvre une **session** (une par appareil). Le jeton d'accès por
 |---|---|---|---|
 | `POST /api/sessions/renouveler` | tout le monde, **sans** en-tête `Authorization` (le jeton d'accès peut être expiré) | `{"jeton_renouvellement": "…"}` | 200 : nouvelle paire, même forme que ci-dessus sans `etape` ; 401 `jeton_invalide` : jeton inconnu, expiré, session révoquée ou expirée, vol détecté, ou (professionnel, administrateur) email qui n'est plus vérifié, auquel cas la session est fermée |
 | `POST /api/sessions/deconnexion` | tout le monde | `{"jeton_renouvellement": "…"}` | **toujours 204**, même pour un jeton inconnu : se déconnecter n'échoue jamais |
-| `POST /api/sessions/deconnexion-partout` | jeton d'accès `laaficare:patient` **valide** (si expiré : renouveler d'abord) | aucun | 204 : toutes les sessions du compte sont fermées, sur tous les appareils ; 401 comme pour toute route protégée (section 1.2) |
+| `POST /api/sessions/deconnexion-partout` | un jeton d'accès **valide** (si expiré : renouveler d'abord) : patient, professionnel avec ou sans affectation, ou administrateur | aucun | 204 : toutes les sessions du compte sont fermées, sur tous les appareils ; 401 comme pour toute route protégée (section 1.2) |
 
-**Limite actuelle pour les professionnels** : `renouveler` et `deconnexion` fonctionnent déjà pour une session professionnelle. En revanche, `deconnexion-partout` n'accepte encore qu'un jeton **patient** : elle s'ouvrira aux professionnels à l'étape 3.9, avec leur extracteur. D'ici là, l'application web déconnecte l'appareil courant avec `deconnexion`.
+`deconnexion-partout` ne vérifie que la session et le compte : un professionnel dont l'affectation vient d'être désactivée peut quand même se déconnecter partout.
 
 Erreurs de lecture de la requête (corps JSON mal formé, champ manquant) : section 1.4.
 
@@ -190,22 +190,24 @@ Résumé :
 | GET | `/api/patients/moi` | jeton `laaficare:patient` | fonctionne |
 | POST | `/api/sessions/renouveler` | tout le monde, avec un jeton de renouvellement | fonctionne (section 1.7) |
 | POST | `/api/sessions/deconnexion` | tout le monde, avec un jeton de renouvellement | fonctionne (section 1.7) |
-| POST | `/api/sessions/deconnexion-partout` | jeton `laaficare:patient` | fonctionne (section 1.7) |
+| POST | `/api/sessions/deconnexion-partout` | tout jeton d'accès (patient, professionnel, administrateur) | fonctionne (section 1.7) |
 | POST | `/api/professionnels/connexion` | tout le monde | fonctionne (section 2.4) ; pas encore testable sans compte professionnel (étape 3.7) |
 | POST | `/api/professionnels/connexion/second-facteur` | jeton intermédiaire `laaficare:second_facteur_professionnel` | fonctionne (section 2.4) ; même remarque |
+| GET | `/api/professionnels/affectations` | jeton professionnel, sans affectation ou en exercice | fonctionne (section 2.6) ; même remarque |
+| POST | `/api/professionnels/affectations/{id}/activer` | jeton professionnel, sans affectation ou en exercice | fonctionne (section 2.6) ; même remarque |
 | POST | `/api/administrateurs/connexion` | tout le monde | fonctionne (section 2.5) ; testable après l'outil du premier administrateur |
 | POST | `/api/administrateurs/connexion/second-facteur` | jeton intermédiaire `laaficare:second_facteur_administrateur` | fonctionne (section 2.5) |
 | POST | `/api/administrateurs/reenrolement/commencer` | jeton `laaficare:reenrolement_administrateur` | fonctionne (section 2.5) |
 | POST | `/api/administrateurs/reenrolement/confirmer` | jeton `laaficare:reenrolement_administrateur` | fonctionne (section 2.5) |
-| POST | `/api/assurance-munaseb/remboursements/simuler-acte` | jeton en exercice, agent MUNASEB | **hors service** |
-| GET | `/api/assurance-munaseb/remboursements` | jeton en exercice, agent MUNASEB | **hors service** |
-| GET | `/api/assurance-munaseb/remboursements/{id}` | jeton en exercice, agent MUNASEB | **hors service** |
-| POST | `/api/assurance-munaseb/remboursements/{id}/prendre-en-charge` | jeton en exercice, agent MUNASEB | **hors service** |
-| POST | `/api/assurance-munaseb/remboursements/{id}/valider` | jeton en exercice, agent MUNASEB | **hors service** |
-| POST | `/api/assurance-munaseb/remboursements/{id}/rejeter` | jeton en exercice, agent MUNASEB | **hors service** |
-| POST | `/api/assurance-munaseb/remboursements/{id}/payer` | jeton en exercice, agent MUNASEB | **hors service** |
+| POST | `/api/assurance-munaseb/remboursements/simuler-acte` | jeton en exercice, agent MUNASEB | fonctionne (section 2.3) |
+| GET | `/api/assurance-munaseb/remboursements` | jeton en exercice, agent MUNASEB | fonctionne (section 2.3) |
+| GET | `/api/assurance-munaseb/remboursements/{id}` | jeton en exercice, agent MUNASEB | fonctionne (section 2.3) |
+| POST | `/api/assurance-munaseb/remboursements/{id}/prendre-en-charge` | jeton en exercice, agent MUNASEB | fonctionne (section 2.3) |
+| POST | `/api/assurance-munaseb/remboursements/{id}/valider` | jeton en exercice, agent MUNASEB | fonctionne (section 2.3) |
+| POST | `/api/assurance-munaseb/remboursements/{id}/rejeter` | jeton en exercice, agent MUNASEB | fonctionne (section 2.3) |
+| POST | `/api/assurance-munaseb/remboursements/{id}/payer` | jeton en exercice, agent MUNASEB | fonctionne (section 2.3) |
 
-> **Routes MUNASEB hors service.** L'ancienne connexion agent (`POST /api/assurance-munaseb/connexion`) est **supprimée** : un agent se connectera par la connexion professionnelle, puis choisira son affectation (étapes 3.6 et 3.9, section 4). Les routes de remboursement attendent déjà un jeton `laaficare:professionnel_en_exercice` ; tout autre jeton est refusé en 401. Avec un jeton de la bonne sorte, elles répondent encore `500 erreur_interne` : elles vérifient le compte agent dans une table supprimée par la migration 0011. Elles seront rebranchées sur les affectations à l'étape 3.9. Les chemins, corps et réponses des remboursements décrits ci-dessous devraient rester les mêmes ; leur description sert de référence pour l'écran agent.
+> **Routes MUNASEB rebranchées (étape 3.9).** Un agent se connecte par la connexion professionnelle (section 2.4), puis active son affectation `agent_assurance_munaseb` (section 2.6). Les routes de remboursement n'acceptent qu'un jeton `laaficare:professionnel_en_exercice` : tout autre jeton est refusé en 401. Avec un jeton de la bonne sorte, elles répondent **403 `acces_refuse`** si l'affectation n'est pas celle d'un agent MUNASEB, est désactivée, ou si la MUNASEB n'est plus validée ou sous licence. **Pas encore testable dans Postman sans préparation** : aucune route ne crée d'affectation avant les étapes 3.7, 3.8 et 3.10 réduites ; d'ici là, une affectation de développement peut être posée en SQL.
 
 ### 2.1 Infrastructure
 
@@ -417,11 +419,11 @@ Profil du patient connecté.
 - **Révocation** : après une réinitialisation du mot de passe, ou quand la session du jeton a été fermée (déconnexion, déconnexion partout, vol détecté), le jeton est refusé (401 `jeton_invalide`) même s'il n'a pas encore expiré. L'application tente un renouvellement (section 1.7) ; s'il répond 401, elle renvoie la personne à l'écran de connexion.
 - **Compte verrouillé** (trop d'essais de mot de passe) : un jeton déjà reçu reste valable ; le verrouillage ne bloque que les nouvelles connexions.
 
-### 2.3 Agent MUNASEB (hors service, voir l'encadré plus haut)
+### 2.3 Agent MUNASEB
 
 #### 2.3.1 Connexion de l'agent
 
-L'ancienne route `POST /api/assurance-munaseb/connexion` est **supprimée** (2026-10-08), avec son code `423 compte_verrouille`. L'agent passera par la connexion professionnelle (section 4.1), puis par le choix de son affectation (section 4.4).
+L'ancienne route `POST /api/assurance-munaseb/connexion` est **supprimée** (2026-10-08), avec son code `423 compte_verrouille`. L'agent passe par la connexion professionnelle (section 2.4), puis active son affectation (section 2.6). Chaque transition d'une demande est enregistrée avec cette affectation : qui l'a faite, et dans quelle structure.
 
 #### 2.3.2 Valeurs utilisées par les routes de remboursement
 
@@ -701,6 +703,54 @@ Identique à la route professionnelle (section 2.4) : en-tête `Authorization: B
 - Après la confirmation, le jeton de réenrôlement est refusé (401 `jeton_invalide`), et la fenêtre est refermée.
 - Chaque essai faux (mot de passe ou code) compte dans le verrouillage du compte (5 essais, puis 15 minutes).
 
+### 2.6 Professionnels : choisir son affectation
+
+Après la connexion professionnelle, le jeton d'accès (`laaficare:professionnel_sans_affectation`) ne sert qu'à lister ses affectations et à en activer une. L'activation donne un jeton `laaficare:professionnel_en_exercice`, qui porte l'affectation (`aff`) et ouvre les routes métier de cette affectation. **Changer d'établissement ou de rôle** : rappeler l'activation avec le jeton en exercice, sans redonner le mot de passe.
+
+**Pas encore testable dans Postman sans préparation** : les affectations sont créées par les invitations (étape 3.10).
+
+#### `GET /api/professionnels/affectations`
+
+- **Appelant** : en-tête `Authorization: Bearer <jeton_acces>`, jeton sans affectation **ou** en exercice.
+- **Réponse 200** :
+
+```json
+{
+  "affectations": [
+    {
+      "id": "…",
+      "role": "agent_assurance_munaseb",
+      "structure_id": "…",
+      "structure_nom": "MUNASEB",
+      "structure_type": "munaseb",
+      "structure_statut": "validee",
+      "licence_expire_le": "2027-10-18",
+      "exercable": true
+    }
+  ]
+}
+```
+
+- Seules les affectations **actives** sont listées. `exercable` vaut `false` si l'établissement n'est pas validé (par exemple `suspendue`) ou si sa licence est expirée : l'application montre la ligne, mais grisée, avec la raison (`structure_statut`, `licence_expire_le`). `licence_expire_le` vaut `null` pour une licence sans fin.
+- La licence est valable jusqu'à sa date de fin **comprise**, à la date du jour au Burkina Faso.
+
+#### `POST /api/professionnels/affectations/{id}/activer`
+
+- **Appelant** : même en-tête, jeton sans affectation ou en exercice. Pas de corps.
+- **Réponses** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 200 | — | `{"jeton_acces", "expire_dans", "jeton_renouvellement"}` (forme de la section 1.7, sans `etape`) : nouvelle session, de cette affectation |
+| 401 | `jeton_invalide` | jeton expiré, d'une autre sorte, session fermée, compte désactivé, email plus vérifié |
+| 403 | `affectation_non_exercable` | affectation désactivée, établissement non validé, ou licence expirée |
+| 404 | `affectation_inconnue` | affectation inexistante, ou qui n'est pas à vous (jamais distingués) |
+| 500 | `erreur_interne` | panne |
+
+- **La session courante est fermée** et remplacée par une session de l'affectation choisie. Les anciens jetons, d'accès et de renouvellement, ne servent plus : l'application garde la nouvelle paire.
+- La nouvelle session **finit à la même heure** que l'ancienne (12 h après la connexion au plus) : changer d'affectation ne prolonge jamais une session.
+- Sur un jeton en exercice, une réponse **403 `acces_refuse`** d'une route métier veut dire que le droit a été retiré (affectation désactivée, établissement suspendu, licence expirée) : l'application relit la liste des affectations.
+
 ---
 
 ## 3. Codes d'erreur : index
@@ -709,7 +759,9 @@ Identique à la route professionnelle (section 2.4) : en-tête `Authorization: B
 |---|---|---|
 | `authentification_requise` | 401 | routes protégées |
 | `jeton_invalide` | 401 | routes protégées |
-| `acces_refuse` | 403 | routes protégées |
+| `acces_refuse` | 403 | routes protégées (routes MUNASEB : pas agent MUNASEB, affectation désactivée, établissement suspendu, licence expirée) |
+| `affectation_non_exercable` | 403 | activation d'une affectation |
+| `affectation_inconnue` | 404 | activation d'une affectation |
 | `json_invalide`, `donnees_invalides`, `content_type_invalide`, `corps_illisible` | 400, 422, 415 | routes avec corps |
 | `chemin_invalide` | 400 | routes avec `{id}` |
 | `parametre_invalide` | 400 | liste des remboursements |
@@ -758,8 +810,7 @@ Le module existe déjà côté serveur ; les routes manquent.
 
 ### 4.4 Affectations et rôle actif (étape 3.9)
 
-- Après la connexion professionnelle : liste des affectations de la personne, choix de l'une d'elles → jeton portant l'affectation active ; changement de structure sans mot de passe.
-- Routes de remboursement MUNASEB rebranchées sur l'affectation `agent_assurance_munaseb` d'une MUNASEB validée.
+- ✅ **Codé**, section 2.6 : liste des affectations, activation, changement de structure sans mot de passe ; routes MUNASEB rebranchées (section 2.3).
 
 ### 4.5 Invitations (étape 3.10)
 

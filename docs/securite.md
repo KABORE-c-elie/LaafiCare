@@ -159,6 +159,12 @@ Les professionnels se connectent par **email**, les patients par **téléphone**
 
 Fichiers : [`auth_administrateur.rs`](../backend/src/auth_administrateur.rs), [`extracteur_jwt.rs`](../backend/src/extracteur_jwt.rs). Migration 0019. **Limite** : la base ne peut pas encore interdire à une route d'ouvrir une fenêtre (voir `points-ouverts.md`).
 
+**Travailler dans un établissement (affectation).** Après la connexion, un professionnel choisit l'établissement et le rôle dans lesquels il travaille. Le jeton qu'il reçoit porte ce choix, et **à chaque demande** le serveur vérifie :
+- que la session est ouverte et porte bien cette affectation, que le compte est actif et son email toujours vérifié ; sinon, le jeton est refusé ;
+- que l'affectation est toujours active, l'établissement validé et sa licence en cours (à la date du jour au Burkina Faso) ; sinon, l'accès est refusé aussitôt, même si le jeton est encore valable.
+
+Changer d'établissement ferme la session en cours et en ouvre une nouvelle, **qui finit à la même heure** : on ne prolonge jamais une session sans redonner son mot de passe. Chaque décision d'un agent MUNASEB est enregistrée avec son affectation (qui, et dans quel établissement). **Un agent ne touche que les demandes de sa mutuelle** : il doit exercer dans une structure MUNASEB validée, et la base n'en admet qu'une seule. Fichiers : [`affectation.rs`](../backend/src/affectation.rs), [`extracteur_jwt.rs`](../backend/src/extracteur_jwt.rs). Migration 0021.
+
 **Les outils de l'équipe LaafiCare** (`creer_premier_administrateur`, `creer_administrateur`, `desactiver_totp`) se lancent sur l'ordinateur du serveur, **jamais par le réseau** :
 - `creer_administrateur` et `desactiver_totp` exigent que l'administrateur qui les lance s'authentifie avec son email, son mot de passe et un code de son application ; chaque essai faux compte dans son verrouillage ;
 - les mots de passe, les codes et les jetons se tapent **sans s'afficher** (crate `rpassword`), puis sont effacés de la mémoire ;

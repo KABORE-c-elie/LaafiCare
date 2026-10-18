@@ -272,6 +272,62 @@ pub(crate) fn empreinte(octets: &[u8; 32]) -> Vec<u8> {
 /// l'inactivité, **bornée par la fin de la session** avec `LEAST` : la base
 /// ne peut pas le garantir (un CHECK ne lit pas une autre table), d'où
 /// cette borne dans la requête elle-même (testée).
+/// Remplace une session par une autre, pour une autre affectation (étape
+/// 3.9, D3 a), dans la transaction de l'appelant, qui a déjà verrouillé le
+/// compte (règle S2 : le compte avant les sessions).
+///
+/// L'ancienne session est fermée (motif `changement_affectation`, migration
+/// 0015) : le jeton d'accès de l'ancienne affectation est refusé aussitôt.
+/// La nouvelle garde la **même date de fin absolue** : changer d'affectation
+/// ne prolonge jamais une session au-delà de la durée qui oblige à redonner
+/// le mot de passe (12 h pour un professionnel). Une session par
+/// affectation : on sait quelle affectation agissait, et quand.
+/// `JetonInvalide` si l'ancienne session est déjà fermée ou expirée.
+pub(crate) async fn remplacer(
+    conn: &mut PgConnection,
+    ancienne_session_id: Uuid,
+    compte_id: Uuid,
+    affectation_id: Uuid,
+) -> Result<SessionActive, ErreurSession> {
+    let fin: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+        "UPDATE session SET revoquee_le = now(), motif_revocation = $3 \
+         WHERE id = $1 AND compte_id = $2 AND revoquee_le IS NULL AND expire_le > now() \
+         RETURNING expire_le",
+    )
+    .bind(ancienne_session_id)
+    .bind(compte_id)
+    .bind(MotifRevocation::ChangementAffectation.as_str())
+    .fetch_optional(&mut *conn)
+    .await?;
+    let fin = fin.ok_or(ErreurSession::JetonInvalide)?;
+
+    let (type_compte, version_jeton): (String, i32) =
+        sqlx::query_as("SELECT type_compte, version_jeton FROM compte WHERE id = $1")
+            .bind(compte_id)
+            .fetch_one(&mut *conn)
+            .await?;
+    let type_compte = TypeCompte::depuis(&type_compte)?;
+
+    let session_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO session (compte_id, affectation_id, expire_le) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(compte_id)
+    .bind(affectation_id)
+    .bind(fin)
+    .fetch_one(&mut *conn)
+    .await?;
+    let (_, jeton_renouvellement) = inserer_jeton(conn, session_id, type_compte).await?;
+
+    Ok(SessionActive {
+        session_id,
+        compte_id,
+        affectation_id: Some(affectation_id),
+        type_compte,
+        version_jeton,
+        jeton_renouvellement,
+    })
+}
+
 async fn inserer_jeton(
     conn: &mut PgConnection,
     session_id: Uuid,
