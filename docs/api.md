@@ -2,7 +2,7 @@
 
 Ce document décrit les routes de l'API Rust/Axum telles qu'elles sont **codées aujourd'hui**, puis celles qui sont **seulement prévues**. Les applications Angular (web) et Flutter (mobile) s'appuient sur lui. Il est mis à jour avec chaque ajout ou modification d'une route.
 
-État au 2026-10-15, branche `dev`.
+État au 2026-10-18, branche `dev`.
 
 Toutes les valeurs des exemples sont fictives.
 
@@ -191,12 +191,12 @@ Résumé :
 | POST | `/api/sessions/renouveler` | tout le monde, avec un jeton de renouvellement | fonctionne (section 1.7) |
 | POST | `/api/sessions/deconnexion` | tout le monde, avec un jeton de renouvellement | fonctionne (section 1.7) |
 | POST | `/api/sessions/deconnexion-partout` | jeton `laaficare:patient` | fonctionne (section 1.7) |
-| POST | `/api/professionnels/connexion` | tout le monde | fonctionne (section 2.4) ; pas encore testable sans compte professionnel (étapes 3.6.5 et 3.7) |
+| POST | `/api/professionnels/connexion` | tout le monde | fonctionne (section 2.4) ; pas encore testable sans compte professionnel (étape 3.7) |
 | POST | `/api/professionnels/connexion/second-facteur` | jeton intermédiaire `laaficare:second_facteur_professionnel` | fonctionne (section 2.4) ; même remarque |
-| POST | `/api/administrateurs/connexion` | tout le monde | fonctionne (section 2.5) ; pas encore testable sans compte administrateur (étape 3.6.5) |
-| POST | `/api/administrateurs/connexion/second-facteur` | jeton intermédiaire `laaficare:second_facteur_administrateur` | fonctionne (section 2.5) ; même remarque |
-| POST | `/api/administrateurs/reenrolement/commencer` | jeton `laaficare:reenrolement_administrateur` | fonctionne (section 2.5) ; même remarque |
-| POST | `/api/administrateurs/reenrolement/confirmer` | jeton `laaficare:reenrolement_administrateur` | fonctionne (section 2.5) ; même remarque |
+| POST | `/api/administrateurs/connexion` | tout le monde | fonctionne (section 2.5) ; testable après l'outil du premier administrateur |
+| POST | `/api/administrateurs/connexion/second-facteur` | jeton intermédiaire `laaficare:second_facteur_administrateur` | fonctionne (section 2.5) |
+| POST | `/api/administrateurs/reenrolement/commencer` | jeton `laaficare:reenrolement_administrateur` | fonctionne (section 2.5) |
+| POST | `/api/administrateurs/reenrolement/confirmer` | jeton `laaficare:reenrolement_administrateur` | fonctionne (section 2.5) |
 | POST | `/api/assurance-munaseb/remboursements/simuler-acte` | jeton en exercice, agent MUNASEB | **hors service** |
 | GET | `/api/assurance-munaseb/remboursements` | jeton en exercice, agent MUNASEB | **hors service** |
 | GET | `/api/assurance-munaseb/remboursements/{id}` | jeton en exercice, agent MUNASEB | **hors service** |
@@ -607,7 +607,7 @@ L'email est comparé sans les espaces autour et sans tenir compte des majuscules
 - **L'application teste toujours `etape`**, même si aucun professionnel ne peut encore activer de second facteur (après l'étape 3.11).
 - Le **403** n'arrive qu'après un mot de passe correct : seul le détenteur du mot de passe l'apprend. La vérification de l'email (lien valable 24 h) arrive à l'étape 3.7 ; la route qui renvoie un lien aussi.
 - **Verrouillage** : après 5 échecs, 15 minutes ; la réponse reste 401 `identifiants_invalides`. La récupération du mot de passe se fera par email (étape 3.12).
-- **Pas encore testable dans Postman** : aucune route ne crée de compte professionnel avant l'outil du premier administrateur (étape 3.6.5) et la création d'un établissement (étape 3.7).
+- **Pas encore testable dans Postman** : aucune route ne crée de compte professionnel avant la création d'un établissement (étape 3.7).
 
 #### `POST /api/professionnels/connexion/second-facteur`
 
@@ -645,7 +645,7 @@ ou
 
 Le second facteur (TOTP) est **obligatoire** pour un administrateur : la connexion ne donne jamais de session sans code. Un administrateur sans TOTP actif (premier administrateur, ou téléphone perdu) ne peut en enregistrer un nouveau que pendant une **fenêtre de 10 minutes** ouverte par l'équipe LaafiCare avec un outil local, jamais par une route. Hors de cette fenêtre, son mot de passe seul ne donne rien.
 
-**Pas encore testable dans Postman** : aucun compte administrateur n'existe avant l'outil du premier administrateur (étape 3.6.5) ; les tests automatiques vérifient ces routes.
+**Testable dans Postman** après l'outil local `creer_premier_administrateur` : il crée le compte, fait vérifier l'email, puis ouvre la fenêtre de 10 minutes (README, « Créer le premier administrateur »). Les comptes administrateur ne se créent jamais par une route : les outils `creer_administrateur` et `desactiver_totp` (qui rouvre une fenêtre après la perte d'un téléphone) sont lancés sur l'ordinateur du serveur, par un administrateur authentifié.
 
 #### `POST /api/administrateurs/connexion`
 

@@ -18,15 +18,24 @@ pub struct ErreurSms(String);
 
 pub trait SmsSender: Send + Sync {
     fn envoyer(&self, telephone: &str, message: &str) -> Result<(), ErreurSms>;
+
+    /// Vrai si le SMS ne part pas réellement : le serveur refuse alors de
+    /// démarrer en production (`config::verifier_envois`).
+    fn simule(&self) -> bool;
 }
 
 /// Implémentation de développement : journalise au lieu d'envoyer. Ne peut
 /// pas échouer (pas d'I/O), `Result` gardé pour respecter l'interface.
+/// Refusée en production : le message contient le code.
 pub struct SmsSenderConsole;
 
 impl SmsSender for SmsSenderConsole {
     fn envoyer(&self, telephone: &str, message: &str) -> Result<(), ErreurSms> {
         tracing::info!(telephone, message, "SMS (dev, non envoyé réellement)");
         Ok(())
+    }
+
+    fn simule(&self) -> bool {
+        true
     }
 }

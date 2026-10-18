@@ -2,6 +2,11 @@
 name = "laaficare-backend"
 version = "0.1.0"
 edition = "2024"
+# Avec les outils locaux de `src/bin/` (étape 3.6.5), `cargo run` seul
+# lancerait une erreur « could not determine which binary to run » : il
+# lance le serveur, comme avant (Cargo Book, « The Manifest Format »,
+# champ `default-run`). Un outil : `cargo run --bin <nom>`.
+default-run = "laaficare-backend"
 
 [dependencies]
 # Chiffrement du secret TOTP en AES-256-GCM (décision Z4). 0.11.1 stable,
@@ -16,6 +21,10 @@ chrono = { version = "0.4.45", features = ["serde"] }
 dotenvy = "0.15.7"
 jsonwebtoken = { version = "11.1.0", default-features = false, features = ["rust_crypto"] }
 rand = "0.10.3"
+# Saisie masquée des secrets dans les outils locaux (décision J9, B9 du
+# 2026-10-18). 7.5.4 stable du 2026-05-31, non retirée, vérifiée sur
+# crates.io le 2026-10-18 ; Rust 1.85 au moins.
+rpassword = "7.5.4"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"

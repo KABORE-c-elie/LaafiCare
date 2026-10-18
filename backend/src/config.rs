@@ -16,6 +16,17 @@ pub struct Config {
     /// du secret JWT. Sa perte rend tous les TOTP inutilisables : en
     /// production, elle est sauvegardée à part (section 14).
     pub totp_cle_chiffrement: CleTotp,
+    /// Développement ou production (décision du porteur, 2026-10-18).
+    pub environnement: Environnement,
+}
+
+/// Où tourne le programme (variable `ENVIRONNEMENT`, obligatoire). Aucune
+/// valeur par défaut : un oubli en production ne doit jamais laisser passer
+/// l'envoi simulé des SMS ou des emails (refus fermé).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Environnement {
+    Developpement,
+    Production,
 }
 
 /// Clé AES-256 des secrets TOTP (décision F6, 2026-10-15). `Debug` affiche
@@ -62,6 +73,14 @@ pub enum ConfigError {
     // La valeur n'est jamais reprise dans le message : c'est une clé.
     #[error("TOTP_CLE_CHIFFREMENT invalide : 64 caractères hexadécimaux attendus (32 octets, AES-256)")]
     CleTotpInvalide,
+
+    #[error("ENVIRONNEMENT invalide : « developpement » ou « production » attendu")]
+    EnvironnementInvalide,
+
+    // Le SMS porte le code d'inscription, l'email le jeton de vérification :
+    // simulés, ils ne partent jamais et s'affichent dans le terminal.
+    #[error("envoi de {0} simulé : refusé en production (ENVIRONNEMENT=production)")]
+    EnvoiSimuleEnProduction(&'static str),
 }
 
 impl Config {
@@ -72,14 +91,41 @@ impl Config {
         let server_port = parse_port(&lire("SERVER_PORT")?)?;
         let jwt_secret = valider_secret_jwt(lire("JWT_SECRET")?)?;
         let totp_cle_chiffrement = decoder_cle_totp(&lire("TOTP_CLE_CHIFFREMENT")?)?;
+        let environnement = parse_environnement(env::var("ENVIRONNEMENT").ok().as_deref())?;
 
         Ok(Config {
             database_url,
             server_port,
             jwt_secret,
             totp_cle_chiffrement,
+            environnement,
         })
     }
+}
+
+// Absente, vide ou inconnue : refus (décision du porteur, 2026-10-18).
+// Comparaison exacte, sans tolérer de majuscules : une seule écriture
+// valable, celle du `.env.example`.
+fn parse_environnement(valeur: Option<&str>) -> Result<Environnement, ConfigError> {
+    match valeur {
+        None | Some("") => Err(ConfigError::Manquante("ENVIRONNEMENT")),
+        Some("developpement") => Ok(Environnement::Developpement),
+        Some("production") => Ok(Environnement::Production),
+        Some(_) => Err(ConfigError::EnvironnementInvalide),
+    }
+}
+
+/// À appeler au démarrage du serveur et de chaque outil, avec ce qu'ils
+/// envoient (`SmsSender::simule`, `EmailSender::simule`). En production,
+/// tout envoi simulé est refusé : sinon les codes et les jetons ne
+/// partiraient jamais, et s'afficheraient dans le terminal du serveur.
+pub fn verifier_envois(environnement: Environnement, envois: &[(&'static str, bool)]) -> Result<(), ConfigError> {
+    if environnement == Environnement::Production {
+        if let Some((nature, _)) = envois.iter().find(|(_, simule)| *simule) {
+            return Err(ConfigError::EnvoiSimuleEnProduction(nature));
+        }
+    }
+    Ok(())
 }
 
 // `env::var` renvoie `Err` si la variable est absente ou n'est pas de l'UTF-8
@@ -158,6 +204,36 @@ mod tests {
         for valeur in ["ab".repeat(31), "ab".repeat(33), format!("+{}", "a".repeat(63)), "zz".repeat(32)] {
             assert!(matches!(decoder_cle_totp(&valeur), Err(ConfigError::CleTotpInvalide)), "{valeur}");
         }
+    }
+
+    #[test]
+    fn environnement_absent_ou_inconnu_refuse() {
+        assert!(matches!(parse_environnement(None), Err(ConfigError::Manquante("ENVIRONNEMENT"))));
+        assert!(matches!(parse_environnement(Some("")), Err(ConfigError::Manquante("ENVIRONNEMENT"))));
+        for valeur in ["Production", "prod", "dev", "developpement "] {
+            assert!(matches!(parse_environnement(Some(valeur)), Err(ConfigError::EnvironnementInvalide)), "{valeur}");
+        }
+    }
+
+    #[test]
+    fn environnement_reconnu() {
+        assert_eq!(parse_environnement(Some("developpement")).unwrap(), Environnement::Developpement);
+        assert_eq!(parse_environnement(Some("production")).unwrap(), Environnement::Production);
+    }
+
+    #[test]
+    fn envois_simules_refuses_en_production_seulement() {
+        let simules = [("SMS", true), ("email", true)];
+        assert!(verifier_envois(Environnement::Developpement, &simules).is_ok());
+        assert!(matches!(
+            verifier_envois(Environnement::Production, &simules),
+            Err(ConfigError::EnvoiSimuleEnProduction("SMS"))
+        ));
+        assert!(matches!(
+            verifier_envois(Environnement::Production, &[("SMS", false), ("email", true)]),
+            Err(ConfigError::EnvoiSimuleEnProduction("email"))
+        ));
+        assert!(verifier_envois(Environnement::Production, &[("SMS", false), ("email", false)]).is_ok());
     }
 
     #[test]

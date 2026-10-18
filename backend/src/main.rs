@@ -13,8 +13,9 @@ use axum::{Json, Router, extract::State, http::StatusCode, routing::get, routing
 use serde::Serialize;
 use sqlx::PgPool;
 
-use laaficare_backend::config::{CleTotp, Config};
+use laaficare_backend::config::{self, CleTotp, Config};
 use laaficare_backend::db;
+use laaficare_backend::email::{EmailSender, EmailSenderConsole};
 use laaficare_backend::jwt::JwtService;
 use laaficare_backend::sms::{self, SmsSender};
 
@@ -132,6 +133,18 @@ async fn main() {
 
     let jwt = JwtService::new(&config.jwt_secret);
     let sms: Arc<dyn SmsSender> = Arc::new(sms::SmsSenderConsole);
+
+    // B2 (décision du porteur, 2026-10-18) : en production, refus de
+    // démarrer tant qu'un envoi est simulé. Le serveur n'envoie pas encore
+    // d'emails (étape 3.7) : l'email simulé est vérifié dès maintenant, pour
+    // que la règle soit déjà en place quand il sera branché sur l'état.
+    let email = EmailSenderConsole;
+    if let Err(erreur) =
+        config::verifier_envois(config.environnement, &[("SMS", sms.simule()), ("email", email.simule())])
+    {
+        tracing::error!(%erreur, "configuration invalide");
+        std::process::exit(1);
+    }
 
     let app = Router::new()
         .route("/health", get(health))

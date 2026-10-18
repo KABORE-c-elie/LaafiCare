@@ -159,6 +159,20 @@ Les professionnels se connectent par **email**, les patients par **téléphone**
 
 Fichiers : [`auth_administrateur.rs`](../backend/src/auth_administrateur.rs), [`extracteur_jwt.rs`](../backend/src/extracteur_jwt.rs). Migration 0019. **Limite** : la base ne peut pas encore interdire à une route d'ouvrir une fenêtre (voir `points-ouverts.md`).
 
+**Les outils de l'équipe LaafiCare** (`creer_premier_administrateur`, `creer_administrateur`, `desactiver_totp`) se lancent sur l'ordinateur du serveur, **jamais par le réseau** :
+- `creer_administrateur` et `desactiver_totp` exigent que l'administrateur qui les lance s'authentifie avec son email, son mot de passe et un code de son application ; chaque essai faux compte dans son verrouillage ;
+- les mots de passe, les codes et les jetons se tapent **sans s'afficher** (crate `rpassword`), puis sont effacés de la mémoire ;
+- un nouvel administrateur **choisit lui-même son mot de passe**, différent de celui de son compte patient ; il enregistre lui-même son second facteur pendant la fenêtre de 10 minutes : **aucun outil n'affiche de secret de second facteur** ;
+- `desactiver_totp` exige l'attestation que la CNIB de la personne a été vérifiée ; il supprime le second facteur et ses codes de secours, ferme toutes les sessions du compte, prévient la personne par email, et la base refuse qu'un administrateur l'utilise sur ses propres comptes ;
+- un seul « premier administrateur » peut jamais exister, garanti par la base, même si deux outils sont lancés en même temps ;
+- **chaque création, reprise et désactivation est tracée**, sans pouvoir être modifiée ni supprimée.
+
+Fichiers : [`outils_administrateur.rs`](../backend/src/outils_administrateur.rs), [`console.rs`](../backend/src/console.rs), [`src/bin/`](../backend/src/bin/). Migrations 0013 et 0020.
+
+**Vérification d'un email par un code** : un jeton de 256 bits, valable 24 heures et une seule fois (NIST SP 800-63A rév. 4, §3.8), dont seule l'empreinte est gardée. Il ne vérifie que l'adresse à laquelle il a été envoyé : si l'email change entre-temps, il ne vaut plus rien. Un nouveau code annule le précédent. Fichier : [`jeton_email.rs`](../backend/src/jeton_email.rs).
+
+**Envois simulés interdits en production** : en développement, les SMS et les emails ne partent pas, ils s'affichent dans le terminal (les emails ne passent jamais par les journaux, qui ne doivent contenir aucun jeton, OWASP). Le serveur et les outils lisent la variable obligatoire `ENVIRONNEMENT` : en `production`, ils refusent de démarrer tant qu'un envoi est simulé. Fichiers : [`config.rs`](../backend/src/config.rs), [`email.rs`](../backend/src/email.rs), [`sms.rs`](../backend/src/sms.rs).
+
 **La clé de chiffrement des secrets TOTP** est gardée en mémoire dans un type qui l'efface à l'arrêt et qui affiche `***` si on tente de l'écrire dans un journal ; l'état partagé du serveur, qui la contient avec le secret JWT, ne peut pas être affiché du tout. Fichiers : [`config.rs`](../backend/src/config.rs), [`main.rs`](../backend/src/main.rs).
 
 Un établissement n'a **accès à aucune donnée de patient tant que l'équipe LaafiCare ne l'a pas validé**.

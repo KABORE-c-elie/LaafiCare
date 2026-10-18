@@ -87,6 +87,8 @@ pub enum MotifRevocation {
     ChangementAffectation,
     DesactivationCompte,
     EmailNonVerifie,
+    /// Second facteur retiré par l'équipe (`desactiver_totp`, migration 0020).
+    DesactivationTotp,
 }
 
 impl MotifRevocation {
@@ -99,6 +101,7 @@ impl MotifRevocation {
             MotifRevocation::ChangementAffectation => "changement_affectation",
             MotifRevocation::DesactivationCompte => "desactivation_compte",
             MotifRevocation::EmailNonVerifie => "email_non_verifie",
+            MotifRevocation::DesactivationTotp => "desactivation_totp",
         }
     }
 }
@@ -227,6 +230,12 @@ impl From<sqlx::Error> for ErreurSession {
 /// `zeroize` 1.9.0 : son effacement « cannot guarantee copies of the data
 /// were not previously made by buffer reallocation »).
 fn nouveau_jeton() -> (Zeroizing<[u8; 32]>, JetonRenouvellement) {
+    let (octets, texte) = octets_aleatoires_hexadecimaux();
+    (octets, JetonRenouvellement(texte))
+}
+
+/// Partagé avec `jeton_email.rs` (même forme de jeton, décision B3).
+pub(crate) fn octets_aleatoires_hexadecimaux() -> (Zeroizing<[u8; 32]>, String) {
     const CHIFFRES: &[u8; 16] = b"0123456789abcdef";
     let octets = Zeroizing::new(rand::random::<[u8; 32]>());
     let mut texte = String::with_capacity(64);
@@ -234,13 +243,13 @@ fn nouveau_jeton() -> (Zeroizing<[u8; 32]>, JetonRenouvellement) {
         texte.push(CHIFFRES[usize::from(octet >> 4)] as char);
         texte.push(CHIFFRES[usize::from(octet & 0x0f)] as char);
     }
-    (octets, JetonRenouvellement(texte))
+    (octets, texte)
 }
 
 /// Un texte qui n'est pas exactement 64 caractères hexadécimaux ne peut pas
 /// être un jeton émis par le serveur. Les octets décodés sont effacés à la
-/// fin de leur usage.
-fn decoder(texte: &str) -> Option<Zeroizing<[u8; 32]>> {
+/// fin de leur usage. Partagé avec `jeton_email.rs`.
+pub(crate) fn decoder(texte: &str) -> Option<Zeroizing<[u8; 32]>> {
     if texte.len() != 64 || !texte.is_ascii() {
         return None;
     }
@@ -255,7 +264,7 @@ fn decoder(texte: &str) -> Option<Zeroizing<[u8; 32]>> {
 /// d'entropie, NIST SP 800-63B rév. 4 §3.1.2 admet un hachage simple ; la
 /// recherche se fait par l'empreinte (index unique), donc sans comparaison
 /// révélatrice par le temps.
-fn empreinte(octets: &[u8; 32]) -> Vec<u8> {
+pub(crate) fn empreinte(octets: &[u8; 32]) -> Vec<u8> {
     Sha256::digest(octets).to_vec()
 }
 

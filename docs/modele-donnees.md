@@ -86,8 +86,15 @@ Une session fermée garde la date et le **motif** de sa fermeture :
 | `changement_affectation` | prévu : un professionnel change d'établissement ou de rôle (étape 3.9) |
 | `desactivation_compte` | prévu : le compte est désactivé |
 | `email_non_verifie` | l'email d'un professionnel ou d'un administrateur n'est plus vérifié (après un changement d'email) |
+| `desactivation_totp` | l'équipe LaafiCare a retiré le second facteur du compte (outil `desactiver_totp`) |
 
-Règles garanties par la base : une session fermée a toujours un motif ; la liste des motifs est fermée ; une affectation de session appartient forcément au compte de la session. Les sessions terminées sont effacées après 30 jours (6 mois pour `rejeu_detecte`). Fichier : [`session.rs`](../backend/src/session.rs). Migrations 0015 et 0017.
+Règles garanties par la base : une session fermée a toujours un motif ; la liste des motifs est fermée ; une affectation de session appartient forcément au compte de la session. Les sessions terminées sont effacées après 30 jours (6 mois pour `rejeu_detecte`). Fichier : [`session.rs`](../backend/src/session.rs). Migrations 0015, 0017 et 0020.
+
+### `jeton_email` : les codes envoyés par email
+
+Un code envoyé à l'email d'un compte professionnel ou administrateur, pour **vérifier l'adresse** (plus tard aussi pour réinitialiser un mot de passe, étape 3.12). Seule son **empreinte** est enregistrée, avec l'adresse visée, sa date de fin (24 heures), et sa date d'utilisation ou d'annulation : un nouveau code annule le précédent. Il ne vérifie que l'adresse à laquelle il a été envoyé.
+
+Règles garanties par la base : jamais pour un compte patient ; un objet de la liste fermée ; au plus **un code de vérification en attente** par compte ; jamais à la fois utilisé et annulé. Fichier : [`jeton_email.rs`](../backend/src/jeton_email.rs). Migration 0020.
 
 ## 2. Patients
 
@@ -246,7 +253,13 @@ La trace de chaque désactivation par l'équipe LaafiCare : compte concerné, ad
 
 ### `profil_administrateur`
 
-Le numéro de CNIB de chaque administrateur LaafiCare, **unique**, au format de la carte actuelle (la lettre B suivie de 8 chiffres). Il est rangé à part, pour ne jamais apparaître dans une connexion.
+Le numéro de CNIB d'un administrateur LaafiCare, **unique**, au format de la carte actuelle (la lettre B suivie de 8 chiffres, règle décidée par le porteur d'après la CNIB burkinabè, sans source officielle). Il est rangé à part, pour ne jamais apparaître dans une connexion. **Facultatif pour l'instant** (2026-10-18) : un administrateur créé sans CNIB n'a pas de ligne dans cette table.
+
+### `creation_administrateur` et `reprise_administrateur` : les traces des administrateurs
+
+Une ligne par **administrateur créé** : date, compte créé, et administrateur qui l'a créé (vide seulement pour le premier, créé par l'outil `creer_premier_administrateur`). Une ligne par **reprise** d'un administrateur qui n'a jamais enregistré de second facteur (outil interrompu ou fenêtre expirée) : date, administrateur repris, et administrateur qui a repris (vide quand le premier se reprend lui-même).
+
+Règles garanties par la base : **jamais modifiées ni supprimées** ; seulement des comptes administrateur ; personne ne se crée ni ne se reprend lui-même ; **un seul premier administrateur**, même si deux outils sont lancés en même temps. Fichier : [`outils_administrateur.rs`](../backend/src/outils_administrateur.rs). Migration 0020.
 
 ---
 
@@ -273,5 +286,6 @@ Le numéro de CNIB de chaque administrateur LaafiCare, **unique**, au format de 
 | 0017 | Motif de fermeture de session `email_non_verifie` |
 | 0018 | Jeton intermédiaire à usage unique (`compte.second_facteur_dernier_iat`) |
 | 0019 | Fenêtre de réenrôlement d'un administrateur (`compte.reenrolement_autorise_jusqu_au`) |
+| 0020 | Codes envoyés par email (`jeton_email`), motif de session `desactivation_totp`, traces de la création et de la reprise des administrateurs |
 
 Une migration déjà appliquée ne change plus jamais : toute évolution passe par une nouvelle migration. Un test vérifie aussi qu'aucun caractère invisible ne s'y glisse ([`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs)).

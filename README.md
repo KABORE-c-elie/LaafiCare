@@ -136,13 +136,15 @@ Le projet a commencé par une phase de cadrage : un cahier des charges et des di
 | **Serveur : patients** | **fonctionne** : inscription par SMS, connexion, mot de passe oublié, verrouillage, NIP, limites du code SMS, profil du patient connecté (`GET /api/patients/moi`), sessions (jeton de 15 min, renouvellement, déconnexion d'un appareil ou de tous) |
 | **Serveur : MUNASEB** | contrats et périodes d'adhésion, demandes de remboursement de bout en bout (création, prise en charge, validation, rejet, paiement), notifications, historique ; **routes des agents hors service** : elles reposent encore sur l'ancien compte agent, supprimé lors du passage aux comptes séparés (l'ancienne route de connexion agent est supprimée). Elles seront rebranchées à l'étape 3.9, mais **on ne pourra les tester qu'après les étapes 3.7, 3.8 et 3.10 réduites à la MUNASEB** (création et validation de la structure MUNASEB, invitation d'un agent), qui permettent de créer un agent. |
 | **Serveur : backoffice** | base prête, routes à venir (voir ci-dessous) |
-| Serveur : connexion professionnelle | **écrite** (`POST /api/professionnels/connexion`, puis `POST /api/professionnels/connexion/second-facteur` quand le second facteur est actif) : email et mot de passe, email obligatoirement vérifié, code TOTP ou code de secours, jeton intermédiaire à usage unique, session de 12 h au plus. **Pas encore testable dans Postman** : aucun compte professionnel ne peut être créé avant l'outil du premier administrateur (étape 3.6.5) et la création d'un établissement (étape 3.7) ; les tests automatiques la vérifient. Restent dans l'étape 3.6 : les outils locaux. |
-| Serveur : connexion administrateur | **écrite** (`POST /api/administrateurs/connexion`, second temps, réenrôlement) : second facteur toujours exigé ; un administrateur sans second facteur ne peut en enregistrer un que pendant une fenêtre de 10 minutes ouverte par l'équipe. **Pas encore testable dans Postman** : aucun compte administrateur avant l'outil du premier administrateur (étape 3.6.5) ; les tests automatiques la vérifient. |
+| Serveur : connexion professionnelle | **écrite** (`POST /api/professionnels/connexion`, puis `POST /api/professionnels/connexion/second-facteur` quand le second facteur est actif) : email et mot de passe, email obligatoirement vérifié, code TOTP ou code de secours, jeton intermédiaire à usage unique, session de 12 h au plus. **Pas encore testable dans Postman** : aucun compte professionnel ne peut être créé avant la création d'un établissement (étape 3.7) ; les tests automatiques la vérifient. |
+| **Serveur : connexion administrateur** | **fonctionne** (`POST /api/administrateurs/connexion`, second temps, réenrôlement) : second facteur toujours exigé ; un administrateur sans second facteur ne peut en enregistrer un que pendant une fenêtre de 10 minutes ouverte par l'équipe. **Testable dans Postman** après l'outil du premier administrateur (voir « Créer le premier administrateur ») |
+| **Outils de l'équipe** | **fonctionnent**, sur l'ordinateur du serveur seulement (jamais par le réseau) : `creer_premier_administrateur`, `creer_administrateur` (un administrateur en crée un autre), `desactiver_totp` (téléphone perdu) ; chaque création, reprise ou désactivation est tracée |
 | Applications Angular et Flutter | en cours, chacune dans sa branche (voir « Organisation du dépôt ») |
 
 **Le backoffice** est la partie qui gère les comptes et les établissements : création d'un établissement par son responsable, validation par l'équipe LaafiCare (licence), invitation des employés, administrateurs.
 - **Ce qui existe déjà** : les tables dans la base (comptes séparés, établissements, pièces justificatives, décisions de l'équipe, affectations, invitations, profil administrateur) avec leurs règles, et la **double authentification** (second facteur TOTP : chiffrement du secret, activation, vérification des codes, codes de secours).
-- **Ce qui n'est pas encore utilisable** : aucune route du backoffice n'existe avant les étapes 3.6 à 3.10 (connexion professionnelle et administrateur, établissements, décisions, choix de l'affectation, invitations). On ne peut donc encore ni créer un établissement, ni inviter un agent, ni se connecter comme professionnel.
+- **Ce qui marche déjà** : la connexion des administrateurs et les outils de l'équipe (premier administrateur, administrateurs suivants, désactivation d'un second facteur).
+- **Ce qui n'est pas encore utilisable** : aucune route pour les établissements, les décisions, le choix de l'affectation ou les invitations (étapes 3.7 à 3.10). On ne peut donc encore ni créer un établissement, ni inviter un agent, ni se connecter comme professionnel.
 - **Les détails** : les tables et leurs règles dans [`docs/modele-donnees.md`](docs/modele-donnees.md), la double authentification dans [`docs/securite.md`](docs/securite.md), les routes prévues dans [`docs/api.md`](docs/api.md) (section 4).
 
 Les modules médicaux (dossier, ordonnances, pharmacie, laboratoire, suivi de grossesse) viendront ensuite. La liste détaillée des décisions encore ouvertes est dans [`docs/points-ouverts.md`](docs/points-ouverts.md).
@@ -208,11 +210,14 @@ git checkout dev
 |---|---|---|
 | `POSTGRES_PASSWORD` | mot de passe de la base de développement, lu par Docker | une valeur choisie |
 | `DATABASE_URL` | adresse de la base, avec ce même mot de passe | `postgres://utilisateur:motdepasse@127.0.0.1:5433/laaficare` |
+| `ENVIRONNEMENT` | `developpement` sur votre machine, `production` sur le vrai serveur ; obligatoire | `developpement` |
 | `SERVER_PORT` | port du serveur | `8080` |
 | `JWT_SECRET` | signe les jetons de connexion, 32 caractères au moins | 64 caractères hexadécimaux générés |
 | `TOTP_CLE_CHIFFREMENT` | chiffre les secrets du second facteur, exactement 64 caractères hexadécimaux | une autre valeur générée |
 
 Le fichier `.env` contient des secrets : il n'est jamais envoyé dans Git.
+
+**Vous aviez déjà un `.env` ?** Ajoutez-y la ligne `ENVIRONNEMENT=developpement` (nouvelle variable, obligatoire) : sans elle, le serveur et les outils refusent de démarrer. En `production`, ils refusent aussi tant que les SMS et les emails sont seulement simulés, ce qui est le cas aujourd'hui.
 
 ### Lancer
 
@@ -221,7 +226,7 @@ Le fichier `.env` contient des secrets : il n'est jamais envoyé dans Git.
    ```
    docker compose up -d     # démarre PostgreSQL en arrière-plan
    docker compose ps        # vérifie : la base doit apparaître « running »
-   cargo run                # compile et lance le serveur
+   cargo run                # compile et lance le serveur (les outils : cargo run --bin <nom>)
    ```
 
 **La première compilation prend plusieurs minutes** : Rust fabrique d'abord toutes les bibliothèques utilisées. Les suivantes sont bien plus rapides. Ce n'est pas un blocage.
@@ -248,6 +253,36 @@ En développement, **aucun SMS n'est envoyé** : le code apparaît dans le termi
 Le jeton d'accès expire après 15 minutes : au-delà, l'étape 4 répond 401, et l'étape 5 en donne un nouveau.
 
 Toutes les routes, leurs réponses et leurs erreurs sont décrites dans [`docs/api.md`](docs/api.md).
+
+### Créer le premier administrateur
+
+Les comptes administrateur ne se créent jamais par le réseau : on lance un **outil** sur l'ordinateur du serveur. **Lancez-le depuis PowerShell** : les mots de passe et les codes se tapent sans s'afficher, ce que le terminal de Git Bash ne permet pas. En développement, **aucun email n'est envoyé** : il s'affiche dans le terminal de l'outil, entre deux lignes de tirets.
+
+1. La personne doit d'abord avoir un **compte patient** : faire les étapes 1 et 2 du tableau précédent, avec un numéro fictif.
+2. Le serveur doit avoir été lancé au moins une fois (il met la base à jour). Puis, depuis `backend/` :
+   ```
+   cargo run --bin creer_premier_administrateur
+   ```
+3. Répondre aux questions : le téléphone du compte patient, un email fictif (par exemple `admin@example.org`), la CNIB (facultative : « B » est déjà écrit, taper les 8 chiffres ou appuyer sur Entrée), puis deux fois le mot de passe administrateur (différent de celui du compte patient).
+4. L'outil affiche l'email simulé, avec un **code de vérification** de 64 caractères : le copier, puis le coller quand l'outil le demande.
+5. L'outil ouvre une **fenêtre de 10 minutes**. Pendant ce temps, dans Postman :
+
+| Étape | Demande | Corps (JSON) | Réponse attendue |
+|---|---|---|---|
+| a. Se connecter | `POST http://127.0.0.1:8080/api/administrateurs/connexion` | `{"email": "admin@example.org", "mot_de_passe": "…"}` | 200, `"etape": "reenrolement"` et un `jeton_reenrolement` |
+| b. Commencer | `POST …/api/administrateurs/reenrolement/commencer`, en-tête `Authorization: Bearer <jeton_reenrolement>` | `{"mot_de_passe": "…"}` | 200, `url_otpauth` et `cle_base32` |
+| c. Enregistrer | dans une application d'authentification (Google Authenticator, par exemple) : ajouter un compte « par clé », et taper `cle_base32` | — | l'application affiche un code à 6 chiffres |
+| d. Confirmer | `POST …/api/administrateurs/reenrolement/confirmer`, même en-tête | `{"code": "123456"}` (le code affiché) | 200 et **10 codes de secours**, montrés une seule fois : les noter |
+| e. Se reconnecter | `POST …/api/administrateurs/connexion` | comme en a. | 200, `"etape": "second_facteur"` et un `jeton_intermediaire` |
+| f. Donner le code | `POST …/api/administrateurs/connexion/second-facteur`, en-tête `Authorization: Bearer <jeton_intermediaire>` | `{"code": "…"}` (un nouveau code de l'application) | 200, `"etape": "complete"` et la paire de jetons |
+
+Si l'outil s'arrête en cours, ou si les 10 minutes passent : relancer `cargo run --bin creer_premier_administrateur`. Il reprend (mot de passe administrateur demandé), renvoie un code si l'email n'est pas encore vérifié, puis rouvre une fenêtre.
+
+**Les autres outils de l'équipe**, lancés par un administrateur qui donne son email, son mot de passe et un code de son application :
+- `cargo run --bin creer_administrateur` : créer un autre administrateur (la personne est présente, a un compte patient, et tape elle-même son mot de passe), ou reprendre un administrateur qui n'a jamais enregistré de second facteur ;
+- `cargo run --bin desactiver_totp` : retirer le second facteur d'une personne qui a perdu son téléphone et ses codes de secours, après avoir vérifié sa CNIB. Ses sessions sont fermées ; pour un administrateur, une nouvelle fenêtre de 10 minutes est ouverte.
+
+**Gardez toujours au moins deux administrateurs avec un second facteur actif** : `desactiver_totp` exige un autre administrateur que la personne visée.
 
 **Tester l'application mobile sur un téléphone Android branché en USB** : le serveur reste sur `127.0.0.1`, il n'est jamais ouvert au réseau local. L'outil `adb` (fourni avec Android Studio) relaie le port du téléphone vers celui de l'ordinateur :
 
@@ -278,7 +313,10 @@ Les tests qui utilisent la base créent chacun une base temporaire, supprimée e
 | Ce qu'on voit | Cause | Que faire |
 |---|---|---|
 | Les tests en base échouent tous avec `PoolTimedOut` | PostgreSQL ne répond pas : Docker Desktop n'est pas démarré | démarrer Docker Desktop, puis `docker compose up -d` et `docker compose ps` |
-| Le serveur s'arrête aussitôt avec « configuration invalide » | il reste un `A_GENERER` dans `backend/.env`, ou une valeur mal formée (secret trop court, clé qui n'est pas en hexadécimal) | compléter `.env` (voir « Préparer la configuration ») |
+| Le serveur s'arrête aussitôt avec « configuration invalide » | il reste un `A_GENERER` dans `backend/.env`, une valeur mal formée (secret trop court, clé qui n'est pas en hexadécimal), ou `ENVIRONNEMENT` manque | compléter `.env` (voir « Préparer la configuration ») |
+| « envoi de SMS simulé : refusé en production » | `ENVIRONNEMENT=production` sur une machine de développement | mettre `ENVIRONNEMENT=developpement` |
+| Un outil répond « base pas à jour » | le serveur n'a pas encore appliqué les dernières migrations | lancer `cargo run` une fois, puis relancer l'outil |
+| Un outil s'arrête quand il demande un mot de passe | il est lancé depuis le terminal de Git Bash | le relancer depuis PowerShell |
 | Le serveur s'arrête car la base est injoignable | Docker n'est pas démarré, ou le mot de passe de `DATABASE_URL` n'est pas celui de `POSTGRES_PASSWORD` | démarrer Docker ; mettre le même mot de passe dans les deux variables |
 | Réponse 429 `trop_de_demandes` | trop de codes demandés, ou trop d'essais de code | attendre le nombre de secondes indiqué par l'en-tête `Retry-After`, ou demander un nouveau code |
 | Réponse 401 `jeton_invalide` sur une route ordinaire | jeton d'accès expiré (15 min), d'une autre sorte, émis avant un changement de mot de passe, ou session fermée | renouveler (`POST /api/sessions/renouveler`) ; si le renouvellement répond aussi 401, se reconnecter |

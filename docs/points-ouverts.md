@@ -57,7 +57,21 @@ Réglé par l'option 3, décidée le 2026-10-12 : jetons d'accès de 15 minutes,
 
 ### Prévenir l'administrateur quand son second facteur change (étape 3.7)
 
-**Exigence notée le 2026-10-15.** Quand un second facteur est enregistré ou désactivé sur un compte administrateur, la personne doit en être prévenue **par email**, par un autre canal que l'opération elle-même. Sources : NIST SP 800-63B rév. 4, §4.1.2.1 (« When an authenticator is added, the CSP SHALL notify the subscriber via a mechanism independent of the transaction binding the new authenticator ») et §4.2.3 (« account recovery SHALL cause a notification to be sent to the subscriber ») ; OWASP ASVS 5.0, 6.3.7. À faire avec l'envoi d'emails (`email.rs`, étape 3.7), pour le réenrôlement (étape 3.6.4) et l'outil `desactiver_totp` (étape 3.6.5).
+**Exigence notée le 2026-10-15.** Quand un second facteur est enregistré ou désactivé sur un compte administrateur, la personne doit en être prévenue **par email**, par un autre canal que l'opération elle-même. Sources : NIST SP 800-63B rév. 4, §4.1.2.1 (« When an authenticator is added, the CSP SHALL notify the subscriber via a mechanism independent of the transaction binding the new authenticator ») et §4.2.3 (« account recovery SHALL cause a notification to be sent to the subscriber ») ; OWASP ASVS 5.0, 6.3.7.
+- **Fait pour la désactivation** (2026-10-18, étape 3.6.5) : `desactiver_totp` prévient la personne à son email, si elle en a un.
+- **Reste pour l'enregistrement** : la confirmation du réenrôlement (`POST /api/administrateurs/reenrolement/confirmer`, étape 3.6.4) ne prévient pas encore la personne. À faire à l'étape 3.7, quand le serveur enverra des emails.
+
+### Toujours au moins deux administrateurs avec un second facteur actif
+
+**Règle d'organisation notée le 2026-10-18.** `desactiver_totp` exige un **autre** administrateur que la personne visée (Z9, refusé par la base sinon). Si le seul administrateur perd son téléphone et ses codes de secours, plus personne ne peut lui rouvrir l'accès : l'administration est bloquée. **Aucune procédure d'urgence n'est prévue** (décision du porteur) : l'équipe doit toujours garder **au moins deux administrateurs avec un second facteur actif**, créés avec l'outil `creer_administrateur`.
+
+### Ajouter la CNIB d'un administrateur plus tard
+
+**Noté le 2026-10-18.** La CNIB d'un administrateur est **facultative** pour l'instant : un administrateur créé sans CNIB n'a pas de profil (`profil_administrateur`). Si elle devient obligatoire, il faudra un moyen de l'ajouter à un administrateur existant (outil de l'équipe, avec trace), en même temps que l'outil qui change un numéro de CNIB (ci-dessous).
+
+### Purge des codes envoyés par email
+
+**Noté le 2026-10-18 (migration 0020).** Les codes de vérification utilisés, annulés ou expirés restent dans `jeton_email` (seule leur empreinte). Leur durée de conservation et leur effacement sont à décider, avec les autres durées de conservation (section 3, CIL).
 
 ### Empreinte du code reçu par SMS
 
