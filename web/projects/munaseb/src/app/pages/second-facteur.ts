@@ -1,0 +1,133 @@
+import { ChangeDetectionStrategy, Component, ElementRef, inject, signal, viewChild } from '@angular/core';
+import { FormControl, ReactiveFormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
+import {
+  AccesService,
+  ChampComponent,
+  MESSAGES,
+  MessageEtatComponent,
+  MessageNavigation,
+  SessionService,
+  decoderErreur,
+  messagePourErreur,
+} from 'commun';
+
+/** Second temps de la connexion (docs/api.md §2.4) : un code à 6 chiffres ou un code de secours. */
+@Component({
+  selector: 'lc-second-facteur',
+  imports: [ReactiveFormsModule, ChampComponent, MessageEtatComponent],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `
+    <div class="accueil">
+      <section class="accueil__panneau" aria-labelledby="titre-espace">
+        <img class="accueil__logo" src="logo-laaficare.svg" alt="LaafiCare" width="192" height="40" />
+        <h1 class="accueil__titre" id="titre-espace">Espace Assurance MUNASEB</h1>
+      </section>
+
+      <main class="accueil__formulaire">
+        <form class="carte formulaire" (ngSubmit)="envoyer()" novalidate>
+          <h2 class="formulaire__titre">Code de vérification</h2>
+          @if (secours()) {
+            <p>Saisissez l'un de vos codes de secours.</p>
+          } @else {
+            <p>Saisissez le code à 6 chiffres affiché par votre application d'authentification.</p>
+          }
+
+          @if (message(); as texte) {
+            <lc-message-etat genre="erreur" [texte]="texte" />
+          }
+
+          @if (secours()) {
+            <lc-champ libelle="Code de secours (XXXXX-XXXXX)" pour="code-secours">
+              <input
+                #saisie
+                id="code-secours"
+                class="champ__saisie"
+                type="text"
+                autocomplete="off"
+                autocapitalize="characters"
+                spellcheck="false"
+                maxlength="11"
+                [formControl]="code"
+              />
+            </lc-champ>
+          } @else {
+            <lc-champ libelle="Code à 6 chiffres" pour="code">
+              <input
+                #saisie
+                id="code"
+                class="champ__saisie"
+                type="text"
+                inputmode="numeric"
+                autocomplete="one-time-code"
+                maxlength="6"
+                [formControl]="code"
+              />
+            </lc-champ>
+          }
+
+          <button type="submit" class="bouton bouton--principal bouton--large" [disabled]="envoiEnCours()">
+            {{ envoiEnCours() ? 'Vérification…' : 'Valider' }}
+          </button>
+          <button type="button" class="bouton bouton--lien" (click)="basculer()">
+            {{ secours() ? 'Utiliser le code de l’application' : 'Utiliser un code de secours' }}
+          </button>
+          <button type="button" class="bouton bouton--lien" (click)="revenir()">Revenir à la connexion</button>
+        </form>
+      </main>
+    </div>
+  `,
+})
+export class SecondFacteurPage {
+  private readonly acces = inject(AccesService);
+  private readonly session = inject(SessionService);
+  private readonly router = inject(Router);
+  private readonly messages = inject(MessageNavigation);
+  private readonly saisie = viewChild<ElementRef<HTMLInputElement>>('saisie');
+
+  protected readonly code = new FormControl('', { nonNullable: true });
+  protected readonly secours = signal(false);
+  protected readonly envoiEnCours = signal(false);
+  protected readonly message = signal<string | null>(null);
+
+  basculer(): void {
+    this.secours.set(!this.secours());
+    this.code.reset();
+    this.message.set(null);
+  }
+
+  revenir(): void {
+    this.session.effacer();
+    void this.router.navigate(['/connexion']);
+  }
+
+  async envoyer(): Promise<void> {
+    const valeur = this.code.value.trim();
+    if (this.envoiEnCours() || valeur === '') {
+      this.saisie()?.nativeElement.focus();
+      return;
+    }
+    this.envoiEnCours.set(true);
+    this.message.set(null);
+    try {
+      // §2.4 : un seul des deux champs, jamais les deux.
+      await this.acces.validerSecondFacteur(this.secours() ? { code_secours: valeur } : { code: valeur });
+      await this.router.navigate(['/espaces']);
+    } catch (erreur) {
+      const decodee = decoderErreur(erreur);
+      if (decodee.genre === 'api' && decodee.code === 'jeton_invalide') {
+        // §2.4 : « Sur 401 jeton_invalide : elle revient à l'écran de connexion. »
+        this.session.effacer();
+        this.messages.poser({ genre: 'erreur', texte: MESSAGES.delaiDepasse });
+        await this.router.navigate(['/connexion']);
+        return;
+      }
+      // §2.4 : « Sur 401 code_invalide : l'application vide le champ du code. »
+      this.code.reset();
+      this.message.set(messagePourErreur(decodee));
+      this.saisie()?.nativeElement.focus();
+    } finally {
+      this.envoiEnCours.set(false);
+    }
+  }
+}

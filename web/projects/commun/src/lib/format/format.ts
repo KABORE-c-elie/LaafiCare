@@ -1,0 +1,62 @@
+import { Pipe, PipeTransform } from '@angular/core';
+
+// Formats français par Intl (MDN, Intl.NumberFormat et Intl.DateTimeFormat),
+// avec la locale `fr-FR` : les milliers y sont séparés par une espace fine
+// insécable, et les noms de mois sont en français.
+const LOCALE = 'fr-FR';
+
+/** Fuseau du Burkina Faso (base IANA), le même que le backend (CLAUDE.md §14, D9). */
+export const FUSEAU_BURKINA = 'Africa/Ouagadougou';
+
+const NOMBRE = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 0 });
+// Une date seule (`AAAA-MM-JJ`) est un jour du calendrier, pas un instant :
+// elle est lue et affichée en UTC pour ne jamais glisser d'un jour.
+const JOUR = new Intl.DateTimeFormat(LOCALE, { dateStyle: 'long', timeZone: 'UTC' });
+const DATE_HEURE = new Intl.DateTimeFormat(LOCALE, {
+  dateStyle: 'short',
+  timeStyle: 'short',
+  timeZone: FUSEAU_BURKINA,
+});
+
+/** Montant entier en FCFA (docs/api.md §1.1), ex. `12 500 FCFA`. */
+export function formaterFcfa(montant: number): string {
+  // Espace insécable avant l'unité : « FCFA » ne part jamais seul à la ligne.
+  return `${NOMBRE.format(montant)}\u{00A0}FCFA`;
+}
+
+/** Date `AAAA-MM-JJ` (docs/api.md §1.1), ex. `18 octobre 2027`. Texte d'origine si illisible. */
+export function formaterJour(jour: string): string {
+  const morceaux = /^(\d{4})-(\d{2})-(\d{2})$/.exec(jour);
+  if (morceaux === null) {
+    return jour;
+  }
+  const [, annee, mois, quantieme] = morceaux;
+  return JOUR.format(new Date(Date.UTC(Number(annee), Number(mois) - 1, Number(quantieme))));
+}
+
+/** Date et heure RFC 3339 en UTC (docs/api.md §1.1), affichée à l'heure du Burkina. */
+export function formaterDateHeure(instant: string): string {
+  const date = new Date(instant);
+  return Number.isNaN(date.getTime()) ? instant : DATE_HEURE.format(date);
+}
+
+@Pipe({ name: 'fcfa' })
+export class FcfaPipe implements PipeTransform {
+  transform(montant: number): string {
+    return formaterFcfa(montant);
+  }
+}
+
+@Pipe({ name: 'jour' })
+export class JourPipe implements PipeTransform {
+  transform(jour: string): string {
+    return formaterJour(jour);
+  }
+}
+
+@Pipe({ name: 'dateHeure' })
+export class DateHeurePipe implements PipeTransform {
+  transform(instant: string): string {
+    return formaterDateHeure(instant);
+  }
+}

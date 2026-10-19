@@ -1,0 +1,123 @@
+{
+  "$schema": "./node_modules/@angular/cli/lib/config/schema.json",
+  "version": 1,
+  "cli": {
+    "packageManager": "npm"
+  },
+  "newProjectRoot": "projects",
+  "projects": {
+    "commun": {
+      "projectType": "library",
+      "root": "projects/commun",
+      "sourceRoot": "projects/commun/src",
+      "prefix": "lc",
+      "architect": {
+        "build": {
+          "builder": "@angular/build:ng-packagr",
+          "configurations": {
+            "production": {
+              "tsConfig": "projects/commun/tsconfig.lib.prod.json"
+            },
+            "development": {
+              "tsConfig": "projects/commun/tsconfig.lib.json"
+            }
+          },
+          "defaultConfiguration": "production"
+        },
+        "test": {
+          "builder": "@angular/build:unit-test",
+          "options": {
+            "tsConfig": "projects/commun/tsconfig.spec.json"
+          }
+        },
+        "lint": {
+          "builder": "@angular-eslint/builder:lint",
+          "options": {
+            "lintFilePatterns": ["projects/commun/**/*.ts", "projects/commun/**/*.html"],
+            "eslintConfig": "projects/commun/eslint.config.js"
+          }
+        }
+      }
+    },
+    "munaseb": {
+      "projectType": "application",
+      "schematics": {},
+      "root": "projects/munaseb",
+      "sourceRoot": "projects/munaseb/src",
+      "prefix": "lc",
+      "architect": {
+        "build": {
+          "builder": "@angular/build:application",
+          "options": {
+            "browser": "projects/munaseb/src/main.ts",
+            "tsConfig": "projects/munaseb/tsconfig.app.json",
+            "assets": [
+              {
+                "glob": "**/*",
+                "input": "projects/munaseb/public"
+              }
+            ],
+            "styles": ["projects/munaseb/src/styles.css"]
+          },
+          "configurations": {
+            "production": {
+              "budgets": [
+                {
+                  "type": "initial",
+                  "maximumWarning": "320kB",
+                  "maximumError": "400kB"
+                },
+                {
+                  "type": "anyComponentStyle",
+                  "maximumWarning": "1B",
+                  "maximumError": "1kB"
+                }
+              ],
+              "outputHashing": "all",
+              "optimization": {
+                "scripts": true,
+                "styles": {
+                  "minify": true,
+                  "inlineCritical": false
+                },
+                "fonts": true
+              }
+            },
+            "development": {
+              "optimization": false,
+              "extractLicenses": false,
+              "sourceMap": true
+            }
+          },
+          "defaultConfiguration": "production"
+        },
+        "serve": {
+          "builder": "@angular/build:dev-server",
+          "options": {
+            "port": 4200,
+            "proxyConfig": "proxy.conf.json"
+          },
+          "configurations": {
+            "production": {
+              "buildTarget": "munaseb:build:production"
+            },
+            "development": {
+              "buildTarget": "munaseb:build:development"
+            }
+          },
+          "defaultConfiguration": "development"
+        },
+        "test": {
+          "builder": "@angular/build:unit-test"
+        },
+        "lint": {
+          "builder": "@angular-eslint/builder:lint",
+          "options": {
+            "lintFilePatterns": ["projects/munaseb/**/*.ts", "projects/munaseb/**/*.html"],
+            "eslintConfig": "projects/munaseb/eslint.config.js"
+          }
+        }
+      }
+    }
+  }
+}
