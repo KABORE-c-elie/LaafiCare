@@ -4,7 +4,7 @@ Ce document liste ce qui reste à décider ou à construire avant que LaafiCare 
 
 Les décisions déjà prises sont dans `CLAUDE.md` (sections 12 et 14), qui reste la référence. Ce document est mis à jour à chaque décision qui ferme ou ouvre un point.
 
-État au 2026-10-15.
+État au 2026-10-19.
 
 ---
 
@@ -35,7 +35,7 @@ Une *session* correspond à une connexion sur un appareil. **Règle décidée le
 
 ### Déconnexion — fermé le 2026-10-14
 
-Réglé par l'option 3, décidée le 2026-10-12 : jetons d'accès de 15 minutes, jeton de renouvellement qui change à chaque usage et révocable, une session par appareil vérifiée à chaque demande. Déconnexion d'un appareil (`POST /api/sessions/deconnexion`) ou de tous (`POST /api/sessions/deconnexion-partout`) : voir `docs/api.md`, section 1.7. Reste ouvert : le **stockage du jeton de renouvellement dans un navigateur** (applications web), à décider à part.
+Réglé par l'option 3, décidée le 2026-10-12 : jetons d'accès de 15 minutes, jeton de renouvellement qui change à chaque usage et révocable, une session par appareil vérifiée à chaque demande. Déconnexion d'un appareil (`POST /api/sessions/deconnexion`) ou de tous (`POST /api/sessions/deconnexion-partout`) : voir `docs/api.md`, section 1.7. **Stockage du jeton dans un navigateur** (applications web, décision du porteur, 2026-10-19) : **option A, jeton gardé en mémoire**, pour le développement. Reste ouvert : **option C (cookie `__Host-`) à confirmer avant le pilote**.
 
 ### Fausses alertes de rejeu sur un réseau instable
 
@@ -153,7 +153,8 @@ En production, le serveur n'accepte que des connexions chiffrées (HTTPS) : jeto
 - **Fournisseurs réels** d'envoi de SMS et d'email (crate et fournisseur à présenter).
 - **Limite du nombre de demandes par adresse IP** sur les routes de connexion et de réinitialisation.
 - **Liste de mots de passe interdits** (NIST SP 800-63B rév. 4).
-- **Stockage du jeton de renouvellement dans un navigateur** (applications web), à décider à part.
+- **Stockage du jeton dans un navigateur** (applications web) : en mémoire pour le développement (option A) ; **option C (cookie `__Host-`) à confirmer avant le pilote**.
+- **Accord de la MUNASEB pour l'usage de ses couleurs et de son logo** dans l'application web (palette rose `#8C4C65`), à obtenir **avant le pilote** (noté le 2026-10-19).
 - **Fichiers déposés par les structures** : réécriture des images, antivirus, contenu actif des PDF.
 
 ---
