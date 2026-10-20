@@ -240,6 +240,8 @@ Le serveur s'arrête avec `Ctrl+C` dans le terminal où il tourne. PostgreSQL s'
 
 ### Un premier essai dans Postman
 
+On peut aussi tester par les applications elles-mêmes : l'application web Angular (branche `web`, qui passe par le proxy de développement d'Angular, sans réglage CORS côté serveur) et l'application mobile Flutter (branche `mobile`).
+
 En développement, **aucun SMS n'est envoyé** : le code apparaît dans le terminal où tourne le serveur, sur une ligne contenant `SMS (dev, non envoyé réellement)` et `Votre code LaafiCare : …`. Utilisez un numéro **fictif**.
 
 | Étape | Demande | Corps (JSON) | Réponse attendue |
