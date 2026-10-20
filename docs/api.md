@@ -163,7 +163,7 @@ Chaque connexion ouvre une **session** (une par appareil). Le jeton d'accès por
 Erreurs de lecture de la requête (corps JSON mal formé, champ manquant) : section 1.4.
 
 **Ce que fait l'application :**
-- garder le jeton de renouvellement dans le **stockage sécurisé** du téléphone (Keystore sous Android, Keychain sous iOS) ;
+- garder le jeton de renouvellement dans le **stockage sécurisé** du téléphone (Keystore sous Android, Keychain sous iOS) ; dans l'application web, les jetons restent **en mémoire seulement**, sans aucun stockage dans le navigateur (localStorage, sessionStorage et cookies exclus) : un rechargement de la page demande une nouvelle connexion ;
 - sur un 401 `jeton_invalide` d'une route ordinaire : renouveler une fois, puis rejouer la demande ; si le renouvellement répond 401, renvoyer à l'écran de connexion ;
 - toujours remplacer **les deux** jetons par ceux du renouvellement ;
 - ne jamais lancer deux renouvellements en même temps avec le même jeton.

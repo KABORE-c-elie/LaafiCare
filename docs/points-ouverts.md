@@ -4,7 +4,7 @@ Ce document liste ce qui reste à décider ou à construire avant que LaafiCare 
 
 Les décisions déjà prises sont dans `CLAUDE.md` (sections 12 et 14), qui reste la référence. Ce document est mis à jour à chaque décision qui ferme ou ouvre un point.
 
-État au 2026-10-19.
+État au 2026-10-20.
 
 ---
 
@@ -94,6 +94,13 @@ Le code est enregistré en SHA-256 simple. Avec seulement un million de codes po
   - déconnecter de force un compte compromis ;
   - changer le numéro de CNIB d'un administrateur (renouvellement de la carte, future carte de l'AES).
 - **Désactivation du second facteur par les structures validées** (vérification de la CNIB à l'accueil) : à rediscuter. En V1, seule l'équipe LaafiCare le désactive.
+
+### Application web (noté le 2026-10-20)
+
+Détail dans `web/docs/decisions.md` (branche `web`) :
+- **Trusted Types** : ils bloquent l'enregistrement du service worker d'Angular (le travail hors connexion). Leur activation dans la politique de sécurité du contenu (CSP) est à résoudre.
+- **Styles en ligne de la CDK d'Angular** : une CSP stricte, qui interdit les styles en ligne, les refuse. L'affichage reste correct, mais la console signale ces blocages ; leur traitement est à décider.
+- **Faille de `vite`** : elle ne touche que le serveur de développement, jamais l'application déployée. En attente d'`@angular/build` 22.2.4.
 
 ---
 
