@@ -4,7 +4,8 @@
   "compileOnSave": false,
   "compilerOptions": {
     "paths": {
-      "commun": ["./dist/commun"]
+      "commun": ["./dist/commun"],
+      "commun/*": ["./dist/commun/*"]
     },
     "strict": true,
     "noImplicitOverride": true,

@@ -458,6 +458,234 @@ textarea.champ__saisie {
   color: var(--texte-secondaire);
 }
 
+/* ---------- Texte réservé aux lecteurs d'écran ---------- */
+
+.visuellement-cache {
+  border: 0;
+  clip-path: inset(50%);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+/* ---------- Liste des demandes ---------- */
+
+.barre {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.barre .page__titre {
+  margin: 0;
+}
+
+.pilules {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.pilule {
+  background: var(--surface);
+  border: 1px solid var(--bord-champ);
+  border-radius: 999px;
+  color: var(--texte);
+  cursor: pointer;
+  font: inherit;
+  min-height: var(--hauteur-bouton);
+  padding: 0 1rem;
+}
+
+.pilule--active {
+  background: var(--rose);
+  border-color: var(--rose);
+  color: var(--sur-rose);
+  font-weight: 600;
+}
+
+/* Défilement horizontal sur petit écran : le tableau garde ses colonnes. */
+.tableau-defilant {
+  background: var(--surface);
+  border: 1px solid var(--separateur);
+  border-radius: var(--arrondi-carte);
+  margin-bottom: 1rem;
+  overflow-x: auto;
+}
+
+.tableau {
+  border-collapse: collapse;
+  min-width: 1240px;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.tableau th,
+.tableau td {
+  height: 52px;
+  overflow: hidden;
+  padding: 0 0.75rem;
+  text-align: left;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.tableau thead th {
+  border-bottom: 1px solid var(--separateur);
+  color: var(--texte-secondaire);
+  font-size: 0.875rem;
+}
+
+.tableau tbody tr:nth-child(even) {
+  background: var(--fond);
+}
+
+.tableau tbody tr + tr {
+  border-top: 1px solid var(--separateur);
+}
+
+.tableau .nombre,
+.donnees .nombre {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.col-date {
+  width: 150px;
+}
+
+.col-adherent {
+  width: 180px;
+}
+
+.col-carte {
+  width: 110px;
+}
+
+.col-partenaire {
+  width: 170px;
+}
+
+.col-acte {
+  width: 130px;
+}
+
+.col-jour {
+  width: 150px;
+}
+
+.col-montant {
+  width: 130px;
+}
+
+.col-statut {
+  width: 130px;
+}
+
+.col-ouvrir {
+  width: 90px;
+}
+
+.lien-ouvrir,
+.lien-retour {
+  color: var(--en-cours-texte);
+  font-weight: 600;
+}
+
+.lien-retour {
+  display: inline-block;
+  margin-bottom: 1rem;
+}
+
+.liste-vide {
+  color: var(--texte-secondaire);
+}
+
+/* ---------- Détail d'une demande ---------- */
+
+.detail__entete {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.detail__entete .page__titre {
+  margin: 0;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.cartes {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  margin-bottom: 1rem;
+}
+
+.carte__titre {
+  font-size: 1.125rem;
+}
+
+.donnees {
+  display: grid;
+  gap: 0.5rem 1rem;
+  grid-template-columns: auto 1fr;
+  margin: 0 0 0.75rem;
+}
+
+.donnees dt {
+  color: var(--texte-secondaire);
+}
+
+.donnees dd {
+  margin: 0;
+}
+
+.motif {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.historique {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.historique li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+}
+
+.historique__statut {
+  font-weight: 600;
+}
+
+.compteur--depasse {
+  color: var(--erreur-texte);
+  font-weight: 700;
+}
+
 /* ---------- Fenêtres (CDK Dialog) ---------- */
 
 .fenetre-fond {

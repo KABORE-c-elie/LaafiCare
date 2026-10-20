@@ -18,4 +18,4 @@ export * from './lib/composants/champ';
 export * from './lib/composants/message-etat';
 export * from './lib/composants/pastille-statut';
 export * from './lib/composants/entete';
-export * from './lib/composants/fenetre';
+// La fenêtre (CDK Dialog) est dans le point d'entrée secondaire `commun/fenetre`.

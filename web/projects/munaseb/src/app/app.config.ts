@@ -1,6 +1,6 @@
 import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { ApplicationConfig, LOCALE_ID, provideBrowserGlobalErrorListeners } from '@angular/core';
-import { provideRouter } from '@angular/router';
+import { provideRouter, withComponentInputBinding } from '@angular/router';
 import { GESTION_SESSION, intercepteurAcces } from 'commun';
 import { routes } from './app.routes';
 import { GestionSessionMunaseb } from './gestion-session-munaseb';
@@ -11,7 +11,8 @@ import { GestionSessionMunaseb } from './gestion-session-munaseb';
 export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
-    provideRouter(routes),
+    // withComponentInputBinding : le paramètre `:id` arrive dans l'entrée `id` de la page de détail.
+    provideRouter(routes, withComponentInputBinding()),
     provideHttpClient(withInterceptors([intercepteurAcces])),
     { provide: LOCALE_ID, useValue: 'fr' },
     { provide: GESTION_SESSION, useClass: GestionSessionMunaseb },

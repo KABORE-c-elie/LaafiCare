@@ -28,5 +28,11 @@ export const routes: Routes = [
     canActivate: [exigerEnExercice],
     loadComponent: () => import('./pages/demandes').then((m) => m.DemandesPage),
   },
+  {
+    path: 'demandes/:id',
+    title: 'Détail de la demande · Assurance MUNASEB',
+    canActivate: [exigerEnExercice],
+    loadComponent: () => import('./pages/detail').then((m) => m.DetailPage),
+  },
   { path: '**', redirectTo: 'connexion' },
 ];
