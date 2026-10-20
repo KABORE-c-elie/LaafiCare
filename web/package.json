@@ -7,7 +7,8 @@
     "build": "ng build commun && ng build munaseb",
     "watch": "ng build commun --watch",
     "test": "ng test commun --watch=false && ng build commun && ng test munaseb --watch=false",
-    "lint": "ng lint"
+    "lint": "ng lint",
+    "serve:prod": "node outils/serveur-production.mjs"
   },
   "private": true,
   "packageManager": "npm@11.19.0",
@@ -19,6 +20,7 @@
     "@angular/forms": "^22.2.0",
     "@angular/platform-browser": "^22.2.0",
     "@angular/router": "^22.2.0",
+    "@angular/service-worker": "22.2.3",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0"
   },

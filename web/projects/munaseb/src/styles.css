@@ -11,6 +11,21 @@
    prebuilt styles in your global stylesheet »). */
 @import '@angular/cdk/overlay-prebuilt.css';
 
+/* La CDK insère aussi ses styles par des éléments <style> en ligne, que la
+   CSP `style-src 'self'` bloque (vu dans la console le 2026-10-20). Les mêmes
+   règles sont donc chargées ici, depuis un fichier : `a11y-prebuilt.css`
+   (texte réservé aux lecteurs d'écran du LiveAnnouncer) et la règle du
+   conteneur de fenêtre, recopiée de @angular/cdk 22.2.3 (fesm2022/dialog.mjs). */
+@import '@angular/cdk/a11y-prebuilt.css';
+
+.cdk-dialog-container {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: inherit;
+  max-height: inherit;
+}
+
 :root {
   /* Rose MUNASEB */
   --rose: #8c4c65;
@@ -456,6 +471,25 @@ textarea.champ__saisie {
 .espace--indisponible {
   background: var(--fond);
   color: var(--texte-secondaire);
+}
+
+/* ---------- Bandeaux (hors connexion, nouvelle version) ---------- */
+
+.bandeaux:empty {
+  display: none;
+}
+
+.bandeaux {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+}
+
+.bandeau-version {
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
 }
 
 /* ---------- Texte réservé aux lecteurs d'écran ---------- */

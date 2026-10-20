@@ -50,6 +50,7 @@
           "builder": "@angular/build:application",
           "options": {
             "browser": "projects/munaseb/src/main.ts",
+            "deployUrl": "/",
             "tsConfig": "projects/munaseb/tsconfig.app.json",
             "assets": [
               {
@@ -74,6 +75,7 @@
                 }
               ],
               "outputHashing": "all",
+              "serviceWorker": "projects/munaseb/ngsw-config.json",
               "optimization": {
                 "scripts": true,
                 "styles": {

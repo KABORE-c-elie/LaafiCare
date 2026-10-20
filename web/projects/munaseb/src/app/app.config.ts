@@ -1,5 +1,7 @@
+import { APP_BASE_HREF } from '@angular/common';
 import { provideHttpClient, withInterceptors } from '@angular/common/http';
-import { ApplicationConfig, LOCALE_ID, provideBrowserGlobalErrorListeners } from '@angular/core';
+import { ApplicationConfig, LOCALE_ID, isDevMode, provideBrowserGlobalErrorListeners } from '@angular/core';
+import { provideServiceWorker } from '@angular/service-worker';
 import { provideRouter, withComponentInputBinding } from '@angular/router';
 import { GESTION_SESSION, intercepteurAcces } from 'commun';
 import { routes } from './app.routes';
@@ -15,6 +17,16 @@ export const appConfig: ApplicationConfig = {
     provideRouter(routes, withComponentInputBinding()),
     provideHttpClient(withInterceptors([intercepteurAcces])),
     { provide: LOCALE_ID, useValue: 'fr' },
+    // Sans balise <base> (interdite par la CSP `base-uri 'none'`), le routeur
+    // reçoit la base des adresses par APP_BASE_HREF (angular.dev/api/common/APP_BASE_HREF).
+    { provide: APP_BASE_HREF, useValue: '/' },
     { provide: GESTION_SESSION, useClass: GestionSessionMunaseb },
+    // Service worker officiel (angular.dev/ecosystem/service-workers) : met en cache les
+    // fichiers de l'application seulement (ngsw-config.json, aucun `dataGroups` :
+    // jamais les réponses de /api). Désactivé en développement.
+    provideServiceWorker('ngsw-worker.js', {
+      enabled: !isDevMode(),
+      registrationStrategy: 'registerWhenStable:30000',
+    }),
   ],
 };

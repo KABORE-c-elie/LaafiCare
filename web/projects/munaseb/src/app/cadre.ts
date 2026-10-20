@@ -9,7 +9,7 @@ import { AccesService, EnteteComponent, SessionService } from 'commun';
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <lc-entete
-      logo="logo-laaficare.svg"
+      logo="/logo-laaficare.svg"
       titre="Assurance MUNASEB"
       [espace]="espace()"
       [afficherChangerEspace]="afficherChangerEspace()"

@@ -1,5 +1,17 @@
 import { LiveAnnouncer } from '@angular/cdk/a11y';
-import { ChangeDetectionStrategy, Component, OnInit, computed, inject, input, signal } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  ElementRef,
+  OnInit,
+  computed,
+  effect,
+  inject,
+  input,
+  signal,
+  untracked,
+  viewChild,
+} from '@angular/core';
 import { RouterLink } from '@angular/router';
 import {
   DateHeurePipe,
@@ -11,6 +23,7 @@ import {
   MessageEtatComponent,
   PastilleStatutComponent,
   ReponseValidation,
+  ReseauService,
   decoderErreur,
   formaterFcfa,
   libelleStatut,
@@ -50,7 +63,7 @@ export const MESSAGE_DEMANDE_INCONNUE = "Cette demande n'existe pas.";
       } @else if (demande(); as d) {
         <div class="detail__entete">
           <lc-pastille-statut [statut]="d.statut" />
-          <h1 class="page__titre">{{ titre() }}</h1>
+          <h1 #titreDemande class="page__titre" tabindex="-1">{{ titre() }}</h1>
           <p class="texte-secondaire">Reçue le {{ d.date_demande | dateHeure }} · {{ d.partenaire }}</p>
         </div>
 
@@ -163,6 +176,10 @@ export class DetailPage implements OnInit {
   private readonly remboursements = inject(RemboursementsService);
   private readonly fenetres = inject(FenetreService);
   private readonly annonceur = inject(LiveAnnouncer);
+  private readonly reseau = inject(ReseauService);
+  private readonly titreDemande = viewChild<ElementRef<HTMLElement>>('titreDemande');
+  /** Dernier chargement échoué faute de réseau : le détail se recharge dès le retour du réseau. */
+  private readonly echecReseau = signal(false);
 
   /** Paramètre `:id` de la route (withComponentInputBinding). */
   readonly id = input.required<string>();
@@ -193,6 +210,14 @@ export class DetailPage implements OnInit {
       (a, b) => Date.parse(b.date_changement) - Date.parse(a.date_changement),
     ),
   );
+
+  constructor() {
+    effect(() => {
+      if (this.reseau.enLigne() && untracked(this.echecReseau)) {
+        void this.charger();
+      }
+    });
+  }
 
   ngOnInit(): void {
     void this.charger();
@@ -292,6 +317,9 @@ export class DetailPage implements OnInit {
       this.message.set({ genre: 'info', texte });
     }
     void this.annonceur.announce(texte);
+    // Le bouton qui a lancé l'action disparaît avec le nouveau statut : sans
+    // cela, le focus retomberait sur le début de la page (WCAG 2.2, 2.4.3).
+    this.titreDemande()?.nativeElement.focus();
   }
 
   private async traiterErreur(erreur: unknown): Promise<void> {
@@ -321,11 +349,20 @@ export class DetailPage implements OnInit {
 
   private async charger(): Promise<void> {
     this.chargement.set(true);
+    this.echecReseau.set(false);
     try {
       this.demande.set(await this.remboursements.detail(this.id()));
       this.introuvable.set(false);
     } catch (erreur) {
       const decodee = decoderErreur(erreur);
+      if (decodee.genre === 'reseau') {
+        this.echecReseau.set(true);
+        // Hors connexion, le bandeau général le dit déjà.
+        if (this.reseau.enLigne()) {
+          this.message.set({ genre: 'erreur', texte: messagePourErreur(decodee) });
+        }
+        return;
+      }
       // Un identifiant qui n'est pas un UUID (400 chemin_invalide) ne désigne aucune demande non plus.
       if (decodee.genre === 'api' && (decodee.code === 'demande_inconnue' || decodee.code === 'chemin_invalide')) {
         this.demande.set(null);

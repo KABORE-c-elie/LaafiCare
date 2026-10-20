@@ -20,7 +20,7 @@ import {
   template: `
     <div class="accueil">
       <section class="accueil__panneau" aria-labelledby="titre-espace">
-        <img class="accueil__logo" src="logo-laaficare.svg" alt="LaafiCare" width="192" height="40" />
+        <img class="accueil__logo" src="/logo-laaficare.svg" alt="LaafiCare" width="192" height="40" />
         <h1 class="accueil__titre" id="titre-espace">Espace Assurance MUNASEB</h1>
         <p class="accueil__phrase">Suivez et traitez les demandes de remboursement des adhérents.</p>
       </section>

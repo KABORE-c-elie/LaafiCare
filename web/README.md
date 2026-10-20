@@ -54,3 +54,36 @@ npm run build
 ```
 
 Le résultat est dans `dist/munaseb/browser`. La taille de chaque fichier s'affiche à la fin.
+
+## Essayer la version de production sur son ordinateur
+
+```powershell
+npm run build
+npm run serve:prod
+```
+
+Puis ouvrir `http://127.0.0.1:8082`. Ce petit serveur (`outils/serveur-production.mjs`) envoie la politique de sécurité (CSP) prévue pour la production, compresse les fichiers et transmet `/api` au backend. Ce n'est **pas** un serveur de production.
+
+- Le **service worker** ne fonctionne que dans cette version, pas avec `npm start`.
+- **Hors connexion** : après une première visite, couper le réseau (DevTools, onglet Réseau, « Hors connexion »), puis recharger. L'application s'ouvre et affiche « Pas de connexion. Vos demandes s'afficheront dès le retour du réseau. »
+
+## Mesures (2026-10-20)
+
+Écran de connexion, construction de production servie par `serveur-production.mjs`, Chrome 155 sans interface, une mesure par ligne. Réseau « Slow 4G » de DevTools : 1,6 Mbit/s × 0,9 en réception, 0,75 Mbit/s × 0,9 en envoi, latence 150 ms × 3,75.
+
+| Situation | Téléchargé | Premier affichage | Écran utilisable | Mémoire JS |
+|---|---|---|---|---|
+| Slow 4G, cache vide | 99,5 Ko | 3,3 s | 3,2 s | 2,8 Mo |
+| Slow 4G, cache rempli | 0 Ko (service worker) | 0,18 s | 0,15 s | — |
+| Slow 4G + processeur ralenti 4×, cache vide | 99,5 Ko | 3,1 s | 3,1 s | — |
+| Slow 4G + processeur ralenti 4×, cache rempli | 0 Ko | 0,18 s | 0,15 s | — |
+| Hors connexion, après une visite | 0 Ko | 0,09 s | 0,09 s | — |
+
+Lighthouse 13.5.0, mode « simulé » (`throttlingMethod: simulate`) :
+
+| Réglage | Performance | Accessibilité | Bonnes pratiques |
+|---|---|---|---|
+| Mobile (RTT 150 ms, 1,6 Mbit/s, processeur 4×) | 99 | 100 | 100 |
+| Ordinateur (`--preset=desktop`) | 100 | 100 | 100 |
+
+Taille du chargement initial : 309,7 kB bruts, environ 85 kB compressés.

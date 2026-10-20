@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, OnInit, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, OnInit, effect, inject, signal, untracked } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import {
   DateHeurePipe,
@@ -8,6 +8,7 @@ import {
   MessageAffiche,
   MessageEtatComponent,
   PastilleStatutComponent,
+  ReseauService,
   StatutDemande,
   codeErreur,
   decoderErreur,
@@ -125,7 +126,7 @@ const FILTRES: readonly Filtre[] = [
 
       @if (chargement()) {
         <p role="status">Chargement…</p>
-      } @else if (demandes().length === 0 && message() === null) {
+      } @else if (demandes().length === 0 && message() === null && !echecReseau()) {
         <p class="liste-vide" role="status">Aucune demande avec ce statut.</p>
       }
 
@@ -139,6 +140,9 @@ const FILTRES: readonly Filtre[] = [
 })
 export class DemandesPage implements OnInit {
   private readonly remboursements = inject(RemboursementsService);
+  private readonly reseau = inject(ReseauService);
+  /** Dernier chargement échoué faute de réseau : la liste se recharge dès le retour du réseau. */
+  protected readonly echecReseau = signal(false);
 
   protected readonly filtres = FILTRES;
   protected readonly statut = signal<StatutDemande | null>(null);
@@ -146,6 +150,14 @@ export class DemandesPage implements OnInit {
   protected readonly suivant = signal<string | null>(null);
   protected readonly chargement = signal(false);
   protected readonly message = signal<MessageAffiche | null>(null);
+
+  constructor() {
+    effect(() => {
+      if (this.reseau.enLigne() && untracked(this.echecReseau)) {
+        void this.charger(null);
+      }
+    });
+  }
 
   ngOnInit(): void {
     void this.charger(null);
@@ -180,15 +192,25 @@ export class DemandesPage implements OnInit {
     }
     this.chargement.set(true);
     this.message.set(null);
+    this.echecReseau.set(false);
     try {
       const page = await this.remboursements.lister(this.statut(), apres);
       this.demandes.update((deja) => [...deja, ...page.demandes]);
       this.suivant.set(page.suivant);
     } catch (erreur) {
+      const decodee = decoderErreur(erreur);
+      // Hors connexion, le bandeau général le dit déjà ; la liste revient avec le réseau.
+      if (decodee.genre === 'reseau') {
+        this.echecReseau.set(true);
+        if (this.reseau.enLigne()) {
+          this.message.set({ genre: 'erreur', texte: messagePourErreur(decodee) });
+        }
+        return;
+      }
       // jeton_invalide et acces_refuse : l'intercepteur a déjà changé d'écran.
       const code = codeErreur(erreur);
       if (code !== 'jeton_invalide' && code !== 'acces_refuse') {
-        this.message.set({ genre: 'erreur', texte: messagePourErreur(decoderErreur(erreur)) });
+        this.message.set({ genre: 'erreur', texte: messagePourErreur(decodee) });
       }
     } finally {
       this.chargement.set(false);

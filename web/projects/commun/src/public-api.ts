@@ -13,6 +13,7 @@ export * from './lib/session/gestion-session';
 export * from './lib/session/intercepteur';
 export * from './lib/format/format';
 export * from './lib/navigation/message-navigation';
+export * from './lib/navigation/reseau';
 export * from './lib/composants/icone';
 export * from './lib/composants/champ';
 export * from './lib/composants/message-etat';
