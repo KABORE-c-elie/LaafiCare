@@ -5,6 +5,7 @@ import { provideServiceWorker } from '@angular/service-worker';
 import { provideRouter, withComponentInputBinding } from '@angular/router';
 import { GESTION_SESSION, intercepteurAcces } from 'commun';
 import { routes } from './app.routes';
+import { intercepteursDeveloppement } from '../environments/environment';
 import { GestionSessionMunaseb } from './gestion-session-munaseb';
 
 // Zoneless : défaut d'Angular depuis la v21 (angular.dev/guide/zoneless) ; ni
@@ -15,7 +16,9 @@ export const appConfig: ApplicationConfig = {
     provideBrowserGlobalErrorListeners(),
     // withComponentInputBinding : le paramètre `:id` arrive dans l'entrée `id` de la page de détail.
     provideRouter(routes, withComponentInputBinding()),
-    provideHttpClient(withInterceptors([intercepteurAcces])),
+    // Le journal de développement passe après l'intercepteur d'accès : il voit
+    // chaque erreur du serveur, y compris le 401 qui déclenche un renouvellement.
+    provideHttpClient(withInterceptors([intercepteurAcces, ...intercepteursDeveloppement])),
     { provide: LOCALE_ID, useValue: 'fr' },
     // Sans balise <base> (interdite par la CSP `base-uri 'none'`), le routeur
     // reçoit la base des adresses par APP_BASE_HREF (angular.dev/api/common/APP_BASE_HREF).

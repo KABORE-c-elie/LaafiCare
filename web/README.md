@@ -33,7 +33,16 @@ Puis ouvrir `http://localhost:4200` dans le navigateur.
 - Les appels à `/api/...` sont transmis au backend sur `127.0.0.1:8080` (`proxy.conf.json`). Le backend n'a pas besoin d'autoriser une autre origine.
 - **Recharger la page déconnecte** : c'est voulu, les jetons ne restent qu'en mémoire (`docs/decisions.md`).
 
-## Tester
+## Tester l'application avec le backend (sans Postman)
+
+1. Lancer le backend (README à la racine), puis `npm start` ici, et ouvrir `http://localhost:4200`.
+2. Le serveur de développement n'écoute que sur `localhost` : ne jamais ajouter `--host` (une faille connue de son outil, vite 8.3.0, reste ouverte en attendant Angular 22.2.4 ; voir `docs/decisions.md`).
+3. Ouvrir les outils de développement du navigateur (**F12**) :
+   - onglet **Console** : en développement seulement, chaque erreur de l'API écrit une ligne, par exemple `[API] 401 identifiants_invalides POST /api/professionnels/connexion`. Elle donne le code HTTP, le champ `code` et la route, jamais un jeton, un mot de passe, un code ou une donnée d'adhérent. Cette ligne n'existe pas dans la version de production ;
+   - onglet **Réseau** : filtre **Fetch/XHR**, case **Conserver le journal**. Un clic sur une ligne montre **En-têtes** (méthode, adresse, code HTTP), **Charge utile** (ce qui a été envoyé) et **Réponse** (le JSON reçu, avec le champ `code` en cas d'erreur).
+4. **Attention** : l'onglet Réseau montre l'en-tête `Authorization` et les mots de passe envoyés. Ne jamais en faire de capture d'écran ni le copier dans un message.
+
+## Lancer les tests automatiques
 
 ```powershell
 npm test

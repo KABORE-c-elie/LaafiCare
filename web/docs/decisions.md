@@ -70,7 +70,24 @@ Referrer-Policy: no-referrer
 - **Hors connexion**, après une première visite, l'application s'ouvre et affiche « Pas de connexion. Vos demandes s'afficheront dès le retour du réseau. » La liste et le détail se rechargent seuls au retour du réseau (événements `online` / `offline`, MDN).
 - **Nouvelle version** : un bandeau la propose, avec un bouton « Recharger maintenant ». Rien ne se recharge sans le clic de l'agent (doc Angular : demander l'accord avant de recharger). Recharger redemande la connexion (jetons en mémoire), et le bandeau le dit.
 
-## 7. Palette de l'application MUNASEB
+## 7. Journal des erreurs en développement (2026-10-20)
+
+Pour tester le backend depuis l'application, sans Postman : en développement seulement, chaque erreur de l'API écrit une ligne dans la console du navigateur (`intercepteurJournalDev`, dans `commun`).
+
+- **Contenu** : code HTTP, champ `code`, méthode et chemin, **sans** les paramètres après `?`. Jamais le corps envoyé ou reçu, ni les en-têtes, ni le message du serveur. Un test vérifie qu'aucun mot de passe, jeton, code TOTP, code de secours ni donnée d'adhérent n'y apparaît.
+- **Jamais en production** : l'intercepteur n'est déclaré que dans `environment.development.ts`, qui remplace `environment.ts` seulement pour `ng serve` (`fileReplacements`, angular.dev/tools/cli/environments). Contrôlé sur la construction de production : le texte `[API]` n'y figure pas.
+
+## 8. Points ouverts du front-end web
+
+| Point | État | Décision |
+|---|---|---|
+| **Styles en ligne de la CDK** | La CDK insère 3 éléments `<style>` (overlay, texte masqué, conteneur de fenêtre), bloqués par `style-src 'self'`. L'affichage reste correct (mêmes règles dans la feuille globale), mais la console affiche ces blocages quand une fenêtre s'ouvre. | **On ne touche pas à la CSP** (porteur, 2026-10-20). Les empreintes `sha256` ne sont pas ajoutées. |
+| **Trusted Types** | Bloquent l'enregistrement du service worker d'Angular : `navigator.serviceWorker.register` exige un `TrustedScriptURL`, d'où l'erreur `NG05604`. | Non activés ; les activer demanderait une politique propre à l'application et un enregistrement du service worker fait à la main. |
+| **vite 8.3.0** (`npm audit` : 1 faille élevée, 1 modérée, `launch-editor`) | Épinglé exactement par `@angular/build` 22.2.3. Concerne le serveur de développement seulement, pas la construction de production. | **Attendre `@angular/build` 22.2.4** (porteur, 2026-10-20) : ni `overrides`, ni retour à la 22.1.9. `ng serve` reste sur `localhost`, jamais `--host`. `npm audit` est relancé au début de chaque séance. |
+| **Option C des jetons** | Voir section 3. | À décider côté backend, avant le pilote. |
+| **Favicon** | Aucune icône web dans le dépôt. | En attente des fichiers. |
+
+## 9. Palette de l'application MUNASEB
 
 Toutes les couleurs sont des variables CSS dans `projects/munaseb/src/styles.css`. Contrastes calculés avec la formule WCAG 2.2 : tous les textes atteignent au moins 4,5:1.
 

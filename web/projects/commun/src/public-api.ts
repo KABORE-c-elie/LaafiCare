@@ -7,6 +7,7 @@ export * from './lib/api/types';
 export * from './lib/api/erreur';
 export * from './lib/api/messages';
 export * from './lib/api/contexte';
+export * from './lib/api/journal-dev';
 export * from './lib/session/session';
 export * from './lib/session/acces';
 export * from './lib/session/gestion-session';

@@ -86,6 +86,12 @@
               }
             },
             "development": {
+              "fileReplacements": [
+                {
+                  "replace": "projects/munaseb/src/environments/environment.ts",
+                  "with": "projects/munaseb/src/environments/environment.development.ts"
+                }
+              ],
               "optimization": false,
               "extractLicenses": false,
               "sourceMap": true
@@ -96,6 +102,7 @@
         "serve": {
           "builder": "@angular/build:dev-server",
           "options": {
+            "host": "localhost",
             "port": 4200,
             "proxyConfig": "proxy.conf.json"
           },
