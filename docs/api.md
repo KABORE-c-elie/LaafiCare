@@ -200,6 +200,15 @@ Résumé :
 | POST | `/api/structures` | jeton `laaficare:patient` | fonctionne (section 2.8) ; type `munaseb` seulement |
 | POST | `/api/structures/{id}/soumettre` | jeton `laaficare:patient` du créateur | fonctionne (section 2.8) |
 | GET | `/api/structures/mes-demandes` | jeton `laaficare:patient` | fonctionne (section 2.8) |
+| GET | `/api/administrateurs/structures` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
+| GET | `/api/administrateurs/structures/{id}` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
+| POST | `/api/administrateurs/structures/{id}/valider` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
+| POST | `/api/administrateurs/structures/{id}/refuser` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
+| POST, GET | `/api/professionnels/invitations` | jeton en exercice, responsable | fonctionne (section 2.10) |
+| POST | `/api/professionnels/invitations/{id}/annuler` | jeton en exercice, responsable | fonctionne (section 2.10) |
+| GET | `/api/patients/invitations` | jeton `laaficare:patient` | fonctionne (section 2.10) |
+| POST | `/api/patients/invitations/{id}/accepter` | jeton `laaficare:patient` | fonctionne (section 2.10) |
+| POST | `/api/patients/invitations/{id}/refuser` | jeton `laaficare:patient` | fonctionne (section 2.10) |
 | POST | `/api/administrateurs/connexion` | tout le monde | fonctionne (section 2.5) ; testable après l'outil du premier administrateur |
 | POST | `/api/administrateurs/connexion/second-facteur` | jeton intermédiaire `laaficare:second_facteur_administrateur` | fonctionne (section 2.5) |
 | POST | `/api/administrateurs/reenrolement/commencer` | jeton `laaficare:reenrolement_administrateur` | fonctionne (section 2.5) |
@@ -834,6 +843,7 @@ Cycle : `brouillon` (création) → `en_attente` (soumission) → `validee` ou `
 ```
 
 - **Obligatoires** : `type`, `nom`, `telephone` (numéro de service), `telephone_urgence` (peut être le même), `email` (email **de la structure**), `region`, `province`, `commune`, `latitude`, `longitude`, `mot_de_passe_professionnel`. **Facultatifs** : `parcelle`, `lot`, `section` (zones non loties).
+- **`nom`** : **100 caractères au plus**, sans retour à la ligne ni caractère invisible. Il est repris dans le SMS d'invitation : en lettres sans accent, le SMS tient alors en 2 parties.
 - **`email`** : la coordonnée de l'établissement. Elle n'est pas vérifiée par lien et ne sert pas à se connecter.
 - **`email_professionnel`** : l'email de connexion du responsable. Obligatoire **seulement si la personne n'a pas encore de compte professionnel** ; le compte est alors créé avec cet email et ce mot de passe, qui doit suivre les règles de la section 1.5 (il peut être le même que celui du compte patient). Si l'identité a déjà un email, il doit être le même (majuscules près). C'est cet email qui reçoit le lien de vérification (section 2.7). Avec un compte professionnel existant, `email_professionnel` est ignoré et `mot_de_passe_professionnel` est son mot de passe actuel.
 - **Région, province, commune** : texte libre (aucune liste officielle fermée pour l'instant).
@@ -859,6 +869,8 @@ Cycle : `brouillon` (création) → `en_attente` (soumission) → `validee` ou `
 | 409 | `second_facteur_requis` | le compte professionnel a un second facteur : pas encore pris en charge ici |
 | 422 | `donnees_invalides` | champ obligatoire manquant ou vide, `email` ou `email_professionnel` refusé par le contrôle ci-dessus (le message nomme le champ : « Le champ « email » n'est pas une adresse email valide. »), type inconnu |
 | 422 | `type_non_disponible` | type connu mais pas encore ouvert (clinique, hôpital, pharmacie, laboratoire) |
+| 422 | `nom_trop_long` | nom de plus de 100 caractères |
+| 422 | `nom_invalide` | nom avec un retour à la ligne ou un caractère invisible |
 | 422 | `telephone_service_invalide` | numéro de service : format non reconnu (section 1.6) |
 | 422 | `telephone_urgence_invalide` | numéro d'urgence : format non reconnu (section 1.6) |
 | 422 | `localisation_hors_burkina` | position hors du rectangle |
@@ -902,6 +914,126 @@ Cycle : `brouillon` (création) → `en_attente` (soumission) → `validee` ou `
 
 - Toutes les structures créées par la personne, les plus récentes d'abord. `motif_refus` n'est rempli que pour une structure `refusee`. `email_a_verifier` vaut `true` si le compte professionnel existe et que son email n'est pas vérifié : l'application propose alors de renvoyer le lien.
 
+### 2.9 Administrateurs : décisions sur les demandes de structure
+
+Réservé à l'équipe LaafiCare : jeton d'accès `laaficare:administrateur` (session, email vérifié, **second facteur actif** ; sinon 401 `jeton_invalide`). Validation (licence) et refus (motif), depuis une demande `en_attente` seulement. Chaque décision est tracée (administrateur, date, motif, licence), sans jamais être modifiée.
+
+**Séparation des tâches** : un administrateur ne décide jamais sur une structure dont il est responsable, même avec un autre compte de la même personne. Il reçoit **403 `decision_sur_sa_propre_structure`**, et un autre membre de l'équipe doit décider. Source : NIST SP 800-53 rév. 5, contrôle AC-5 « Separation of Duties » (application : décision du porteur, 2026-10-21).
+
+#### `GET /api/administrateurs/structures?statut=&limite=&apres=`
+
+- `statut` facultatif : `brouillon`, `en_attente`, `validee`, `refusee`, `suspendue`, `abandonnee`. Pagination par curseur, comme la liste des remboursements : `limite` de 1 à 100 (50 par défaut), `apres` = `suivant` de la page précédente. Les plus anciennes d'abord.
+- **Réponse 200** : `{"structures": [{"id", "type", "nom", "statut", "date_creation", "commune", "responsable_nom", "responsable_prenom"}], "suivant": "…" | null}`. 400 `parametre_invalide` pour une limite hors bornes.
+
+#### `GET /api/administrateurs/structures/{id}`
+
+- **Réponse 200** :
+  - les champs de la liste ;
+  - les coordonnées de la structure (`telephone`, `telephone_urgence`, `email`, `region`, `province`, `parcelle`, `lot`, `section`, `latitude`, `longitude`) et `licence_expire_le` ;
+  - le responsable : `responsable_telephone`, `responsable_email`, `responsable_email_verifie` ;
+  - `decisions` : l'historique, avec `decision`, `motif`, `licence_expire_le`, `date_decision`, et le nom et le prénom de l'administrateur.
+- **Avertissements MUNASEB** (vides pour les autres types) :
+  - `autres_demandes_munaseb_en_attente` : les autres demandes MUNASEB en attente ;
+  - `munaseb_deja_validee` : la MUNASEB déjà validée ou suspendue, si elle existe.
+- 404 `structure_inconnue`.
+
+#### `POST /api/administrateurs/structures/{id}/valider`
+
+- **Corps** : `{"licence_expire_le": "2027-10-21"}`, ou `{}`.
+  - **`licence_expire_le` absent ou `null` : licence sans fin.**
+  - Présent : la licence est valable **jusqu'à cette date comprise** (heure du Burkina Faso), puis l'établissement n'est plus exerçable. Elle doit être **postérieure à aujourd'hui**.
+- **Réponses** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 204 | — | structure validée ; l'affectation `responsable` devient exerçable ; un email au texte minimal prévient le responsable (« Votre demande de structure a été traitée… ») |
+| 403 | `decision_sur_sa_propre_structure` | séparation des tâches (voir plus haut) |
+| 404 | `structure_inconnue` | identifiant inconnu |
+| 409 | `transition_invalide` | la demande n'est pas `en_attente` ; `statut_actuel` dans la réponse |
+| 409 | `email_responsable_non_verifie` | l'email professionnel du responsable n'est pas vérifié : la validation attend ; le refus reste possible |
+| 409 | `munaseb_deja_validee` | une MUNASEB est déjà validée ou suspendue : une seule est admise |
+| 409 | `autorisation_deja_validee` | un numéro d'autorisation de la demande est déjà validé pour une autre structure (pas pour la MUNASEB, sans pièce) |
+| 422 | `licence_invalide` | date de fin de licence passée ou égale à aujourd'hui |
+| 500 | `erreur_interne` | panne |
+
+#### `POST /api/administrateurs/structures/{id}/refuser`
+
+- **Corps** : `{"motif": "…"}`, obligatoire, 1 000 caractères au plus. Le motif est visible par le responsable dans `GET /api/structures/mes-demandes`, mais n'est jamais mis dans un email.
+- **Réponses** :
+  - 204 : demande refusée. Si l'email du responsable est vérifié, il reçoit le même email minimal ; sinon, aucun email ne part.
+  - 403, 404, 409 `transition_invalide` : comme pour la validation.
+  - 422 `motif_vide`, `motif_trop_long`.
+- Après un refus, le responsable abandonne sa demande et en crée une nouvelle. Corriger et soumettre à nouveau la même demande viendra plus tard.
+
+### 2.10 Invitations (MUNASEB pour l'instant)
+
+Le **responsable** d'une structure validée invite au numéro de téléphone. La personne répond depuis son **compte patient**. Une invitation vaut **7 jours**. Une invitation expirée se lit `expiree` et n'a plus aucune suite.
+
+- **Ce que voit l'invitant** : jamais si un compte existe pour le numéro. La réponse et le SMS sont les mêmes dans tous les cas, et aucun nom n'apparaît avant l'acceptation.
+- **Le SMS**, sans lien ni code, entièrement dans l'alphabet GSM 7 bits (3GPP TS 23.038) : `LaafiCare : invitation à rejoindre "{structure}" comme {agent MUNASEB | responsable}. Ouvrez ou installez LaafiCare avec ce numéro pour répondre avant le {JJ/MM/AAAA}. LaafiCare ne demande jamais votre mot de passe.` Avec un nom de 100 caractères GSM 7 bits, il tient en 2 parties au plus. Un nom qui contient un caractère hors de cet alphabet (un `ê`, par exemple) le fait partir en UCS-2, plus long.
+- **En développement**, le SMS s'affiche dans le terminal du serveur.
+- **Pour la MUNASEB**, deux rôles : `agent_assurance_munaseb` et `responsable`.
+
+#### Côté responsable : jeton `laaficare:professionnel_en_exercice` sur une affectation `responsable`
+
+La structure est celle de l'affectation active, jamais un identifiant passé dans l'adresse. Avec une autre affectation, la réponse est **403 `acces_refuse`**.
+
+**`POST /api/professionnels/invitations`**, corps `{"telephone": "70 00 00 02", "role": "agent_assurance_munaseb"}` :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 201 | — | `{"invitation_id", "expire_le"}`, **la même réponse que le numéro ait un compte ou non** |
+| 409 | `invitation_deja_en_attente` | une invitation en attente existe déjà pour ce numéro et ce rôle (l'annuler pour en refaire une) |
+| 409 | `trop_d_invitations_en_attente` | 50 invitations en attente dans la structure |
+| 409 | `structure_non_validee` | la structure n'est plus validée |
+| 422 | `telephone_invalide` | numéro mal formé (section 1.6) |
+| 422 | `role_non_permis` | rôle impossible pour ce type de structure |
+| 422 | `auto_invitation` | le responsable invite son propre numéro (séparation des tâches, NIST SP 800-53 AC-5) |
+| 429 | `trop_de_demandes` | 20 invitations créées par la structure en 24 heures |
+
+Au-delà de **3 SMS d'invitation par numéro en 24 heures**, toutes structures confondues, l'invitation est enregistrée et la réponse est la même, mais **aucun SMS ne part**. La personne la voit quand même dans son application.
+
+**`GET /api/professionnels/invitations?limite=&avant=`** :
+- réponse 200 `{"invitations": [{"id", "telephone", "role", "statut", "date_creation", "expire_le", "date_reponse", "accepte_par_nom", "accepte_par_prenom"}], "suivant"}` ;
+- les plus récentes d'abord ; `avant` = `suivant` de la page précédente ; `limite` de 1 à 100 (50 par défaut) ;
+- `statut` vaut `en_attente`, `expiree`, `acceptee`, `refusee` ou `annulee` ;
+- le nom et le prénom n'apparaissent qu'après l'acceptation.
+
+**`POST /api/professionnels/invitations/{id}/annuler`**, par tout responsable de la structure :
+- 204 ;
+- 404 `invitation_inconnue` ;
+- 409 `invitation_expiree` ;
+- 409 `transition_invalide`, avec `statut_actuel`.
+
+#### Côté invité : jeton `laaficare:patient`
+
+Seules les invitations adressées au **numéro du compte patient** existent pour lui. Toute autre donne **404 `invitation_inconnue`**.
+
+**`GET /api/patients/invitations`** : réponse 200 `{"invitations": [{"id", "structure_nom", "structure_type", "role", "expire_le", "invitant_nom", "invitant_prenom"}]}`. Seules celles qui sont en attente, non expirées, dans une structure validée y figurent. Le nom de l'invitant permet de juger si l'invitation est légitime.
+
+**`POST /api/patients/invitations/{id}/accepter`** :
+- **Sans compte professionnel** : `{"email_professionnel": "…", "mot_de_passe_professionnel": "…"}`. Le compte est créé avec **les mêmes règles qu'à la création d'une structure** (section 2.8), et un lien de vérification est envoyé. **L'affectation n'est exerçable qu'une fois l'email vérifié.**
+- **Avec un compte professionnel** : `{"mot_de_passe_professionnel": "…"}`. Le mot de passe est compté dans le verrouillage.
+- **Réponses** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 200 | — | `{"affectation_id", "email_a_verifier"}` |
+| 401 | `identifiants_invalides` | mot de passe professionnel faux, compte verrouillé ou désactivé (« Mot de passe professionnel incorrect. ») ; **le jeton patient reste valable** |
+| 404 | `invitation_inconnue` | — |
+| 409 | `invitation_expiree`, `transition_invalide` | plus en attente |
+| 409 | `structure_non_validee` | la structure n'est plus validée |
+| 409 | `affectation_deja_active` | la personne a déjà ce rôle dans cette structure |
+| 409 | `email_different`, `email_deja_utilise`, `second_facteur_requis` | comme à la création d'une structure |
+| 409 | `requete_simultanee` | une autre requête de la même personne vient de créer son compte professionnel : réessayer |
+| 422 | `donnees_invalides`, `mot_de_passe_non_conforme` | comme à la création d'une structure |
+
+**`POST /api/patients/invitations/{id}/refuser`** :
+- 204 ;
+- 404 `invitation_inconnue` ;
+- 409 `invitation_expiree` ;
+- 409 `transition_invalide`.
+
 ---
 
 ## 3. Codes d'erreur : index
@@ -910,31 +1042,38 @@ Cycle : `brouillon` (création) → `en_attente` (soumission) → `validee` ou `
 |---|---|---|
 | `authentification_requise` | 401 | routes protégées |
 | `jeton_invalide` | 401 | routes protégées |
-| `acces_refuse` | 403 | routes protégées (routes MUNASEB : pas agent MUNASEB, affectation désactivée, établissement suspendu, licence expirée) |
+| `acces_refuse` | 403 | routes protégées (routes MUNASEB : pas agent MUNASEB, affectation désactivée, établissement suspendu, licence expirée ; invitations : affectation qui n'est pas `responsable`) |
 | `affectation_non_exercable` | 403 | activation d'une affectation |
 | `affectation_inconnue` | 404 | activation d'une affectation |
 | `json_invalide`, `donnees_invalides`, `content_type_invalide`, `corps_illisible` | 400, 422, 415 | routes avec corps |
 | `chemin_invalide` | 400 | routes avec `{id}` |
-| `parametre_invalide` | 400 | liste des remboursements |
-| `telephone_invalide` | 422 | routes patient |
+| `parametre_invalide` | 400 | liste des remboursements, liste des structures (administrateur) |
+| `telephone_invalide` | 422 | routes patient, création d'une invitation |
 | `telephone_service_invalide`, `telephone_urgence_invalide` | 422 | création de structure |
 | `code_invalide` | 401 | inscription, réinitialisation, second facteur (professionnel, administrateur), confirmation du réenrôlement |
-| `trop_de_demandes` | 429 | demande de code et renvoi du lien de vérification (avec `Retry-After`), inscription et réinitialisation (sans) |
+| `trop_de_demandes` | 429 | demande de code et renvoi du lien de vérification (avec `Retry-After`), inscription, réinitialisation et création d'une invitation (sans) |
 | `telephone_deja_utilise` | 409 | inscription |
 | `telephone_inconnu` | 404 | réinitialisation |
 | `mot_de_passe_non_conforme` | 422 | inscription, réinitialisation, création de structure |
 | `identifiants_invalides` | 401 | connexions, début du réenrôlement administrateur, renvoi du lien, création de structure (mot de passe professionnel) |
 | `email_non_verifie` | 403 | connexions professionnelle et administrateur, soumission d'une structure |
 | `lien_invalide` | 400 | vérification de l'email |
-| `type_non_disponible`, `localisation_hors_burkina` | 422 | création de structure |
+| `type_non_disponible`, `localisation_hors_burkina`, `nom_trop_long`, `nom_invalide` | 422 | création de structure |
 | `demande_deja_en_cours`, `email_different`, `email_deja_utilise`, `second_facteur_requis` | 409 | création de structure |
-| `structure_inconnue` | 404 | soumission d'une structure |
+| `structure_inconnue` | 404 | soumission d'une structure, routes administrateur des structures |
+| `decision_sur_sa_propre_structure` | 403 | validation, refus d'une structure |
+| `email_responsable_non_verifie`, `munaseb_deja_validee`, `autorisation_deja_validee` | 409 | validation d'une structure |
+| `licence_invalide` | 422 | validation d'une structure |
+| `role_non_permis`, `auto_invitation` | 422 | création d'une invitation |
+| `invitation_deja_en_attente`, `trop_d_invitations_en_attente`, `structure_non_validee` | 409 | invitations |
+| `invitation_inconnue` | 404 | invitations |
+| `invitation_expiree`, `affectation_deja_active`, `requete_simultanee` | 409 | invitations |
 | `montant_invalide`, `nip_invalide`, `partenaire_suspendu`, `non_couvert`, `en_carence` | 422 | simuler-acte |
 | `patient_inconnu`, `partenaire_inconnu` | 404 | simuler-acte |
 | `reference_acte_deja_utilisee` | 409 | simuler-acte |
 | `demande_inconnue` | 404 | détail, transitions |
-| `transition_invalide` | 409 | transitions, soumission d'une structure |
-| `motif_vide`, `motif_trop_long` | 422 | rejet |
+| `transition_invalide` | 409 | transitions, soumission, validation et refus d'une structure |
+| `motif_vide`, `motif_trop_long` | 422 | rejet d'une demande de remboursement, refus d'une structure |
 | `erreur_interne` | 500 | toutes |
 
 ---
@@ -962,7 +1101,8 @@ Le module existe déjà côté serveur ; les routes manquent.
 - ✅ Création, soumission et suivi, **type MUNASEB seulement** : **codés**, section 2.8 ; vérification de l'email, section 2.7.
 - Restent : modification du brouillon, abandon, autres types de structure.
 - Téléversement d'une pièce, **une requête par fichier** (réseau faible) : PDF, JPEG ou PNG, 5 Mo au plus.
-- Côté administrateur : liste des demandes en attente (avec avertissements de numéros d'autorisation en double, de plusieurs demandes MUNASEB), consultation et téléchargement des pièces, validation (licence), refus (motif), suspension, réactivation.
+- ✅ Côté administrateur : liste, détail (avertissements MUNASEB), validation (licence), refus (motif) : **codés**, section 2.9.
+- Restent côté administrateur : avertissement des numéros d'autorisation en double, consultation et téléchargement des pièces, suspension et réactivation (après le pilote).
 
 ### 4.4 Affectations et rôle actif (étape 3.9)
 
@@ -970,9 +1110,8 @@ Le module existe déjà côté serveur ; les routes manquent.
 
 ### 4.5 Invitations (étape 3.10)
 
-- Création d'une invitation à un numéro de téléphone (réponse toujours « invitation envoyée »), annulation, liste.
-- Côté invité, depuis son compte patient : liste des invitations reçues, acceptation (création du compte professionnel la première fois), refus.
-- Validité 7 jours.
+- ✅ **Codées pour la MUNASEB**, section 2.10 : création, liste, annulation ; côté invité, liste, acceptation, refus ; expiration après 7 jours.
+- Restent : les autres rôles et types de structure ; les invitations d'administrateurs (après le pilote).
 
 ### 4.6 Désactivation d'une affectation et bascule (étape 3.11)
 

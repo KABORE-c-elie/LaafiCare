@@ -97,6 +97,10 @@ Le code est enregistré en SHA-256 simple. Avec seulement un million de codes po
   - changer le numéro de CNIB d'un administrateur (renouvellement de la carte, future carte de l'AES).
 - **Désactivation du second facteur par les structures validées** (vérification de la CNIB à l'accueil) : à rediscuter. En V1, seule l'équipe LaafiCare le désactive.
 
+### Exception cargo audit : `rsa` (RUSTSEC-2023-0071)
+
+**Décidée le 2026-10-21.** L'attaque Marvin permet, par le temps de calcul, de retrouver une clé RSA **privée** ; aucune version corrigée de `rsa` n'existe. La crate arrive seulement par la fonctionnalité `rust_crypto` de `jsonwebtoken`, qui l'impose ; aucune fonctionnalité ne garde HMAC sans RSA. **Nous ne sommes pas touchés** : les jetons sont en HS256 seulement, avec un secret partagé, et aucune clé RSA n'existe dans le projet (`src/jwt.rs` ; test `hs256_seulement`). L'exception est dans `backend/.cargo/audit.toml`. **À retirer** dès qu'une version corrigée de `rsa` existe, ou si une clé RSA entre dans le projet.
+
 ### Application web (noté le 2026-10-20)
 
 Détail dans `web/docs/decisions.md` (branche `web`) :
@@ -156,6 +160,13 @@ En production, le serveur n'accepte que des connexions chiffrées (HTTPS) : jeto
 - Fournisseurs réels : SMS (codes, invitations) et email (réinitialisation, vérification de l'email). Crate et fournisseur à présenter.
 - Fichiers déposés par les structures : réécriture des images, antivirus, désactivation du contenu actif des PDF (OWASP).
 
+### Avant le pilote : décisions extérieures à prendre tôt
+
+**Noté le 2026-10-21.** Ces décisions viennent d'ailleurs que du code, et une étape du MVP les attend :
+- **durée de la licence d'une structure** : illimitée, ou à renouveler (étape 3.8) ;
+- **règles de suspension d'un contrat MUNASEB** : à demander à la MUNASEB (étape 5) ;
+- **valeurs des types d'actes manquants** : dentaire et prothèses, accouchement et consultations prénatales, chirurgie, frais funéraires, radiologie (étape 7, mémoire MUNASEB).
+
 ### Éléments à découper en étapes
 
 **Noté le 2026-10-15.** La mise en production n'est pas encore découpée en étapes, comme le sont celles du backoffice (CLAUDE.md, section 12). Voici les éléments déjà connus, repris de ce document, à découper plus tard en étapes ordonnées, chacune présentée et validée avant d'être faite :
@@ -203,7 +214,11 @@ Un soignant a besoin du NIP pour ouvrir le dossier. Le patient peut être trop m
 - **Découpage administratif (région, province, commune)** : texte libre pour l'instant (migration 0022). Recherche du 2026-10-20 : le compte rendu officiel du Conseil des ministres du 2 juillet 2025 (site de la Présidence du Faso) annonce le passage de 13 à 17 régions et de 45 à 47 provinces, et donne les noms des 17 régions avec leurs chefs-lieux ; mais ni le texte des décrets, ni leur numéro, ni la liste complète des provinces et des communes n'ont été trouvés (une période transitoire de six mois y est aussi annoncée). Fermer les listes demande le décret publié au Journal officiel.
 - **Position GPS d'une structure** : contrôlée dans le rectangle donné par l'Institut géographique du Burkina (rapport d'août 2014 aux Nations unies, UN-GGIM : 8° à 16° de latitude nord, 6° ouest à 3° est). Ce rectangle déborde sur les pays voisins ; un contrôle par le contour du territoire demanderait une source officielle de ce contour.
 - **Adresses email en ASCII seulement** (décision du porteur, 2026-10-21) : les domaines internationaux (`exemplé.bf`, `例え.jp`) et les parties locales accentuées sont refusés, par le code (`adresse_email.rs`) et par la base (migration 0022). À revoir si un utilisateur en a besoin : il faudra alors une migration, et une règle de comparaison des majuscules qui ne dépende pas des réglages de langue de la base (OWASP : convertir les domaines internationaux en punycode pour les comparer).
-- **Validation d'une seconde MUNASEB (pour l'étape 3.8)** : la base n'admet qu'une MUNASEB validée ou suspendue (index `structure_une_seule_munaseb_validee`, migration 0012). La validation d'une seconde doit renvoyer un **code d'erreur clair et documenté**, jamais un 500 venu de cet index.
+- **Validation d'une seconde MUNASEB** : fait à l'étape 3.8 réduite (2026-10-21), 409 `munaseb_deja_validee`, contrôlé avant l'écriture, puis l'erreur de l'index `structure_une_seule_munaseb_validee` traduite en ce même code.
+- **Corriger et soumettre à nouveau une demande refusée** (retour en brouillon, CLAUDE.md §14) : hors de la 3.8 réduite (V10). En attendant, le responsable abandonne sa demande et en crée une nouvelle.
+- **Prévenir l'invitant** quand une invitation est acceptée ou refusée (I17, 2026-10-21) : rien pour l'instant, il le voit dans sa liste.
+- **Longueur du SMS d'invitation** : réglé le 2026-10-21 (options a et c du porteur). Le texte fixe est entièrement dans l'alphabet GSM 7 bits (3GPP TS 23.038), et le nom d'une structure est limité à 100 caractères (migration 0023). Avec un nom en GSM 7 bits, le SMS tient en 2 parties au plus (153 caractères par partie, TS 23.040 §9.2.3.24.1). **Reste, accepté** : un nom qui contient un caractère hors de cet alphabet (`ê`, `ç`, « », etc.) fait partir tout le SMS en UCS-2 (70 caractères seul, 67 par partie), donc en plus de parties.
+- **Avertissement des numéros d'autorisation en double** dans le détail administrateur (§14) : à faire avec les pièces justificatives (après le pilote, sauf pour la MUNASEB, qui n'en a pas).
 - **Logo de la structure** (demande du porteur, 2026-10-21) : reporté à la suite de la 3.7. Facultatif, route séparée, PNG et JPEG seulement (jamais SVG), contenu vérifié, image réencodée par le serveur, nom de fichier choisi par le serveur, stockage au Burkina, seul le responsable peut le changer. Proposition à présenter avant d'écrire (OWASP File Upload Cheat Sheet).
 - **Second facteur à la création d'une structure** : un professionnel qui a un TOTP actif reçoit 409 `second_facteur_requis` (aucun professionnel ne peut en avoir avant l'étape 3.11). À concevoir avec l'activation du TOTP par les professionnels.
 - Où ranger le numéro d'ordre et la spécialité d'un professionnel : ils appartiennent à la personne, pas à l'établissement (futur profil professionnel).
@@ -224,6 +239,24 @@ Un soignant a besoin du NIP pour ouvrir le dossier. Le patient peut être trop m
 - Requêtes SQLx vérifiées à la compilation : après la stabilisation du module MUNASEB.
 - Synchronisation de l'application mobile hors ligne avec le serveur : protocole à concevoir.
 - Calcul du solde d'une période MUNASEB, présent en double (demandes et contrat) : à regrouper.
+
+### Après le pilote (décision du porteur, 2026-10-21)
+
+Hors du MVP MUNASEB (CLAUDE.md §12, « Périmètre du MVP MUNASEB ») :
+- **structures** :
+  - reste de la 3.7 pour les autres types de structure (pièces justificatives, hôpital, pharmacie, laboratoire) ;
+  - logo de la structure (section 4, « Structures et rôles ») ;
+  - suspension et réactivation d'une structure ;
+  - liste fermée des régions et provinces (section 4, « Structures et rôles ») ;
+- **comptes** :
+  - bascule professionnel ↔ patient ;
+  - invitations d'administrateurs (l'outil `creer_administrateur` suffit) ;
+  - TOTP pour les patients et les professionnels (J10) ;
+  - domaines d'email internationaux (section 4, « Structures et rôles ») ;
+- **technique** : requêtes SQLx vérifiées à la compilation (ci-dessus) ;
+- **MUNASEB** :
+  - rapprochement des partenaires avec les structures (section 4, « MUNASEB ») ;
+  - paiement direct par le mutualiste.
 
 ---
 

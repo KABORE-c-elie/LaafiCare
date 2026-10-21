@@ -53,6 +53,8 @@ fn reponse_erreur_structure(erreur: ErreurStructure) -> Response {
             (StatusCode::UNPROCESSABLE_ENTITY, "donnees_invalides")
         }
         ErreurStructure::TypeNonDisponible => (StatusCode::UNPROCESSABLE_ENTITY, "type_non_disponible"),
+        ErreurStructure::NomTropLong => (StatusCode::UNPROCESSABLE_ENTITY, "nom_trop_long"),
+        ErreurStructure::NomInvalide => (StatusCode::UNPROCESSABLE_ENTITY, "nom_invalide"),
         // Un code par numéro (décision du porteur, 2026-10-21).
         ErreurStructure::TelephoneServiceInvalide => (StatusCode::UNPROCESSABLE_ENTITY, "telephone_service_invalide"),
         ErreurStructure::TelephoneUrgenceInvalide => (StatusCode::UNPROCESSABLE_ENTITY, "telephone_urgence_invalide"),

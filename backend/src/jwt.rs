@@ -283,6 +283,32 @@ mod tests {
         }
     }
 
+    /// HS256 seulement (J1) : c'est ce qui justifie l'exception cargo audit
+    /// pour `rsa` (RUSTSEC-2023-0071, `.cargo/audit.toml`) ; aucune clé RSA
+    /// ne sert jamais. Refusés : un jeton signé avec la même clé mais en
+    /// HS512, un en-tête qui annonce RS256 (confusion d'algorithme) ou
+    /// « none » (RFC 8725 §2.1 et §3.1).
+    #[test]
+    fn hs256_seulement() {
+        let service = service();
+        let sorte = SorteJeton::Patient;
+        let jeton = emettre(&service, sorte, Uuid::from_u128(1));
+        assert!(service.verifier(&jeton, sorte).is_ok());
+
+        let claims = service.verifier(&jeton, sorte).unwrap();
+        let hs512 = encode(&Header::new(Algorithm::HS512), &claims, &service.encoding_key).unwrap();
+        assert!(service.verifier(&hs512, sorte).is_err(), "HS512");
+
+        // En-têtes base64url de {"alg":"RS256","typ":"JWT"} et
+        // {"alg":"none","typ":"JWT"}, recollés au contenu et à la signature
+        // d'un jeton HS256 valable.
+        let (_, reste) = jeton.split_once('.').unwrap();
+        for entete in ["eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9", "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0"] {
+            let falsifie = format!("{entete}.{reste}");
+            assert!(service.verifier(&falsifie, sorte).is_err(), "{entete}");
+        }
+    }
+
     #[test]
     fn audiences_toutes_differentes() {
         for (i, a) in SorteJeton::TOUTES.iter().enumerate() {

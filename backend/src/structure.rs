@@ -18,12 +18,11 @@ use sqlx::types::Uuid;
 
 use crate::adresse_email;
 use crate::auth_professionnel::nature_sqlx;
+use crate::compte_professionnel::{self, ErreurComptePro};
 use crate::email::EmailSender;
-use crate::jeton_email;
-use crate::mot_de_passe::{self, MotDePasseNonConforme};
+use crate::mot_de_passe::MotDePasseNonConforme;
 use crate::telephone;
 use crate::verification_email;
-use crate::verrouillage::{self, ErreurConnexion, Verification};
 
 /// Limites du territoire, en degrés décimaux (WGS 84 pour les applications).
 /// Source : Institut géographique du Burkina, *Rapport du Burkina Faso*
@@ -117,6 +116,10 @@ pub enum ErreurStructure {
     EmailInvalide(&'static str),
     #[error("Ce type de structure ne peut pas encore être créé.")]
     TypeNonDisponible,
+    #[error("Le nom de la structure dépasse {NOM_LONGUEUR_MAX} caractères.")]
+    NomTropLong,
+    #[error("Le nom de la structure contient un retour à la ligne ou un caractère invisible.")]
+    NomInvalide,
     /// Deux erreurs, deux codes (décision du porteur, 2026-10-21) :
     /// l'application sait quel champ signaler sans lire le message.
     #[error("Numéro de service invalide.")]
@@ -166,6 +169,25 @@ fn obligatoire(champ: &'static str, valeur: &str) -> Result<String, ErreurStruct
     Ok(valeur.to_string())
 }
 
+/// Longueur maximale du nom, en caractères (décision du porteur,
+/// 2026-10-21) : le nom est repris dans le SMS d'invitation, qui tient alors
+/// en 2 parties au plus (3GPP TS 23.040 §9.2.3.24.1). Garantie aussi par la
+/// base (migration 0023).
+pub const NOM_LONGUEUR_MAX: usize = 100;
+
+/// Mêmes règles que la migration 0023 : 100 caractères au plus, ni
+/// caractère de contrôle (`char::is_control`, catégorie Unicode Cc) ni
+/// séparateur de ligne ou de paragraphe (U+2028, U+2029).
+fn controler_nom(nom: &str) -> Result<(), ErreurStructure> {
+    if nom.chars().count() > NOM_LONGUEUR_MAX {
+        return Err(ErreurStructure::NomTropLong);
+    }
+    if nom.chars().any(|c| c.is_control() || c == '\u{2028}' || c == '\u{2029}') {
+        return Err(ErreurStructure::NomInvalide);
+    }
+    Ok(())
+}
+
 /// Texte facultatif : vide ou absent devient `None`.
 fn facultatif(valeur: Option<&str>) -> Option<String> {
     valeur.map(str::trim).filter(|v| !v.is_empty()).map(str::to_string)
@@ -186,11 +208,22 @@ pub struct StructureCreee {
     pub email_a_verifier: bool,
 }
 
-/// Compte professionnel à utiliser : existant (mot de passe vérifié) ou à
-/// créer dans la transaction.
-enum ComptePro {
-    Existant(Uuid),
-    Nouveau { email: String, hash: String, enregistrer_email: bool },
+impl From<ErreurComptePro> for ErreurStructure {
+    fn from(erreur: ErreurComptePro) -> Self {
+        match erreur {
+            ErreurComptePro::EmailObligatoire => ErreurStructure::ChampObligatoire("email_professionnel"),
+            ErreurComptePro::EmailInvalide => ErreurStructure::EmailInvalide("email_professionnel"),
+            ErreurComptePro::MotDePasseNonConforme(regles) => ErreurStructure::MotDePasseNonConforme(regles),
+            ErreurComptePro::MotDePasseIncorrect => ErreurStructure::MotDePasseIncorrect,
+            ErreurComptePro::SecondFacteurRequis => ErreurStructure::SecondFacteurRequis,
+            ErreurComptePro::EmailDifferent => ErreurStructure::EmailDifferent,
+            ErreurComptePro::EmailDejaUtilise => ErreurStructure::EmailDejaUtilise,
+            // Une autre requête de la même personne vient de créer son
+            // compte professionnel, avec une demande de structure.
+            ErreurComptePro::CompteDejaCree => ErreurStructure::DemandeDejaEnCours,
+            ErreurComptePro::Interne(etape) => ErreurStructure::Interne(etape),
+        }
+    }
 }
 
 /// `POST /api/structures` (E1). `patient_compte_id` vient du jeton patient,
@@ -207,6 +240,7 @@ pub async fn creer(
         return Err(ErreurStructure::TypeNonDisponible);
     }
     let nom = obligatoire("nom", saisie.nom)?;
+    controler_nom(&nom)?;
     let region = obligatoire("region", saisie.region)?;
     let province = obligatoire("province", saisie.province)?;
     let commune = obligatoire("commune", saisie.commune)?;
@@ -222,106 +256,23 @@ pub async fn creer(
     let email_structure = obligatoire("email", saisie.email)?;
     adresse_email::controler(&email_structure).map_err(|_| ErreurStructure::EmailInvalide("email"))?;
 
-    // --- Identité du patient et compte professionnel ---------------------
-    let identite: Option<(Uuid, Option<String>, bool, Option<Uuid>)> = sqlx::query_as(
-        "SELECT u.id, u.email, u.email_verifie_le IS NOT NULL, pro.id \
-         FROM compte pat JOIN utilisateur u ON u.id = pat.utilisateur_id \
-         LEFT JOIN compte pro ON pro.utilisateur_id = u.id AND pro.type_compte = 'professionnel' \
-         WHERE pat.id = $1 AND pat.type_compte = 'patient'",
-    )
-    .bind(patient_compte_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| interne_sqlx("recherche de l'identité", &e))?;
-    let (utilisateur_id, email_actuel, email_verifie, professionnel) =
-        identite.ok_or(ErreurStructure::Interne("compte patient introuvable"))?;
-
-    let compte_pro = match professionnel {
-        // Mot de passe professionnel vérifié comme une connexion : compté
-        // dans le verrouillage du compte professionnel (BF-01).
-        Some(compte_id) => match verrouillage::verifier(pool, Some(compte_id), saisie.mot_de_passe_professionnel).await {
-            Ok(Verification::Complete(_)) => ComptePro::Existant(compte_id),
-            Ok(Verification::SecondFacteurRequis(_)) => return Err(ErreurStructure::SecondFacteurRequis),
-            Err(ErreurConnexion::IdentifiantsInvalides) => return Err(ErreurStructure::MotDePasseIncorrect),
-            Err(ErreurConnexion::Interne(_)) => {
-                tracing::error!(etape = "mot de passe professionnel", "structure : erreur interne");
-                return Err(ErreurStructure::Interne("vérification du mot de passe professionnel"));
-            }
+    // --- Compte professionnel (commun avec l'acceptation d'une invitation) --
+    let preparation = compte_professionnel::preparer(
+        pool,
+        patient_compte_id,
+        &compte_professionnel::Saisie {
+            email_professionnel: saisie.email_professionnel,
+            mot_de_passe: saisie.mot_de_passe_professionnel,
         },
-        None => {
-            let email = saisie
-                .email_professionnel
-                .map(str::trim)
-                .filter(|e| !e.is_empty())
-                .ok_or(ErreurStructure::ChampObligatoire("email_professionnel"))?;
-            adresse_email::controler(email).map_err(|_| ErreurStructure::EmailInvalide("email_professionnel"))?;
-            // Règles habituelles seulement : le mot de passe professionnel
-            // peut être le même que celui du compte patient (décision du
-            // porteur, 2026-10-21 ; la règle contraire ne vaut que pour les
-            // administrateurs).
-            mot_de_passe::controler(saisie.mot_de_passe_professionnel).map_err(ErreurStructure::MotDePasseNonConforme)?;
-            // Email de l'identité : enregistré s'il manque, gardé s'il est le
-            // même (majuscules près, J6), refusé s'il est différent (même
-            // règle que les outils de l'équipe).
-            let enregistrer_email = match &email_actuel {
-                None => true,
-                Some(actuel) if actuel.to_lowercase() == email.to_lowercase() => false,
-                Some(_) => return Err(ErreurStructure::EmailDifferent),
-            };
-            // Haché avant la transaction : Argon2id ne garde pas de verrous.
-            let hash = mot_de_passe::hacher(saisie.mot_de_passe_professionnel)
-                .map_err(|_| ErreurStructure::Interne("hachage du mot de passe"))?;
-            ComptePro::Nouveau { email: email.to_string(), hash, enregistrer_email }
-        }
-    };
+    )
+    .await?;
+    let email_verifie = preparation.email_verifie();
 
     // --- Écriture, en une transaction ------------------------------------
     let mut tx = pool.begin().await.map_err(|e| interne_sqlx("transaction", &e))?;
-
-    // Le compte patient d'abord (le compte avant le reste, section 12) : deux
-    // créations simultanées de la même personne se suivent ; la seconde
-    // bute ensuite sur l'index unique du compte ou de la structure.
-    sqlx::query("SELECT id FROM compte WHERE id = $1 FOR UPDATE")
-        .bind(patient_compte_id)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| interne_sqlx("verrou du compte patient", &e))?;
-
-    let compte_pro_id = match compte_pro {
-        ComptePro::Existant(id) => id,
-        ComptePro::Nouveau { email, hash, enregistrer_email } => {
-            if enregistrer_email {
-                // `email IS NULL` : un email posé entre-temps n'est jamais
-                // écrasé.
-                let ecrit = sqlx::query("UPDATE utilisateur SET email = $2 WHERE id = $1 AND email IS NULL")
-                    .bind(utilisateur_id)
-                    .bind(&email)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| match contrainte(&e) {
-                        Some("utilisateur_email_unique_idx") => ErreurStructure::EmailDejaUtilise,
-                        _ => interne_sqlx("enregistrement de l'email", &e),
-                    })?;
-                if ecrit.rows_affected() == 0 {
-                    return Err(ErreurStructure::EmailDifferent);
-                }
-            }
-            sqlx::query_scalar(
-                "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) \
-                 VALUES ($1, 'professionnel', $2) RETURNING id",
-            )
-            .bind(utilisateur_id)
-            .bind(&hash)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| match contrainte(&e) {
-                // Une autre requête de la même personne vient de créer son
-                // compte professionnel, avec une demande de structure.
-                Some("un_compte_par_type") => ErreurStructure::DemandeDejaEnCours,
-                _ => interne_sqlx("création du compte professionnel", &e),
-            })?
-        }
-    };
+    // Les comptes d'abord (le compte avant le reste, section 12).
+    let compte = compte_professionnel::ecrire(&mut tx, patient_compte_id, preparation).await?;
+    let compte_pro_id = compte.compte_id;
 
     // Coordonnées envoyées en `double precision`, converties en
     // NUMERIC(9,6) par PostgreSQL : arrondies à 6 décimales (environ 11 cm,
@@ -361,20 +312,12 @@ pub async fn creer(
         .await
         .map_err(|e| interne_sqlx("affectation du responsable", &e))?;
 
-    // Lien de vérification seulement pour un compte qui vient d'être créé
-    // avec un email pas encore vérifié. Un compte existant non vérifié
-    // demande un lien par la route de renvoi (limitée, E7).
-    let emise = if professionnel.is_none() && !email_verifie {
-        jeton_email::emettre_verification(&mut tx, compte_pro_id)
-            .await
-            .map_err(|e| interne_sqlx("émission du jeton d'email", &e))?
-    } else {
-        None
-    };
     tx.commit().await.map_err(|e| interne_sqlx("validation de la transaction", &e))?;
 
-    // Après le commit : un échec d'envoi laisse la structure créée.
-    if let Some(emise) = &emise {
+    // Après le commit : un échec d'envoi laisse la structure créée. Lien
+    // seulement pour un compte qui vient d'être créé avec un email non
+    // vérifié ; sinon, route de renvoi (E7).
+    if let Some(emise) = &compte.verification {
         verification_email::envoyer_lien(email_sender, url_application_web, emise);
     }
     Ok(StructureCreee { structure_id, email_a_verifier: !email_verifie })
@@ -523,6 +466,7 @@ pub async fn mes_demandes(pool: &PgPool, patient_compte_id: Uuid) -> Result<MesD
 mod tests {
     use super::*;
     use crate::email::{EmailsRecus, jeton_du_lien};
+    use crate::mot_de_passe;
 
     // Base temporaire par test ; données fictives.
 
@@ -700,6 +644,9 @@ mod tests {
         let emails = EmailsRecus::default();
         let patient_id = patient(&pool, "+22670150004", Some("deja@example.org")).await;
         let base = || saisie(Some("deja@example.org"), PRO);
+        // 101 caractères accentués : la limite compte des caractères, pas des
+        // octets.
+        let nom_trop_long = "é".repeat(NOM_LONGUEUR_MAX + 1);
 
         let cas: Vec<(NouvelleStructure, fn(&ErreurStructure) -> bool)> = vec![
             (NouvelleStructure { type_structure: TypeStructure::Clinique, ..base() }, |e| {
@@ -707,6 +654,12 @@ mod tests {
             }),
             (NouvelleStructure { nom: "  ", ..base() }, |e| matches!(e, ErreurStructure::ChampObligatoire("nom"))),
             (NouvelleStructure { region: "", ..base() }, |e| matches!(e, ErreurStructure::ChampObligatoire("region"))),
+            // Migration 0023 : 100 caractères au plus, ni retour à la ligne
+            // ni caractère de contrôle.
+            (NouvelleStructure { nom: &nom_trop_long, ..base() }, |e| matches!(e, ErreurStructure::NomTropLong)),
+            (NouvelleStructure { nom: "MUNASEB\nCentre", ..base() }, |e| matches!(e, ErreurStructure::NomInvalide)),
+            (NouvelleStructure { nom: "MUNASEB\u{2028}Centre", ..base() }, |e| matches!(e, ErreurStructure::NomInvalide)),
+            (NouvelleStructure { nom: "MUNASEB\u{7}", ..base() }, |e| matches!(e, ErreurStructure::NomInvalide)),
             (NouvelleStructure { telephone: "12", ..base() }, |e| {
                 matches!(e, ErreurStructure::TelephoneServiceInvalide)
             }),
