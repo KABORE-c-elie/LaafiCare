@@ -280,6 +280,9 @@ mod tests {
             jwt: JwtService::new(&"a".repeat(32)),
             sms: Arc::new(SmsSenderConsole),
             cle_totp: Arc::new(CleTotp::depuis_octets([7; 32])),
+            email: Arc::new(laaficare_backend::email::EmailSenderConsole),
+            url_application_web: Arc::from("http://localhost:4200"),
+            contact_securite: Arc::from("securite@example.org"),
         };
         let db = &state.db;
         let scalaire = |requete: &'static str, telephone: &'static str| async move {
@@ -353,8 +356,10 @@ mod tests {
                 .await
                 .unwrap();
                 let structure: Uuid = sqlx::query_scalar(
-                    "INSERT INTO structure (type_structure, nom, telephone, commune, province, latitude, longitude, createur_compte_id, statut) \
-                     VALUES ('munaseb', 'MUNASEB', '+22670000000', 'Ouagadougou', 'Kadiogo', 12.371400, -1.519700, $1, $2) RETURNING id",
+                    "INSERT INTO structure (type_structure, nom, telephone, telephone_urgence, region, email, commune, province, latitude, \
+                                            longitude, createur_compte_id, statut) \
+                     VALUES ('munaseb', 'MUNASEB', '+22670000000', '+22670000000', 'Région fictive', 'structure@example.org', 'Ouagadougou', 'Kadiogo', \
+                             12.371400, -1.519700, $1, $2) RETURNING id",
                 )
                 .bind(compte)
                 .bind(statut)

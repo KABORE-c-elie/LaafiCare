@@ -136,16 +136,16 @@ Le projet a commencé par une phase de cadrage : un cahier des charges et des di
 | **Serveur : patients** | **fonctionne** : inscription par SMS, connexion, mot de passe oublié, verrouillage, NIP, limites du code SMS, profil du patient connecté (`GET /api/patients/moi`), sessions (jeton de 15 min, renouvellement, déconnexion d'un appareil ou de tous) |
 | **Serveur : MUNASEB** | contrats et périodes d'adhésion, demandes de remboursement de bout en bout (création, prise en charge, validation, rejet, paiement), notifications, historique. **Routes des agents rebranchées** (étape 3.9) : un agent se connecte comme professionnel, active son affectation d'agent MUNASEB, et chacune de ses décisions est enregistrée avec cette affectation. **Testables dans Postman après les étapes 3.7, 3.8 et 3.10 réduites à la MUNASEB** (création et validation de la structure MUNASEB, invitation d'un agent) ; d'ici là, seulement avec un agent posé à la main en SQL dans la base de développement. |
 | Serveur : affectations | **écrites** : liste des affectations d'un professionnel, activation (choisir l'établissement et le rôle dans lesquels il travaille), changement d'établissement sans redonner le mot de passe ; à chaque demande, le serveur vérifie que l'affectation est active et l'établissement validé, sous licence |
-| **Serveur : backoffice** | base prête, routes à venir (voir ci-dessous) |
-| Serveur : connexion professionnelle | **écrite** (`POST /api/professionnels/connexion`, puis `POST /api/professionnels/connexion/second-facteur` quand le second facteur est actif) : email et mot de passe, email obligatoirement vérifié, code TOTP ou code de secours, jeton intermédiaire à usage unique, session de 12 h au plus. **Pas encore testable dans Postman** : aucun compte professionnel ne peut être créé avant la création d'un établissement (étape 3.7) ; les tests automatiques la vérifient. |
+| **Serveur : backoffice** | **création d'un établissement MUNASEB** (étape 3.7, réduite) : un patient crée la structure, devient son responsable, crée au passage son compte professionnel, fait vérifier son email par un lien, puis soumet sa demande ; suivi de ses demandes. La validation par l'équipe (étape 3.8) et les invitations (étape 3.10) restent à venir (voir ci-dessous) |
+| Serveur : connexion professionnelle | **fonctionne** (`POST /api/professionnels/connexion`, puis `POST /api/professionnels/connexion/second-facteur` quand le second facteur est actif) : email et mot de passe, email obligatoirement vérifié, code TOTP ou code de secours, jeton intermédiaire à usage unique, session de 12 h au plus. Un compte professionnel naît quand un patient crée son établissement ; son email se vérifie par un lien (renvoyable une fois par minute). |
 | **Serveur : connexion administrateur** | **fonctionne** (`POST /api/administrateurs/connexion`, second temps, réenrôlement) : second facteur toujours exigé ; un administrateur sans second facteur ne peut en enregistrer un que pendant une fenêtre de 10 minutes ouverte par l'équipe. **Testable dans Postman** après l'outil du premier administrateur (voir « Créer le premier administrateur ») |
 | **Outils de l'équipe** | **fonctionnent**, sur l'ordinateur du serveur seulement (jamais par le réseau) : `creer_premier_administrateur`, `creer_administrateur` (un administrateur en crée un autre), `desactiver_totp` (téléphone perdu) ; chaque création, reprise ou désactivation est tracée |
 | Applications Angular et Flutter | en cours, chacune dans sa branche (voir « Organisation du dépôt ») |
 
 **Le backoffice** est la partie qui gère les comptes et les établissements : création d'un établissement par son responsable, validation par l'équipe LaafiCare (licence), invitation des employés, administrateurs.
 - **Ce qui existe déjà** : les tables dans la base (comptes séparés, établissements, pièces justificatives, décisions de l'équipe, affectations, invitations, profil administrateur) avec leurs règles, et la **double authentification** (second facteur TOTP : chiffrement du secret, activation, vérification des codes, codes de secours).
-- **Ce qui marche déjà** : la connexion des administrateurs et les outils de l'équipe (premier administrateur, administrateurs suivants, désactivation d'un second facteur).
-- **Ce qui n'est pas encore utilisable** : aucune route pour les établissements, les décisions ou les invitations (étapes 3.7, 3.8 et 3.10). On ne peut donc encore ni créer un établissement, ni inviter un agent, ni se connecter comme professionnel (le choix de l'affectation existe, mais aucune affectation ne peut encore être créée).
+- **Ce qui marche déjà** : la connexion des administrateurs et les outils de l'équipe (premier administrateur, administrateurs suivants, désactivation d'un second facteur) ; la création et la soumission d'un établissement MUNASEB, avec la vérification de l'email du responsable.
+- **Ce qui n'est pas encore utilisable** : la validation des établissements par l'équipe (étape 3.8) et les invitations (étape 3.10). On peut donc créer et soumettre la MUNASEB, et se connecter comme professionnel, mais pas encore la faire valider ni inviter un agent ; le responsable voit son affectation, non exerçable tant que l'établissement n'est pas validé. Les autres types d'établissement attendent la liste de leurs pièces justificatives.
 - **Les détails** : les tables et leurs règles dans [`docs/modele-donnees.md`](docs/modele-donnees.md), la double authentification dans [`docs/securite.md`](docs/securite.md), les routes prévues dans [`docs/api.md`](docs/api.md) (section 4).
 
 Les modules médicaux (dossier, ordonnances, pharmacie, laboratoire, suivi de grossesse) viendront ensuite. La liste détaillée des décisions encore ouvertes est dans [`docs/points-ouverts.md`](docs/points-ouverts.md).
@@ -212,13 +212,17 @@ git checkout dev
 | `POSTGRES_PASSWORD` | mot de passe de la base de développement, lu par Docker | une valeur choisie |
 | `DATABASE_URL` | adresse de la base, avec ce même mot de passe | `postgres://utilisateur:motdepasse@127.0.0.1:5433/laaficare` |
 | `ENVIRONNEMENT` | `developpement` sur votre machine, `production` sur le vrai serveur ; obligatoire | `developpement` |
+| `URL_APPLICATION_WEB` | adresse de l'application web, sans `/` final : les liens envoyés par email y mènent ; obligatoire ; `https://` exigé en production | `http://localhost:4200` |
+| `CONTACT_SECURITE` | adresse email de l'équipe, donnée dans les alertes de sécurité (second facteur enregistré ou désactivé) ; obligatoire ; en production, une vraie adresse (les adresses d'exemple sont refusées) | `securite@example.org` |
 | `SERVER_PORT` | port du serveur | `8080` |
 | `JWT_SECRET` | signe les jetons de connexion, 32 caractères au moins | 64 caractères hexadécimaux générés |
 | `TOTP_CLE_CHIFFREMENT` | chiffre les secrets du second facteur, exactement 64 caractères hexadécimaux | une autre valeur générée |
 
 Le fichier `.env` contient des secrets : il n'est jamais envoyé dans Git.
 
-**Vous aviez déjà un `.env` ?** Ajoutez-y la ligne `ENVIRONNEMENT=developpement` (nouvelle variable, obligatoire) : sans elle, le serveur et les outils refusent de démarrer. En `production`, ils refusent aussi tant que les SMS et les emails sont seulement simulés, ce qui est le cas aujourd'hui.
+**Vous aviez déjà un `.env` ?** Ajoutez-y les lignes `ENVIRONNEMENT=developpement`, `URL_APPLICATION_WEB=http://localhost:4200` et `CONTACT_SECURITE=securite@example.org` (variables obligatoires) : sans elles, le serveur et les outils refusent de démarrer. En `production`, ils refusent aussi tant que les SMS et les emails sont seulement simulés, ce qui est le cas aujourd'hui.
+
+**Votre base de développement contient déjà une structure ?** La migration 0022 rend obligatoires le numéro d'urgence, la région et l'email d'une structure : elle refuse de s'appliquer sur une base qui contient déjà une structure, et le serveur ne démarre pas. Repartez alors d'une base vide (`docker compose down -v`, qui **efface toute la base de développement**), puis relancez le serveur.
 
 ### Lancer
 
@@ -240,6 +244,8 @@ Le serveur s'arrête avec `Ctrl+C` dans le terminal où il tourne. PostgreSQL s'
 
 ### Un premier essai dans Postman
 
+On peut aussi tester par les applications elles-mêmes : l'application web Angular (branche `web`, qui passe par le proxy de développement d'Angular, sans réglage CORS côté serveur) et l'application mobile Flutter (branche `mobile`).
+
 En développement, **aucun SMS n'est envoyé** : le code apparaît dans le terminal où tourne le serveur, sur une ligne contenant `SMS (dev, non envoyé réellement)` et `Votre code LaafiCare : …`. Utilisez un numéro **fictif**.
 
 | Étape | Demande | Corps (JSON) | Réponse attendue |
@@ -254,6 +260,21 @@ En développement, **aucun SMS n'est envoyé** : le code apparaît dans le termi
 Le jeton d'accès expire après 15 minutes : au-delà, l'étape 4 répond 401, et l'étape 5 en donne un nouveau.
 
 Toutes les routes, leurs réponses et leurs erreurs sont décrites dans [`docs/api.md`](docs/api.md).
+
+### Créer un établissement MUNASEB
+
+À la suite du tableau précédent, avec le `jeton_acces` du patient (en-tête `Authorization: Bearer <jeton_acces>`). En développement, **aucun email n'est envoyé** : il s'affiche dans le terminal du serveur, avec un lien de la forme `http://localhost:4200/verifier-email#jeton=…`.
+
+| Étape | Demande | Corps (JSON) | Réponse attendue |
+|---|---|---|---|
+| 1. Créer | `POST http://127.0.0.1:8080/api/structures` | type `munaseb`, nom, deux numéros, email de la structure, région, province, commune, latitude et longitude au Burkina Faso, un email professionnel **fictif** et un mot de passe professionnel (exemple complet : `docs/api.md`, 2.8) | 201, `"statut": "brouillon"`, `"email_a_verifier": true`, et l'email dans le terminal du serveur |
+| 2. Soumettre trop tôt | `POST …/api/structures/<structure_id>/soumettre` | aucun | 403 `email_non_verifie` |
+| 3. Vérifier l'email | `POST …/api/professionnels/email/verifier` (sans jeton d'accès) | `{"jeton": "…"}` : les 64 caractères après `#jeton=` dans le lien | 204 (la page web le fera elle-même) |
+| 4. Soumettre | même demande qu'à l'étape 2 | aucun | 204 |
+| 5. Suivre | `GET …/api/structures/mes-demandes` | aucun | 200, la demande `"statut": "en_attente"` |
+| 6. Se connecter comme professionnel | `POST …/api/professionnels/connexion` | l'email et le mot de passe professionnels | 200, `"etape": "complete"` ; la liste des affectations montre `responsable`, non exerçable avant la validation (étape 3.8) |
+
+Lien perdu ou expiré (24 h) : `POST …/api/professionnels/email/renvoyer` avec `{"email": "…", "mot_de_passe": "…"}` (mot de passe professionnel), une fois par minute au plus.
 
 ### Créer le premier administrateur
 
@@ -314,7 +335,8 @@ Les tests qui utilisent la base créent chacun une base temporaire, supprimée e
 | Ce qu'on voit | Cause | Que faire |
 |---|---|---|
 | Les tests en base échouent tous avec `PoolTimedOut` | PostgreSQL ne répond pas : Docker Desktop n'est pas démarré | démarrer Docker Desktop, puis `docker compose up -d` et `docker compose ps` |
-| Le serveur s'arrête aussitôt avec « configuration invalide » | il reste un `A_GENERER` dans `backend/.env`, une valeur mal formée (secret trop court, clé qui n'est pas en hexadécimal), ou `ENVIRONNEMENT` manque | compléter `.env` (voir « Préparer la configuration ») |
+| Le serveur s'arrête aussitôt avec « configuration invalide » | il reste un `A_GENERER` dans `backend/.env`, une valeur mal formée (secret trop court, clé qui n'est pas en hexadécimal), ou `ENVIRONNEMENT`, `URL_APPLICATION_WEB` ou `CONTACT_SECURITE` manque | compléter `.env` (voir « Préparer la configuration ») |
+| Le serveur s'arrête sur « échec des migrations » après la mise à jour | la base de développement contient déjà une structure (migration 0022) | repartir d'une base vide, `docker compose down -v` (voir « Préparer la configuration ») |
 | « envoi de SMS simulé : refusé en production » | `ENVIRONNEMENT=production` sur une machine de développement | mettre `ENVIRONNEMENT=developpement` |
 | Un outil répond « base pas à jour » | le serveur n'a pas encore appliqué les dernières migrations | lancer `cargo run` une fois, puis relancer l'outil |
 | Un outil s'arrête quand il demande un mot de passe | il est lancé depuis le terminal de Git Bash | le relancer depuis PowerShell |

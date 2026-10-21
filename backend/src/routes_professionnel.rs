@@ -4,7 +4,7 @@
 //! traduire le résultat.
 
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode, header::RETRY_AFTER};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,7 @@ use laaficare_backend::auth_professionnel::{
     self, ConnexionProfessionnelle, ErreurAuthProfessionnel, ErreurSecondFacteur, JetonIntermediaire,
     SaisieSecondFacteur,
 };
+use laaficare_backend::verification_email::{self, ErreurRenvoi};
 
 #[derive(Deserialize)]
 pub struct ConnexionRequete {
@@ -202,9 +203,84 @@ pub async fn activer_affectation(
     }
 }
 
+// ---------------------------------------------------------------------
+// Vérification de l'email (étape 3.7, E5 à E7)
+// ---------------------------------------------------------------------
+
+/// Pas de `Debug` : le jeton est un secret.
+#[derive(Deserialize)]
+pub struct VerifierEmailRequete {
+    pub jeton: String,
+}
+
+/// `POST /api/professionnels/email/verifier` (E6) -- sans authentification,
+/// corps `{"jeton": …}` envoyé par la page `/verifier-email` quand la
+/// personne confirme. 204 si l'email est vérifié ; 400 `lien_invalide`
+/// pour un lien inconnu, déjà utilisé, remplacé ou expiré, jamais
+/// distingués.
+pub async fn verifier_email(State(state): State<AppState>, JsonApi(corps): JsonApi<VerifierEmailRequete>) -> Response {
+    match verification_email::verifier(&state.db, &corps.jeton).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => reponse_erreur(
+            StatusCode::BAD_REQUEST,
+            "lien_invalide",
+            "Ce lien n'est plus valable. Demandez-en un nouveau.",
+        )
+        .into_response(),
+        // Texte fixe : le message de PostgreSQL pourrait reprendre une
+        // valeur, et le jeton ne va jamais aux journaux.
+        Err(_) => reponse_erreur_interne("vérification de l'email", "erreur de la base").into_response(),
+    }
+}
+
+fn reponse_erreur_renvoi(erreur: ErreurRenvoi) -> Response {
+    match erreur {
+        ErreurRenvoi::IdentifiantsInvalides => {
+            reponse_erreur(StatusCode::UNAUTHORIZED, "identifiants_invalides", erreur.to_string()).into_response()
+        }
+        // Même code et même en-tête que la limite de l'OTP (O5 ; RFC 6585
+        // §4) : seule la personne qui a le mot de passe l'apprend.
+        ErreurRenvoi::TropTot { attendre_secondes } => {
+            let mut reponse =
+                reponse_erreur(StatusCode::TOO_MANY_REQUESTS, "trop_de_demandes", erreur.to_string()).into_response();
+            reponse.headers_mut().insert(RETRY_AFTER, HeaderValue::from(attendre_secondes));
+            reponse
+        }
+        ErreurRenvoi::Interne(etape) => reponse_erreur_interne("renvoi du lien de vérification", etape).into_response(),
+    }
+}
+
+/// `POST /api/professionnels/email/renvoyer` (E7) -- corps `{"email",
+/// "mot_de_passe"}`, depuis l'écran qui affiche `email_non_verifie`. 204
+/// (lien envoyé, ou email déjà vérifié : même réponse) ; 401
+/// `identifiants_invalides` ; 429 `trop_de_demandes` avec `Retry-After`.
+pub async fn renvoyer_lien_email(State(state): State<AppState>, JsonApi(corps): JsonApi<ConnexionRequete>) -> Response {
+    match verification_email::renvoyer(
+        &state.db,
+        state.email.as_ref(),
+        &state.url_application_web,
+        &corps.email,
+        &corps.mot_de_passe,
+    )
+    .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(erreur) => reponse_erreur_renvoi(erreur),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn erreurs_du_renvoi() {
+        let reponse = reponse_erreur_renvoi(ErreurRenvoi::TropTot { attendre_secondes: 42 });
+        assert_eq!(reponse.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(reponse.headers().get(RETRY_AFTER).unwrap(), "42");
+        assert_eq!(reponse_erreur_renvoi(ErreurRenvoi::IdentifiantsInvalides).status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(ErreurRenvoi::IdentifiantsInvalides.to_string(), "Email ou mot de passe incorrect.");
+    }
 
     #[test]
     fn chaque_erreur_a_son_code_http_et_son_code() {
@@ -251,6 +327,9 @@ mod tests {
             jwt: JwtService::new(&"a".repeat(32)),
             sms: Arc::new(SmsSenderConsole),
             cle_totp: Arc::new(laaficare_backend::config::CleTotp::depuis_octets([7; 32])),
+            email: Arc::new(laaficare_backend::email::EmailSenderConsole),
+            url_application_web: Arc::from("http://localhost:4200"),
+            contact_securite: Arc::from("securite@example.org"),
         };
         let utilisateur_id: Uuid = sqlx::query_scalar(
             "INSERT INTO utilisateur (telephone, email) VALUES ('+22670060001', 'pro.route@example.org') RETURNING id",
@@ -316,6 +395,9 @@ mod tests {
             jwt: JwtService::new(&"a".repeat(32)),
             sms: Arc::new(SmsSenderConsole),
             cle_totp: Arc::new(CleTotp::depuis_octets([7; 32])),
+            email: Arc::new(laaficare_backend::email::EmailSenderConsole),
+            url_application_web: Arc::from("http://localhost:4200"),
+            contact_securite: Arc::from("securite@example.org"),
         };
         let utilisateur_id: Uuid = sqlx::query_scalar(
             "INSERT INTO utilisateur (telephone, email) VALUES ('+22670060002', 'pro.sf.route@example.org') RETURNING id",

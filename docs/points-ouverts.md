@@ -4,7 +4,7 @@ Ce document liste ce qui reste à décider ou à construire avant que LaafiCare 
 
 Les décisions déjà prises sont dans `CLAUDE.md` (sections 12 et 14), qui reste la référence. Ce document est mis à jour à chaque décision qui ferme ou ouvre un point.
 
-État au 2026-10-15.
+État au 2026-10-20.
 
 ---
 
@@ -35,7 +35,7 @@ Une *session* correspond à une connexion sur un appareil. **Règle décidée le
 
 ### Déconnexion — fermé le 2026-10-14
 
-Réglé par l'option 3, décidée le 2026-10-12 : jetons d'accès de 15 minutes, jeton de renouvellement qui change à chaque usage et révocable, une session par appareil vérifiée à chaque demande. Déconnexion d'un appareil (`POST /api/sessions/deconnexion`) ou de tous (`POST /api/sessions/deconnexion-partout`) : voir `docs/api.md`, section 1.7. Reste ouvert : le **stockage du jeton de renouvellement dans un navigateur** (applications web), à décider à part.
+Réglé par l'option 3, décidée le 2026-10-12 : jetons d'accès de 15 minutes, jeton de renouvellement qui change à chaque usage et révocable, une session par appareil vérifiée à chaque demande. Déconnexion d'un appareil (`POST /api/sessions/deconnexion`) ou de tous (`POST /api/sessions/deconnexion-partout`) : voir `docs/api.md`, section 1.7. **Stockage du jeton dans un navigateur** (applications web, décision du porteur, 2026-10-19) : **option A, jeton gardé en mémoire**, pour le développement. Reste ouvert : **option C (cookie `__Host-`) à confirmer avant le pilote**.
 
 ### Fausses alertes de rejeu sur un réseau instable
 
@@ -55,11 +55,13 @@ Réglé par l'option 3, décidée le 2026-10-12 : jetons d'accès de 15 minutes,
 
 **Noté le 2026-10-15 (étape 3.6.4, migration 0019).** Seul un outil local de l'équipe doit pouvoir ouvrir la fenêtre de 10 minutes pendant laquelle un administrateur sans second facteur en enregistre un nouveau (`compte.reenrolement_autorise_jusqu_au`). Aujourd'hui, c'est garanti **par le code seulement** : le serveur et les outils utilisent le même compte PostgreSQL. **En production**, un compte PostgreSQL séparé pour les outils locaux, **seul autorisé à écrire cette colonne** (droits par colonne de PostgreSQL), garantirait par la base qu'aucune route ne peut ouvrir une fenêtre. À traiter avec le compte PostgreSQL sans droits d'administration (section 3).
 
-### Prévenir l'administrateur quand son second facteur change (étape 3.7)
+### Prévenir l'administrateur quand son second facteur change
 
 **Exigence notée le 2026-10-15.** Quand un second facteur est enregistré ou désactivé sur un compte administrateur, la personne doit en être prévenue **par email**, par un autre canal que l'opération elle-même. Sources : NIST SP 800-63B rév. 4, §4.1.2.1 (« When an authenticator is added, the CSP SHALL notify the subscriber via a mechanism independent of the transaction binding the new authenticator ») et §4.2.3 (« account recovery SHALL cause a notification to be sent to the subscriber ») ; OWASP ASVS 5.0, 6.3.7.
 - **Fait pour la désactivation** (2026-10-18, étape 3.6.5) : `desactiver_totp` prévient la personne à son email, si elle en a un.
-- **Reste pour l'enregistrement** : la confirmation du réenrôlement (`POST /api/administrateurs/reenrolement/confirmer`, étape 3.6.4) ne prévient pas encore la personne. À faire à l'étape 3.7, quand le serveur enverra des emails.
+- **Fait pour l'enregistrement** (2026-10-21) : la confirmation du réenrôlement prévient la personne par email. Les deux alertes passent par `alerte_securite.rs` et donnent l'adresse de l'équipe (`CONTACT_SECURITE`), exigée par NIST §4.6 (« including contact information »).
+- **Reste, avant le pilote** : créer une **vraie adresse email de l'équipe, lue régulièrement**, pour `CONTACT_SECURITE` (décision du porteur, 2026-10-21). En production, les adresses d'exemple de la RFC 2606 y sont refusées.
+- **Reste, pour la production** : NIST SP 800-63B rév. 4 §4.6 exige d'accepter **au moins deux adresses de notification** par compte (« CSPs SHALL support at least two notification addresses per subscriber account »). Aujourd'hui, seul l'email est utilisé, le SMS restant réservé à l'OTP. À choisir : un SMS de sécurité, ou une seconde adresse email.
 
 ### Essai manuel à faire : parcours du premier administrateur (étape 3.6.5)
 
@@ -94,6 +96,19 @@ Le code est enregistré en SHA-256 simple. Avec seulement un million de codes po
   - déconnecter de force un compte compromis ;
   - changer le numéro de CNIB d'un administrateur (renouvellement de la carte, future carte de l'AES).
 - **Désactivation du second facteur par les structures validées** (vérification de la CNIB à l'accueil) : à rediscuter. En V1, seule l'équipe LaafiCare le désactive.
+
+### Application web (noté le 2026-10-20)
+
+Détail dans `web/docs/decisions.md` (branche `web`) :
+- **Trusted Types** : ils bloquent l'enregistrement du service worker d'Angular (le travail hors connexion). Leur activation dans la politique de sécurité du contenu (CSP) est à résoudre.
+- **Styles en ligne de la CDK d'Angular** : une CSP stricte, qui interdit les styles en ligne, les refuse. L'affichage reste correct, mais la console signale ces blocages ; leur traitement est à décider.
+- **Faille de `vite`** : elle ne touche que le serveur de développement, jamais l'application déployée. En attente d'`@angular/build` 22.2.4.
+
+### À faire dans les applications web et mobile (étape 3.7)
+
+- **Page `/verifier-email`** (application web) : lecture du jeton après `#`, bouton de confirmation, envoi par `POST`, jamais par un GET ; contrat dans `docs/api.md`, sections 2.7 et 2.8.
+- **Avertissement sous le mot de passe professionnel** du formulaire de création de structure : « Choisissez un mot de passe différent de celui de votre compte patient ». C'est un conseil, pas une obligation : le serveur accepte un mot de passe identique (décision du porteur, 2026-10-21).
+- **Aide sous les champs email** (email de la structure, email professionnel) : « Sans accent ni espace » (adresses en ASCII seulement, décision du porteur, 2026-10-21).
 
 ---
 
@@ -153,7 +168,8 @@ En production, le serveur n'accepte que des connexions chiffrées (HTTPS) : jeto
 - **Fournisseurs réels** d'envoi de SMS et d'email (crate et fournisseur à présenter).
 - **Limite du nombre de demandes par adresse IP** sur les routes de connexion et de réinitialisation.
 - **Liste de mots de passe interdits** (NIST SP 800-63B rév. 4).
-- **Stockage du jeton de renouvellement dans un navigateur** (applications web), à décider à part.
+- **Stockage du jeton dans un navigateur** (applications web) : en mémoire pour le développement (option A) ; **option C (cookie `__Host-`) à confirmer avant le pilote**.
+- **Accord de la MUNASEB pour l'usage de ses couleurs et de son logo** dans l'application web (palette rose `#8C4C65`), à obtenir **avant le pilote** (noté le 2026-10-19).
 - **Fichiers déposés par les structures** : réécriture des images, antivirus, contenu actif des PDF.
 
 ---
@@ -184,7 +200,12 @@ Un soignant a besoin du NIP pour ouvrir le dossier. Le patient peut être trop m
 
 - Durée d'une licence de structure : illimitée ou à renouveler.
 - Pièces justificatives exigées pour la MUNASEB, les hôpitaux, les pharmacies et les laboratoires.
-- Liste officielle des provinces ; bornes géographiques du Burkina Faso, pour contrôler la position GPS d'une structure.
+- **Découpage administratif (région, province, commune)** : texte libre pour l'instant (migration 0022). Recherche du 2026-10-20 : le compte rendu officiel du Conseil des ministres du 2 juillet 2025 (site de la Présidence du Faso) annonce le passage de 13 à 17 régions et de 45 à 47 provinces, et donne les noms des 17 régions avec leurs chefs-lieux ; mais ni le texte des décrets, ni leur numéro, ni la liste complète des provinces et des communes n'ont été trouvés (une période transitoire de six mois y est aussi annoncée). Fermer les listes demande le décret publié au Journal officiel.
+- **Position GPS d'une structure** : contrôlée dans le rectangle donné par l'Institut géographique du Burkina (rapport d'août 2014 aux Nations unies, UN-GGIM : 8° à 16° de latitude nord, 6° ouest à 3° est). Ce rectangle déborde sur les pays voisins ; un contrôle par le contour du territoire demanderait une source officielle de ce contour.
+- **Adresses email en ASCII seulement** (décision du porteur, 2026-10-21) : les domaines internationaux (`exemplé.bf`, `例え.jp`) et les parties locales accentuées sont refusés, par le code (`adresse_email.rs`) et par la base (migration 0022). À revoir si un utilisateur en a besoin : il faudra alors une migration, et une règle de comparaison des majuscules qui ne dépende pas des réglages de langue de la base (OWASP : convertir les domaines internationaux en punycode pour les comparer).
+- **Validation d'une seconde MUNASEB (pour l'étape 3.8)** : la base n'admet qu'une MUNASEB validée ou suspendue (index `structure_une_seule_munaseb_validee`, migration 0012). La validation d'une seconde doit renvoyer un **code d'erreur clair et documenté**, jamais un 500 venu de cet index.
+- **Logo de la structure** (demande du porteur, 2026-10-21) : reporté à la suite de la 3.7. Facultatif, route séparée, PNG et JPEG seulement (jamais SVG), contenu vérifié, image réencodée par le serveur, nom de fichier choisi par le serveur, stockage au Burkina, seul le responsable peut le changer. Proposition à présenter avant d'écrire (OWASP File Upload Cheat Sheet).
+- **Second facteur à la création d'une structure** : un professionnel qui a un TOTP actif reçoit 409 `second_facteur_requis` (aucun professionnel ne peut en avoir avant l'étape 3.11). À concevoir avec l'activation du TOTP par les professionnels.
 - Où ranger le numéro d'ordre et la spécialité d'un professionnel : ils appartiennent à la personne, pas à l'établissement (futur profil professionnel).
 - Création d'un compte pour une autre personne : patient sans téléphone, nouveau-né, urgence (patient inconscient). Qui en a le droit, et comment la personne en reprend ensuite le contrôle.
 - Major de laboratoire : rôle séparé, ou autorité sur le stock pour un biologiste.
@@ -203,7 +224,6 @@ Un soignant a besoin du NIP pour ouvrir le dossier. Le patient peut être trop m
 - Requêtes SQLx vérifiées à la compilation : après la stabilisation du module MUNASEB.
 - Synchronisation de l'application mobile hors ligne avec le serveur : protocole à concevoir.
 - Calcul du solde d'une période MUNASEB, présent en double (demandes et contrat) : à regrouper.
-- **Email enregistré sans espaces autour, garanti par la base** (décidé le 2026-10-15, à faire dans la migration de l'étape 3.7, où naissent les comptes professionnels) : contrainte `CHECK (email = btrim(email))`. La connexion professionnelle compare l'email saisi sans ses espaces autour ; sans cette contrainte, un email enregistré avec un espace pourrait ne jamais être retrouvé. Aucun email existant ne la violerait (vérifié le 2026-10-15 dans la base de développement ; à revérifier avant d'écrire la migration).
 
 ---
 

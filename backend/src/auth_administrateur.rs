@@ -22,8 +22,10 @@
 use sqlx::PgPool;
 use sqlx::types::Uuid;
 
+use crate::alerte_securite::{self, Evenement};
 use crate::auth_professionnel::{self, ErreurAuthProfessionnel, JetonIntermediaire};
 use crate::config::CleTotp;
+use crate::email::EmailSender;
 use crate::jwt::{JwtService, SorteJeton};
 use crate::totp::{self, ActivationEnCours, Autorisation, ErreurTotp};
 
@@ -121,30 +123,53 @@ pub async fn commencer_reenrolement(
 /// fenêtre dans la même transaction (`Autorisation::ReenrolementAdministrateur`).
 /// Renvoie les codes de secours en clair : seul moment où ils sont
 /// visibles (Z6). Aucune session n'est ouverte (A3).
+///
+/// Après une confirmation réussie, donc après la validation en base de
+/// l'activation (faite par `confirmer_activation`), la personne est
+/// prévenue par email (D1 ; NIST SP 800-63B rév. 4 §4.1.2.1). Un échec
+/// d'envoi ne change rien à la réponse (D2) : le TOTP est déjà actif.
 pub async fn confirmer_reenrolement(
     pool: &PgPool,
     cle: &CleTotp,
+    email_sender: &dyn EmailSender,
+    contact_securite: &str,
     compte_id: Uuid,
     code: &str,
 ) -> Result<Vec<String>, ErreurReenrolement> {
-    totp::confirmer_activation(pool, cle.octets(), compte_id, code, Autorisation::ReenrolementAdministrateur)
+    let codes = totp::confirmer_activation(pool, cle.octets(), compte_id, code, Autorisation::ReenrolementAdministrateur)
         .await
         .map_err(|erreur| match erreur {
             ErreurTotp::Refuse => ErreurReenrolement::CodeInvalide,
             ErreurTotp::Interne(_) => interne("confirmation du réenrôlement"),
-        })
+        })?;
+    alerte_securite::prevenir(pool, email_sender, contact_securite, compte_id, Evenement::SecondFacteurEnregistre).await;
+    Ok(codes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::auth_professionnel::{ConnexionProfessionnelle, SaisieSecondFacteur, terminer_connexion};
+    use crate::email::{EmailsRecus, ErreurEmail};
     use crate::mot_de_passe;
 
     // Base temporaire par test ; données fictives.
 
     const BON: &str = "Exemple#2026";
     const MAUVAIS: &str = "Mauvais#2026";
+    const CONTACT: &str = "securite@example.org";
+
+    /// Envoi qui échoue toujours (D2).
+    struct EmailEnEchec;
+
+    impl EmailSender for EmailEnEchec {
+        fn envoyer(&self, _: &str, _: &str, _: &str) -> Result<(), ErreurEmail> {
+            Err(ErreurEmail::simulee())
+        }
+        fn simule(&self) -> bool {
+            true
+        }
+    }
 
     fn jwt() -> JwtService {
         JwtService::new(&"a".repeat(32))
@@ -231,10 +256,90 @@ mod tests {
     async fn reenroler(pool: &PgPool, compte_id: Uuid) -> (totp_rs::Totp, Vec<String>) {
         let activation = commencer_reenrolement(pool, &cle(), compte_id, BON).await.unwrap();
         let generateur = generateur(&activation);
-        let codes = confirmer_reenrolement(pool, &cle(), compte_id, &generateur.generate(maintenant()).to_string())
-            .await
-            .unwrap();
+        let codes = confirmer_reenrolement(
+            pool,
+            &cle(),
+            &EmailsRecus::default(),
+            CONTACT,
+            compte_id,
+            &generateur.generate(maintenant()).to_string(),
+        )
+        .await
+        .unwrap();
         (generateur, codes)
+    }
+
+    /// D1, D6, D7 : une confirmation réussie envoie une seule alerte, à
+    /// l'adresse de l'administrateur, datée de l'activation à l'heure du
+    /// Burkina, avec le contact de l'équipe ; sans aucun secret.
+    #[sqlx::test]
+    #[ignore]
+    async fn alerte_envoyee_apres_la_confirmation(pool: PgPool) {
+        let compte_id = administrateur(&pool, "+22670110010", "adm.alerte@example.org").await;
+        ouvrir_fenetre(&pool, compte_id, FENETRE_REENROLEMENT_MINUTES).await;
+        let activation = commencer_reenrolement(&pool, &cle(), compte_id, BON).await.unwrap();
+        let generateur = generateur(&activation);
+        let emails = EmailsRecus::default();
+
+        // Code faux : refusé, aucune alerte.
+        let bon = generateur.generate(maintenant()).to_string();
+        let faux = if bon == "000000" { "000001" } else { "000000" };
+        assert!(matches!(
+            confirmer_reenrolement(&pool, &cle(), &emails, CONTACT, compte_id, faux).await,
+            Err(ErreurReenrolement::CodeInvalide)
+        ));
+        assert!(emails.0.lock().unwrap().is_empty(), "aucune alerte sans confirmation réussie");
+
+        let codes = confirmer_reenrolement(&pool, &cle(), &emails, CONTACT, compte_id, &bon).await.unwrap();
+        let envoyes = emails.0.lock().unwrap().clone();
+        assert_eq!(envoyes.len(), 1);
+        let (destinataire, corps) = &envoyes[0];
+        assert_eq!(destinataire, "adm.alerte@example.org");
+
+        let quand: String = sqlx::query_scalar(
+            "SELECT to_char(date_activation AT TIME ZONE 'Africa/Ouagadougou', 'DD/MM/YYYY \"à\" HH24:MI') \
+             FROM second_facteur_totp WHERE compte_id = $1 AND statut = 'actif'",
+        )
+        .bind(compte_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(corps.contains(&format!("le {quand} (heure du Burkina Faso)")), "{corps}");
+        assert!(corps.contains(CONTACT), "{corps}");
+        // Aucun secret : ni codes de secours, ni code saisi, ni clé, ni lien.
+        for code in &codes {
+            assert!(!corps.contains(code.as_str()));
+        }
+        assert!(!corps.contains(&bon) && !corps.contains(&activation.cle_base32), "{corps}");
+        assert!(!corps.contains("http"), "{corps}");
+    }
+
+    /// D2 : l'envoi échoue, le réenrôlement reste valable (TOTP actif, codes
+    /// rendus, reconnexion possible).
+    #[sqlx::test]
+    #[ignore]
+    async fn echec_d_envoi_le_reenrolement_reste_valable(pool: PgPool) {
+        let jwt = jwt();
+        let compte_id = administrateur(&pool, "+22670110011", "adm.echec@example.org").await;
+        ouvrir_fenetre(&pool, compte_id, FENETRE_REENROLEMENT_MINUTES).await;
+        let activation = commencer_reenrolement(&pool, &cle(), compte_id, BON).await.unwrap();
+        let generateur = generateur(&activation);
+        let codes = confirmer_reenrolement(
+            &pool,
+            &cle(),
+            &EmailEnEchec,
+            CONTACT,
+            compte_id,
+            &generateur.generate(maintenant()).to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(codes.len(), 10);
+        assert_eq!(statut_totp(&pool, compte_id).await, ["actif"]);
+        assert!(matches!(
+            se_connecter(&pool, &jwt, "adm.echec@example.org", BON).await,
+            Ok(ConnexionAdministrateur::SecondFacteur { .. })
+        ));
     }
 
     #[sqlx::test]
@@ -335,9 +440,16 @@ mod tests {
 
         // 4. Confirmation.
         let generateur = generateur(&activation);
-        confirmer_reenrolement(&pool, &cle(), compte_id, &generateur.generate(maintenant()).to_string())
-            .await
-            .unwrap();
+        confirmer_reenrolement(
+            &pool,
+            &cle(),
+            &EmailsRecus::default(),
+            CONTACT,
+            compte_id,
+            &generateur.generate(maintenant()).to_string(),
+        )
+        .await
+        .unwrap();
         assert_eq!(sessions(&pool, compte_id).await, 0, "chemin 4 : confirmer");
 
         // 5. Connexion avec un TOTP actif : jeton intermédiaire seulement.
@@ -378,7 +490,15 @@ mod tests {
         let (generateur, codes) = reenroler(&pool, compte_id).await;
 
         assert!(matches!(
-            confirmer_reenrolement(&pool, &cle(), compte_id, &generateur.generate(maintenant() + 30).to_string()).await,
+            confirmer_reenrolement(
+                &pool,
+                &cle(),
+                &EmailsRecus::default(),
+                CONTACT,
+                compte_id,
+                &generateur.generate(maintenant() + 30).to_string()
+            )
+            .await,
             Err(ErreurReenrolement::CodeInvalide)
         ));
 
@@ -408,10 +528,12 @@ mod tests {
 
         ouvrir_fenetre(&pool, compte_id, -1).await;
         let code = generateur(&activation).generate(maintenant()).to_string();
+        let emails = EmailsRecus::default();
         assert!(matches!(
-            confirmer_reenrolement(&pool, &cle(), compte_id, &code).await,
+            confirmer_reenrolement(&pool, &cle(), &emails, CONTACT, compte_id, &code).await,
             Err(ErreurReenrolement::CodeInvalide)
         ));
+        assert!(emails.0.lock().unwrap().is_empty(), "fenêtre expirée : aucune alerte");
         assert_eq!(statut_totp(&pool, compte_id).await, ["en_attente"]);
         assert!(!fenetre_vide(&pool, compte_id).await, "rien n'est modifié");
     }
@@ -458,7 +580,10 @@ mod tests {
         let erreur = commencer_reenrolement(&pool, &cle(), Uuid::from_u128(1), mot_de_passe).await.err().unwrap();
         assert!(matches!(erreur, ErreurReenrolement::Interne(_)), "{erreur:?}");
         let code = "123456";
-        let erreur_code = confirmer_reenrolement(&pool, &cle(), Uuid::from_u128(1), code).await.err().unwrap();
+        let erreur_code = confirmer_reenrolement(&pool, &cle(), &EmailsRecus::default(), CONTACT, Uuid::from_u128(1), code)
+            .await
+            .err()
+            .unwrap();
         for texte in [erreur.to_string(), format!("{erreur:?}"), erreur_code.to_string(), format!("{erreur_code:?}")] {
             assert!(!texte.contains(mot_de_passe) && !texte.contains(code), "{texte}");
         }

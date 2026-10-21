@@ -127,7 +127,15 @@ pub async fn confirmer_reenrolement(
     State(state): State<AppState>,
     JsonApi(corps): JsonApi<ConfirmerRequete>,
 ) -> Response {
-    match auth_administrateur::confirmer_reenrolement(&state.db, &state.cle_totp, reenrolement.compte_id, &corps.code).await
+    match auth_administrateur::confirmer_reenrolement(
+        &state.db,
+        &state.cle_totp,
+        state.email.as_ref(),
+        &state.contact_securite,
+        reenrolement.compte_id,
+        &corps.code,
+    )
+    .await
     {
         Ok(codes) => (StatusCode::OK, Json(CorpsCodesSecours { codes_secours: &codes })).into_response(),
         Err(erreur) => reponse_erreur_reenrolement(erreur),
@@ -182,6 +190,9 @@ mod tests {
             jwt: JwtService::new(&"a".repeat(32)),
             sms: Arc::new(SmsSenderConsole),
             cle_totp: Arc::new(CleTotp::depuis_octets([7; 32])),
+            email: Arc::new(laaficare_backend::email::EmailSenderConsole),
+            url_application_web: Arc::from("http://localhost:4200"),
+            contact_securite: Arc::from("securite@example.org"),
         };
         let utilisateur_id: Uuid =
             sqlx::query_scalar("INSERT INTO utilisateur (telephone, email) VALUES ('+22670120001', $1) RETURNING id")

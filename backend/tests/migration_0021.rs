@@ -102,8 +102,10 @@ async fn affectation(pool: &PgPool, role: &str) -> (Uuid, Uuid) {
     .await
     .unwrap();
     let structure: Uuid = sqlx::query_scalar(
-        "INSERT INTO structure (type_structure, nom, telephone, commune, province, latitude, longitude, createur_compte_id, statut) \
-         VALUES ('munaseb', 'MUNASEB', '+22670160005', 'Ouagadougou', 'Kadiogo', 12.371400, -1.519700, $1, 'validee') RETURNING id",
+        "INSERT INTO structure (type_structure, nom, telephone, telephone_urgence, region, email, commune, province, latitude, longitude, \
+                                createur_compte_id, statut) \
+         VALUES ('munaseb', 'MUNASEB', '+22670160005', '+22670160005', 'Région fictive', 'structure@example.org', 'Ouagadougou', 'Kadiogo', \
+                 12.371400, -1.519700, $1, 'validee') RETURNING id",
     )
     .bind(compte)
     .fetch_one(pool)

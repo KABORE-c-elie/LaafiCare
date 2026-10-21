@@ -5,6 +5,7 @@ mod routes_patient;
 mod routes_remboursement_munaseb;
 mod routes_professionnel;
 mod routes_session;
+mod routes_structure;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -39,6 +40,12 @@ pub(crate) struct AppState {
     pub(crate) jwt: JwtService,
     pub(crate) sms: Arc<dyn SmsSender>,
     pub(crate) cle_totp: Arc<CleTotp>,
+    /// Même principe que `sms` : `EmailSenderConsole` en développement.
+    pub(crate) email: Arc<dyn EmailSender>,
+    /// `URL_APPLICATION_WEB` (E5), base des liens envoyés par email.
+    pub(crate) url_application_web: Arc<str>,
+    /// `CONTACT_SECURITE` (D3), donné dans les alertes de sécurité.
+    pub(crate) contact_securite: Arc<str>,
 }
 
 // Struct typée plutôt qu'un `json!` en ligne : le compilateur fixe le format
@@ -135,10 +142,8 @@ async fn main() {
     let sms: Arc<dyn SmsSender> = Arc::new(sms::SmsSenderConsole);
 
     // B2 (décision du porteur, 2026-10-18) : en production, refus de
-    // démarrer tant qu'un envoi est simulé. Le serveur n'envoie pas encore
-    // d'emails (étape 3.7) : l'email simulé est vérifié dès maintenant, pour
-    // que la règle soit déjà en place quand il sera branché sur l'état.
-    let email = EmailSenderConsole;
+    // démarrer tant qu'un envoi est simulé.
+    let email: Arc<dyn EmailSender> = Arc::new(EmailSenderConsole);
     if let Err(erreur) =
         config::verifier_envois(config.environnement, &[("SMS", sms.simule()), ("email", email.simule())])
     {
@@ -198,7 +203,20 @@ async fn main() {
             "/api/patients/mot-de-passe/reinitialiser",
             post(routes_patient::reinitialiser_mot_de_passe),
         )
-        .with_state(AppState { db: pool, jwt, sms, cle_totp: Arc::new(config.totp_cle_chiffrement) });
+        .route("/api/professionnels/email/verifier", post(routes_professionnel::verifier_email))
+        .route("/api/professionnels/email/renvoyer", post(routes_professionnel::renvoyer_lien_email))
+        .route("/api/structures", post(routes_structure::creer))
+        .route("/api/structures/mes-demandes", get(routes_structure::mes_demandes))
+        .route("/api/structures/{id}/soumettre", post(routes_structure::soumettre))
+        .with_state(AppState {
+            db: pool,
+            jwt,
+            sms,
+            cle_totp: Arc::new(config.totp_cle_chiffrement),
+            email,
+            url_application_web: Arc::from(config.url_application_web),
+            contact_securite: Arc::from(config.contact_securite),
+        });
 
     // 127.0.0.1 : cohérent avec PostgreSQL exposé en local seulement. À
     // élargir quand l'app mobile aura besoin d'un accès depuis le réseau.

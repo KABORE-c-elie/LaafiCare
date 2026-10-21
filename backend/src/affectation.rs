@@ -238,8 +238,10 @@ mod tests {
     /// Clinique (plusieurs peuvent être validées) au statut donné.
     async fn structure(pool: &PgPool, createur: Uuid, nom: &str, statut: &str) -> Uuid {
         sqlx::query_scalar(
-            "INSERT INTO structure (type_structure, nom, telephone, commune, province, latitude, longitude, createur_compte_id, statut) \
-             VALUES ('clinique', $2, '+22670000000', 'Ouagadougou', 'Kadiogo', 12.371400, -1.519700, $1, $3) RETURNING id",
+            "INSERT INTO structure (type_structure, nom, telephone, telephone_urgence, region, email, commune, province, latitude, longitude, \
+                                    createur_compte_id, statut) \
+             VALUES ('clinique', $2, '+22670000000', '+22670000000', 'Région fictive', 'structure@example.org', 'Ouagadougou', 'Kadiogo', \
+                     12.371400, -1.519700, $1, $3) RETURNING id",
         )
         .bind(createur)
         .bind(nom)

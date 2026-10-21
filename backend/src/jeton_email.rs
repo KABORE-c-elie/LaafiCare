@@ -96,6 +96,46 @@ pub async fn emettre_verification(
     Ok(email.map(|email| VerificationEmise { jeton, email }))
 }
 
+/// Délai minimal entre deux jetons de vérification d'un même compte, pour la
+/// route de renvoi (décision du porteur, 2026-10-20, E7 : une minute). Même
+/// valeur que l'OTP patient (O1) ; aucune source n'en donne.
+pub const DELAI_RENVOI_SECONDES: i32 = 60;
+
+/// Résultat d'une demande de renvoi.
+#[derive(Debug)]
+pub enum Renvoi {
+    Emis(VerificationEmise),
+    /// Un jeton a été émis il y a moins de `DELAI_RENVOI_SECONDES` : rien
+    /// n'est émis ; secondes à attendre, arrondies au-dessus.
+    TropTot { attendre_secondes: i64 },
+}
+
+/// Renvoi d'un jeton de vérification (route de la 3.7), limité à un par
+/// `DELAI_RENVOI_SECONDES`. Le délai est mesuré depuis le dernier jeton de
+/// vérification du compte, quel qu'il soit (création du compte ou renvoi) :
+/// aucune table de plus. Le compte est verrouillé avant la lecture : deux
+/// renvois simultanés se suivent, et le second voit le jeton du premier.
+/// Horloge de PostgreSQL, comme l'expiration. `None` si le compte n'a pas
+/// d'email.
+pub async fn renvoyer_verification(conn: &mut PgConnection, compte_id: Uuid) -> Result<Option<Renvoi>, sqlx::Error> {
+    sqlx::query("SELECT id FROM compte WHERE id = $1 FOR UPDATE")
+        .bind(compte_id)
+        .fetch_one(&mut *conn)
+        .await?;
+    let attendre: Option<i64> = sqlx::query_scalar(
+        "SELECT ceil(extract(epoch FROM max(date_creation) + make_interval(secs => $2::double precision) - now()))::bigint \
+         FROM jeton_email WHERE compte_id = $1 AND objet = 'verification_email'",
+    )
+    .bind(compte_id)
+    .bind(DELAI_RENVOI_SECONDES)
+    .fetch_one(&mut *conn)
+    .await?;
+    if let Some(attendre_secondes) = attendre.filter(|secondes| *secondes > 0) {
+        return Ok(Some(Renvoi::TropTot { attendre_secondes }));
+    }
+    Ok(emettre_verification(conn, compte_id).await?.map(Renvoi::Emis))
+}
+
 /// Utilise un jeton de vérification : en une seule requête, il est marqué
 /// utilisé et l'email de l'identité est déclaré vérifié. Renvoie le compte,
 /// ou `None` dans tous les cas de refus, sans les distinguer : jeton mal
@@ -264,6 +304,37 @@ mod tests {
         assert_eq!(verifier_email(&pool, emise.jeton.en_clair(), Some(premier)).await.unwrap(), None);
         assert!(!email_verifie(&pool, premier).await && !email_verifie(&pool, second).await);
         assert_eq!(verifier_email(&pool, emise.jeton.en_clair(), Some(second)).await.unwrap(), Some(second));
+    }
+
+    /// E7 : un renvoi moins d'une minute après le dernier jeton est refusé,
+    /// avec le délai restant ; au-delà, un nouveau jeton annule l'ancien.
+    #[sqlx::test]
+    #[ignore]
+    async fn renvoi_limite_a_un_par_minute(pool: PgPool) {
+        let compte_id = compte(&pool, "+22670130009", "renvoi@example.org", "professionnel").await;
+        let premier = emettre(&pool, compte_id).await;
+
+        let mut tx = pool.begin().await.unwrap();
+        let renvoi = renvoyer_verification(&mut tx, compte_id).await.unwrap().unwrap();
+        tx.commit().await.unwrap();
+        let Renvoi::TropTot { attendre_secondes } = renvoi else {
+            panic!("renvoi trop tôt attendu");
+        };
+        assert!((1..=60).contains(&attendre_secondes), "{attendre_secondes}");
+
+        sqlx::query("UPDATE jeton_email SET date_creation = now() - interval '61 seconds' WHERE compte_id = $1")
+            .bind(compte_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let renvoi = renvoyer_verification(&mut tx, compte_id).await.unwrap().unwrap();
+        tx.commit().await.unwrap();
+        let Renvoi::Emis(nouveau) = renvoi else {
+            panic!("nouveau jeton attendu");
+        };
+        assert_eq!(verifier_email(&pool, premier.jeton.en_clair(), None).await.unwrap(), None, "ancien annulé");
+        assert_eq!(verifier_email(&pool, nouveau.jeton.en_clair(), None).await.unwrap(), Some(compte_id));
     }
 
     #[sqlx::test]

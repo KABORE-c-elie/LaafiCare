@@ -170,9 +170,8 @@ pub(crate) async fn verifier_identifiants(
     // type et par identité (migration 0011, `un_compte_par_type`), une
     // seule identité par email (migration 0001, index unique sur
     // `lower(email)`). Les emails enregistrés n'ont pas d'espaces autour :
-    // la base l'imposera par `CHECK (email = btrim(email))` dans la
-    // migration de l'étape 3.7, où naissent les comptes professionnels
-    // (décision du 2026-10-15) ; aucun email existant ne la viole.
+    // la base l'impose par `CHECK (email = btrim(email))` (migration 0022,
+    // décision du 2026-10-15).
     //
     // La fenêtre de réenrôlement est comparée à `now()` de PostgreSQL, qui
     // l'a calculée (une seule horloge, migration 0019). Lue ici, avant le

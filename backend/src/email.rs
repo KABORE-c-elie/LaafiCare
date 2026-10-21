@@ -10,6 +10,14 @@
 #[error("échec d'envoi de l'email : {0}")]
 pub struct ErreurEmail(String);
 
+#[cfg(test)]
+impl ErreurEmail {
+    /// Tests : un envoi qui échoue.
+    pub(crate) fn simulee() -> Self {
+        ErreurEmail("échec simulé".into())
+    }
+}
+
 pub trait EmailSender: Send + Sync {
     fn envoyer(&self, destinataire: &str, sujet: &str, corps: &str) -> Result<(), ErreurEmail>;
 
@@ -36,6 +44,33 @@ impl EmailSender for EmailSenderConsole {
         println!("{corps}");
         println!("----------------------------------------------------");
         println!();
+        Ok(())
+    }
+
+    fn simule(&self) -> bool {
+        true
+    }
+}
+
+/// Tests : jeton lu dans le lien de vérification, après `#jeton=`, jamais
+/// en paramètre `?`.
+#[cfg(test)]
+pub(crate) fn jeton_du_lien(corps: &str) -> String {
+    let lien = corps.lines().find(|l| l.contains("/verifier-email#jeton=")).expect("lien attendu");
+    assert!(!lien.contains('?'), "{lien}");
+    lien.split("#jeton=").nth(1).unwrap().trim().to_string()
+}
+
+/// Tests de la bibliothèque : garde les emails (destinataire, corps) au lieu
+/// de les afficher, pour lire le lien envoyé.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct EmailsRecus(pub(crate) std::sync::Mutex<Vec<(String, String)>>);
+
+#[cfg(test)]
+impl EmailSender for EmailsRecus {
+    fn envoyer(&self, destinataire: &str, _sujet: &str, corps: &str) -> Result<(), ErreurEmail> {
+        self.0.lock().unwrap().push((destinataire.to_string(), corps.to_string()));
         Ok(())
     }
 
