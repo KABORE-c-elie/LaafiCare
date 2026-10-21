@@ -160,6 +160,13 @@ En production, le serveur n'accepte que des connexions chiffrées (HTTPS) : jeto
 - Fournisseurs réels : SMS (codes, invitations) et email (réinitialisation, vérification de l'email). Crate et fournisseur à présenter.
 - Fichiers déposés par les structures : réécriture des images, antivirus, désactivation du contenu actif des PDF (OWASP).
 
+### Avant le pilote : décisions extérieures à prendre tôt
+
+**Noté le 2026-10-21.** Ces décisions viennent d'ailleurs que du code, et une étape du MVP les attend :
+- **durée de la licence d'une structure** : illimitée, ou à renouveler (étape 3.8) ;
+- **règles de suspension d'un contrat MUNASEB** : à demander à la MUNASEB (étape 5) ;
+- **valeurs des types d'actes manquants** : dentaire et prothèses, accouchement et consultations prénatales, chirurgie, frais funéraires, radiologie (étape 7, mémoire MUNASEB).
+
 ### Éléments à découper en étapes
 
 **Noté le 2026-10-15.** La mise en production n'est pas encore découpée en étapes, comme le sont celles du backoffice (CLAUDE.md, section 12). Voici les éléments déjà connus, repris de ce document, à découper plus tard en étapes ordonnées, chacune présentée et validée avant d'être faite :
@@ -228,6 +235,24 @@ Un soignant a besoin du NIP pour ouvrir le dossier. Le patient peut être trop m
 - Requêtes SQLx vérifiées à la compilation : après la stabilisation du module MUNASEB.
 - Synchronisation de l'application mobile hors ligne avec le serveur : protocole à concevoir.
 - Calcul du solde d'une période MUNASEB, présent en double (demandes et contrat) : à regrouper.
+
+### Après le pilote (décision du porteur, 2026-10-21)
+
+Hors du MVP MUNASEB (CLAUDE.md §12, « Périmètre du MVP MUNASEB ») :
+- **structures** :
+  - reste de la 3.7 pour les autres types de structure (pièces justificatives, hôpital, pharmacie, laboratoire) ;
+  - logo de la structure (section 4, « Structures et rôles ») ;
+  - suspension et réactivation d'une structure ;
+  - liste fermée des régions et provinces (section 4, « Structures et rôles ») ;
+- **comptes** :
+  - bascule professionnel ↔ patient ;
+  - invitations d'administrateurs (l'outil `creer_administrateur` suffit) ;
+  - TOTP pour les patients et les professionnels (J10) ;
+  - domaines d'email internationaux (section 4, « Structures et rôles ») ;
+- **technique** : requêtes SQLx vérifiées à la compilation (ci-dessus) ;
+- **MUNASEB** :
+  - rapprochement des partenaires avec les structures (section 4, « MUNASEB ») ;
+  - paiement direct par le mutualiste.
 
 ---
 
