@@ -48,6 +48,10 @@ pub enum Evenement {
     /// the subscriber » ; OWASP *Forgot Password Cheat Sheet* : « Notify the
     /// user […] Include instructions and contact information ».
     MotDePasseReinitialise,
+    /// Une affectation de ce compte professionnel a été désactivée par un
+    /// responsable (étape 3.11, DS8, texte du porteur du 2026-10-21) : la
+    /// personne apprend que son accès est retiré, et à qui s'adresser.
+    AccesRetire,
 }
 
 /// Date et heure de l'événement, lues dans la ligne qui l'enregistre (une
@@ -68,6 +72,14 @@ fn requete(evenement: Evenement) -> &'static str {
              JOIN LATERAL (SELECT date_desactivation FROM desactivation_totp \
                            WHERE compte_id = c.id ORDER BY date_desactivation DESC LIMIT 1) d ON true \
              WHERE c.id = $1"
+        }
+        // Date de la dernière désactivation d'une affectation du compte ;
+        // seulement vers un email vérifié (DS8).
+        Evenement::AccesRetire => {
+            "SELECT u.email, to_char(max(a.desactivee_le) AT TIME ZONE 'Africa/Ouagadougou', 'DD/MM/YYYY \"à\" HH24:MI') \
+             FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id JOIN affectation a ON a.compte_id = c.id \
+             WHERE c.id = $1 AND a.desactivee_le IS NOT NULL AND u.email_verifie_le IS NOT NULL \
+             GROUP BY u.email"
         }
         // Date de l'utilisation du lien, enregistrée dans la même transaction
         // que le nouveau mot de passe.
@@ -96,6 +108,15 @@ async fn sorte_de_compte(pool: &PgPool, compte_id: Uuid) -> Result<&'static str,
 /// seulement).
 fn message(evenement: Evenement, quand: &str, contact: &str, sorte: &str) -> (&'static str, String) {
     match evenement {
+        Evenement::AccesRetire => (
+            "LaafiCare : accès retiré",
+            format!(
+                "Bonjour,\n\n\
+                 Votre accès à une structure LaafiCare a été retiré le {quand} (heure du Burkina Faso).\n\n\
+                 Si vous pensez que c'est une erreur, contactez le responsable de la structure ou l'équipe LaafiCare \
+                 à {contact}."
+            ),
+        ),
         Evenement::MotDePasseReinitialise => (
             "LaafiCare : mot de passe modifié",
             format!(
@@ -181,7 +202,12 @@ mod tests {
 
     #[test]
     fn textes_avec_date_et_contact_sans_lien() {
-        for evenement in [Evenement::SecondFacteurEnregistre, Evenement::SecondFacteurDesactive, Evenement::MotDePasseReinitialise] {
+        for evenement in [
+            Evenement::SecondFacteurEnregistre,
+            Evenement::SecondFacteurDesactive,
+            Evenement::MotDePasseReinitialise,
+            Evenement::AccesRetire,
+        ] {
             let (sujet, corps) = message(evenement, "21/10/2026 à 10:42", "securite@example.org", "professionnel");
             // Pas de tiret cadratin (décision du porteur, 2026-10-21).
             assert!(!sujet.contains('\u{2014}') && !corps.contains('\u{2014}'));

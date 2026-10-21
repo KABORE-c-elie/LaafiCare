@@ -229,7 +229,7 @@ Règles garanties par la base :
 - elle ne se modifie **qu'une fois**, pour sa clôture (avec la date et l'auteur) ; tout le reste est figé ;
 - **pas de réactivation** : une personne qui revient reçoit une nouvelle affectation, et l'historique garde toutes les périodes.
 
-C'est ce qui permettra, plus tard, de savoir pour chaque acte médical qui l'a fait et dans quel établissement. C'est déjà le cas des décisions des agents MUNASEB (migration 0021). Après sa connexion, un professionnel **active** l'une de ses affectations : sa session porte alors cette affectation, et une nouvelle activation ouvre une nouvelle session (fichier [`affectation.rs`](../backend/src/affectation.rs)).
+C'est ce qui permettra, plus tard, de savoir pour chaque acte médical qui l'a fait et dans quel établissement. C'est déjà le cas des décisions des agents MUNASEB (migration 0021). Après sa connexion, un professionnel **active** l'une de ses affectations : sa session porte alors cette affectation, et une nouvelle activation ouvre une nouvelle session (fichier [`affectation.rs`](../backend/src/affectation.rs)). Un responsable clôt l'affectation d'un membre (fichier [`membres.rs`](../backend/src/membres.rs)) : les sessions ouvertes sur elle se ferment aussitôt (migration 0025), et le dernier responsable actif d'un établissement ne peut pas être retiré. L'abandon d'une demande d'établissement clôt aussi l'affectation de son responsable.
 
 ### `invitation` : faire entrer quelqu'un dans un établissement
 
@@ -293,5 +293,6 @@ Règles garanties par la base : **jamais modifiées ni supprimées** ; seulement
 | 0022 | Numéro d'urgence, région et email d'une structure, obligatoires ; email enregistré sans espaces autour (`utilisateur_email_sans_espaces_autour`) |
 | 0023 | Nom d'une structure : 100 caractères au plus, ni retour à la ligne ni caractère de contrôle (le nom est repris dans le SMS d'invitation) |
 | 0024 | Liens de réinitialisation du mot de passe (professionnels et administrateurs) dans la table des jetons d'email |
+| 0025 | Motif de fermeture de session `desactivation_affectation` : un accès retiré par un responsable ferme aussitôt les sessions ouvertes sur cette affectation |
 
 Une migration déjà appliquée ne change plus jamais : toute évolution passe par une nouvelle migration. Un test vérifie aussi qu'aucun caractère invisible ne s'y glisse ([`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs)).

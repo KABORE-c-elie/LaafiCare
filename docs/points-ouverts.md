@@ -119,6 +119,11 @@ Détail dans `web/docs/decisions.md` (branche `web`) :
 - **Avertissement sous le mot de passe professionnel** du formulaire de création de structure : « Choisissez un mot de passe différent de celui de votre compte patient ». C'est un conseil, pas une obligation : le serveur accepte un mot de passe identique (décision du porteur, 2026-10-21).
 - **Aide sous les champs email** (email de la structure, email professionnel) : « Sans accent ni espace » (adresses en ASCII seulement, décision du porteur, 2026-10-21).
 
+### À faire dans les applications (abandon et désactivation, 2026-10-21)
+
+- **Confirmation avant d'abandonner une demande de structure** (AB4) : l'abandon est définitif ; contrat dans `docs/api.md`, section 2.8.
+- **Confirmation avant de retirer l'accès d'un membre** : contrat dans `docs/api.md`, section 2.12.
+
 ---
 
 ## 3. Mise en production
@@ -172,6 +177,8 @@ En production, le serveur n'accepte que des connexions chiffrées (HTTPS) : jeto
 - **règles de suspension d'un contrat MUNASEB** : à demander à la MUNASEB (étape 5) ;
 - **valeurs des types d'actes manquants** : dentaire et prothèses, accouchement et consultations prénatales, chirurgie, frais funéraires, radiologie (étape 7, mémoire MUNASEB).
 
+**Outil local de l'équipe pour un compte compromis** (DS10, noté le 2026-10-21, à faire avant le pilote) : désactiver une affectation et forcer la déconnexion d'un compte (`version_jeton` augmentée, sessions fermées, liens de réinitialisation annulés), avec trace (opérateur authentifié, date, motif obligatoire), sur le modèle de `desactiver_totp` (J11). Aujourd'hui, seul un responsable de la structure peut retirer un accès (`docs/api.md`, section 2.12) ; si le responsable lui-même est compromis, l'équipe n'a pas d'outil.
+
 ### Éléments à découper en étapes
 
 **Noté le 2026-10-15.** La mise en production n'est pas encore découpée en étapes, comme le sont celles du backoffice (CLAUDE.md, section 12). Voici les éléments déjà connus, repris de ce document, à découper plus tard en étapes ordonnées, chacune présentée et validée avant d'être faite :
@@ -222,6 +229,7 @@ Un soignant a besoin du NIP pour ouvrir le dossier. Le patient peut être trop m
 - **Validation d'une seconde MUNASEB** : fait à l'étape 3.8 réduite (2026-10-21), 409 `munaseb_deja_validee`, contrôlé avant l'écriture, puis l'erreur de l'index `structure_une_seule_munaseb_validee` traduite en ce même code.
 - **Impasse : mot de passe oublié sans email vérifié** (noté le 2026-10-21, étape 3.12, R12). Un lien de réinitialisation ne part que vers un email vérifié (NIST SP 800-63B rév. 4, §4.2 : une adresse de récupération « SHALL be verified »). Un professionnel qui a oublié son mot de passe **et** n'a jamais vérifié son email ne peut plus rien faire : le renvoi du lien de vérification demande lui aussi le mot de passe. **Outil de l'équipe à prévoir** : vérification de l'identité (CNIB), puis, au choix, nouveau lien de vérification envoyé sans mot de passe, ou changement d'email (l'outil « changer l'email » de la section 2), avec une trace.
 - **Corriger et soumettre à nouveau une demande refusée** (retour en brouillon, CLAUDE.md §14) : hors de la 3.8 réduite (V10). En attendant, le responsable abandonne sa demande et en crée une nouvelle.
+- **Un agent qui quitte lui-même une structure** (DS4, 2026-10-21) : hors du MVP. Aujourd'hui, seul un responsable retire l'accès d'un agent ; un responsable peut retirer le sien s'il en reste un autre.
 - **Prévenir l'invitant** quand une invitation est acceptée ou refusée (I17, 2026-10-21) : rien pour l'instant, il le voit dans sa liste.
 - **Longueur du SMS d'invitation** : réglé le 2026-10-21 (options a et c du porteur). Le texte fixe est entièrement dans l'alphabet GSM 7 bits (3GPP TS 23.038), et le nom d'une structure est limité à 100 caractères (migration 0023). Avec un nom en GSM 7 bits, le SMS tient en 2 parties au plus (153 caractères par partie, TS 23.040 §9.2.3.24.1). **Reste, accepté** : un nom qui contient un caractère hors de cet alphabet (`ê`, `ç`, « », etc.) fait partir tout le SMS en UCS-2 (70 caractères seul, 67 par partie), donc en plus de parties.
 - **Avertissement des numéros d'autorisation en double** dans le détail administrateur (§14) : à faire avec les pièces justificatives (après le pilote, sauf pour la MUNASEB, qui n'en a pas).

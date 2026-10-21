@@ -199,6 +199,7 @@ Résumé :
 | POST | `/api/professionnels/email/renvoyer` | tout le monde, avec email et mot de passe professionnels | fonctionne (section 2.7) |
 | POST | `/api/structures` | jeton `laaficare:patient` | fonctionne (section 2.8) ; type `munaseb` seulement |
 | POST | `/api/structures/{id}/soumettre` | jeton `laaficare:patient` du créateur | fonctionne (section 2.8) |
+| POST | `/api/structures/{id}/abandonner` | jeton `laaficare:patient` du créateur | fonctionne (section 2.8) |
 | GET | `/api/structures/mes-demandes` | jeton `laaficare:patient` | fonctionne (section 2.8) |
 | GET | `/api/administrateurs/structures` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
 | GET | `/api/administrateurs/structures/{id}` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
@@ -206,6 +207,8 @@ Résumé :
 | POST | `/api/administrateurs/structures/{id}/refuser` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
 | POST, GET | `/api/professionnels/invitations` | jeton en exercice, responsable | fonctionne (section 2.10) |
 | POST | `/api/professionnels/invitations/{id}/annuler` | jeton en exercice, responsable | fonctionne (section 2.10) |
+| GET | `/api/professionnels/membres` | jeton en exercice, responsable | fonctionne (section 2.12) |
+| POST | `/api/professionnels/membres/{id}/desactiver` | jeton en exercice, responsable | fonctionne (section 2.12) |
 | GET | `/api/patients/invitations` | jeton `laaficare:patient` | fonctionne (section 2.10) |
 | POST | `/api/patients/invitations/{id}/accepter` | jeton `laaficare:patient` | fonctionne (section 2.10) |
 | POST | `/api/patients/invitations/{id}/refuser` | jeton `laaficare:patient` | fonctionne (section 2.10) |
@@ -894,6 +897,20 @@ Cycle : `brouillon` (création) → `en_attente` (soumission) → `validee` ou `
 | 409 | `transition_invalide` | la structure n'est pas en brouillon ; `statut_actuel` dans la réponse |
 | 500 | `erreur_interne` | panne |
 
+#### `POST /api/structures/{id}/abandonner`
+
+- **Appelant** : jeton patient du **créateur**. Pas de corps. **L'application demande une confirmation avant l'appel** : l'abandon est définitif.
+- Possible depuis `brouillon` ou `refusee` seulement. Une demande `en_attente` ne s'abandonne pas : l'équipe LaafiCare l'examine peut-être déjà.
+- **Effets** : statut `abandonnee` (état final) ; rien n'est effacé ; l'affectation `responsable` est désactivée ; la personne peut créer une nouvelle demande, avec son compte professionnel existant.
+- **Réponses** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 204 | — | demande abandonnée |
+| 404 | `structure_inconnue` | structure inexistante, ou créée par une autre personne (jamais distingués) |
+| 409 | `transition_invalide` | la structure n'est ni en brouillon ni refusée ; `statut_actuel` dans la réponse |
+| 500 | `erreur_interne` | panne |
+
 #### `GET /api/structures/mes-demandes`
 
 - **Appelant** : jeton patient. **Réponse 200** :
@@ -966,7 +983,7 @@ Réservé à l'équipe LaafiCare : jeton d'accès `laaficare:administrateur` (se
   - 204 : demande refusée. Si l'email du responsable est vérifié, il reçoit le même email minimal ; sinon, aucun email ne part.
   - 403, 404, 409 `transition_invalide` : comme pour la validation.
   - 422 `motif_vide`, `motif_trop_long`.
-- Après un refus, le responsable abandonne sa demande et en crée une nouvelle. Corriger et soumettre à nouveau la même demande viendra plus tard.
+- Après un refus, le responsable abandonne sa demande (section 2.8) et en crée une nouvelle. Corriger et soumettre à nouveau la même demande viendra plus tard.
 
 ### 2.10 Invitations (MUNASEB pour l'instant)
 
@@ -1072,6 +1089,28 @@ Les patients gardent la réinitialisation par SMS (section 2.2.4). Pour un compt
 - **aucune session n'est ouverte** : la personne se reconnecte ;
 - un email d'alerte « mot de passe modifié » part, avec la date (heure du Burkina Faso) et l'adresse de l'équipe à contacter.
 
+### 2.12 Membres d'une structure et désactivation d'un accès (MUNASEB pour l'instant)
+
+Jeton `laaficare:professionnel_en_exercice` sur une affectation **`responsable`** ; la structure est celle de l'affectation active, jamais un identifiant passé dans l'adresse. Avec une autre affectation : **403 `acces_refuse`**. Les routes `/api/professionnels/affectations` restent réservées aux affectations de la personne connectée.
+
+**`GET /api/professionnels/membres`** : réponse 200 `{"membres": [{"affectation_id", "nom", "prenom", "role", "date_creation"}]}`, les affectations **actives** de la structure, les plus anciennes d'abord. **Ni téléphone ni email.**
+
+**`POST /api/professionnels/membres/{id}/desactiver`** (`id` = `affectation_id` de la liste), sans corps :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 204 | — | accès retiré |
+| 403 | `acces_refuse` | l'affectation active n'est pas `responsable` |
+| 404 | `affectation_inconnue` | inexistante, ou d'une autre structure (jamais distingués) |
+| 409 | `transition_invalide` | déjà désactivée ; `statut_actuel` dans la réponse |
+| 409 | `dernier_responsable` | c'est le dernier responsable actif de la structure |
+| 500 | `erreur_interne` | panne |
+
+- Pour la MUNASEB : rôles `agent_assurance_munaseb` et `responsable`. Un responsable peut retirer **son propre accès** s'il reste un autre responsable actif.
+- **Effets** : l'affectation est désactivée (datée, avec l'auteur), **jamais supprimée** ; les sessions ouvertes **sur cette affectation** sont fermées tout de suite : le jeton d'accès de la personne est refusé (401 `jeton_invalide`), son renouvellement aussi. Son compte, ses autres affectations et ses autres sessions ne changent pas. Pour revenir, la personne reçoit une nouvelle invitation.
+- **Email** à la personne, après l'enregistrement, si son email est vérifié : « Votre accès à une structure LaafiCare a été retiré le JJ/MM/AAAA à HH:MM (heure du Burkina Faso). Si vous pensez que c'est une erreur, contactez le responsable de la structure ou l'équipe LaafiCare à {adresse}. » Un échec d'envoi n'annule rien.
+- L'application demande une confirmation avant l'appel.
+
 ---
 
 ## 3. Codes d'erreur : index
@@ -1080,9 +1119,10 @@ Les patients gardent la réinitialisation par SMS (section 2.2.4). Pour un compt
 |---|---|---|
 | `authentification_requise` | 401 | routes protégées |
 | `jeton_invalide` | 401 | routes protégées |
-| `acces_refuse` | 403 | routes protégées (routes MUNASEB : pas agent MUNASEB, affectation désactivée, établissement suspendu, licence expirée ; invitations : affectation qui n'est pas `responsable`) |
+| `acces_refuse` | 403 | routes protégées (routes MUNASEB : pas agent MUNASEB, affectation désactivée, établissement suspendu, licence expirée ; invitations et membres : affectation qui n'est pas `responsable`) |
 | `affectation_non_exercable` | 403 | activation d'une affectation |
-| `affectation_inconnue` | 404 | activation d'une affectation |
+| `affectation_inconnue` | 404 | activation et désactivation d'une affectation |
+| `dernier_responsable` | 409 | désactivation d'une affectation |
 | `json_invalide`, `donnees_invalides`, `content_type_invalide`, `corps_illisible` | 400, 422, 415 | routes avec corps |
 | `chemin_invalide` | 400 | routes avec `{id}` |
 | `parametre_invalide` | 400 | liste des remboursements, liste des structures (administrateur) |
@@ -1099,7 +1139,7 @@ Les patients gardent la réinitialisation par SMS (section 2.2.4). Pour un compt
 | `lien_invalide` | 400 | vérification de l'email, réinitialisation du mot de passe |
 | `type_non_disponible`, `localisation_hors_burkina`, `nom_trop_long`, `nom_invalide` | 422 | création de structure |
 | `demande_deja_en_cours`, `email_different`, `email_deja_utilise`, `second_facteur_requis` | 409 | création de structure |
-| `structure_inconnue` | 404 | soumission d'une structure, routes administrateur des structures |
+| `structure_inconnue` | 404 | soumission et abandon d'une structure, routes administrateur des structures |
 | `decision_sur_sa_propre_structure` | 403 | validation, refus d'une structure |
 | `email_responsable_non_verifie`, `munaseb_deja_validee`, `autorisation_deja_validee` | 409 | validation d'une structure |
 | `licence_invalide` | 422 | validation d'une structure |
@@ -1111,7 +1151,7 @@ Les patients gardent la réinitialisation par SMS (section 2.2.4). Pour un compt
 | `patient_inconnu`, `partenaire_inconnu` | 404 | simuler-acte |
 | `reference_acte_deja_utilisee` | 409 | simuler-acte |
 | `demande_inconnue` | 404 | détail, transitions |
-| `transition_invalide` | 409 | transitions, soumission, validation et refus d'une structure |
+| `transition_invalide` | 409 | transitions, soumission, abandon, validation et refus d'une structure, désactivation d'une affectation |
 | `motif_vide`, `motif_trop_long` | 422 | rejet d'une demande de remboursement, refus d'une structure |
 | `erreur_interne` | 500 | toutes |
 
@@ -1138,7 +1178,8 @@ Le module existe déjà côté serveur ; les routes manquent.
 ### 4.3 Structures et pièces justificatives (étapes 3.7 et 3.8)
 
 - ✅ Création, soumission et suivi, **type MUNASEB seulement** : **codés**, section 2.8 ; vérification de l'email, section 2.7.
-- Restent : modification du brouillon, abandon, autres types de structure.
+- ✅ Abandon : **codé**, section 2.8.
+- Restent : modification du brouillon, autres types de structure.
 - Téléversement d'une pièce, **une requête par fichier** (réseau faible) : PDF, JPEG ou PNG, 5 Mo au plus.
 - ✅ Côté administrateur : liste, détail (avertissements MUNASEB), validation (licence), refus (motif) : **codés**, section 2.9.
 - Restent côté administrateur : avertissement des numéros d'autorisation en double, consultation et téléchargement des pièces, suspension et réactivation (après le pilote).
@@ -1154,7 +1195,8 @@ Le module existe déjà côté serveur ; les routes manquent.
 
 ### 4.6 Désactivation d'une affectation et bascule (étape 3.11)
 
-- Désactivation d'une affectation (jamais d'un compte, jamais de suppression).
+- ✅ Désactivation d'une affectation par un responsable, **codée pour la MUNASEB**, section 2.12.
+- Restent : un agent qui quitte lui-même une structure ; les autres rôles (chef de service, major) ; la bascule.
 - Bascule professionnel → patient sans mot de passe ; patient → professionnel avec le mot de passe professionnel.
 
 ### 4.7 Contrat MUNASEB côté agent (étape 5)

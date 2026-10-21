@@ -21,6 +21,7 @@ pub mod email;
 pub mod invitation;
 pub mod jeton_email;
 pub mod jwt;
+pub mod membres;
 pub mod mot_de_passe;
 pub mod nip;
 pub mod notification;

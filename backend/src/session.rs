@@ -89,6 +89,9 @@ pub enum MotifRevocation {
     EmailNonVerifie,
     /// Second facteur retiré par l'équipe (`desactiver_totp`, migration 0020).
     DesactivationTotp,
+    /// Affectation désactivée par un responsable (`membres.rs`, migration
+    /// 0025) : seules les sessions de cette affectation sont fermées.
+    DesactivationAffectation,
 }
 
 impl MotifRevocation {
@@ -102,6 +105,7 @@ impl MotifRevocation {
             MotifRevocation::DesactivationCompte => "desactivation_compte",
             MotifRevocation::EmailNonVerifie => "email_non_verifie",
             MotifRevocation::DesactivationTotp => "desactivation_totp",
+            MotifRevocation::DesactivationAffectation => "desactivation_affectation",
         }
     }
 }

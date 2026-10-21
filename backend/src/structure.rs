@@ -392,6 +392,75 @@ pub async fn soumettre(pool: &PgPool, patient_compte_id: Uuid, structure_id: Uui
 }
 
 // ---------------------------------------------------------------------
+// Abandon (M5 ; décisions AB1 à AB3 du porteur, 2026-10-21)
+// ---------------------------------------------------------------------
+
+#[derive(Debug, thiserror::Error)]
+pub enum ErreurAbandon {
+    /// Inexistante, ou créée par une autre personne : jamais distinguées.
+    #[error("Structure inconnue.")]
+    StructureInconnue,
+    #[error("Cette demande ne peut pas être abandonnée dans son état actuel.")]
+    TransitionInvalide { statut_actuel: String },
+    #[error("erreur interne : {0}")]
+    Interne(&'static str),
+}
+
+/// `POST /api/structures/{id}/abandonner` : `brouillon` ou `refusee` →
+/// `abandonnee` (M5, état final), par le créateur seulement (son compte
+/// patient, AB1, AB2). Rien n'est effacé, pièces comprises ; la structure
+/// sort de la limite « une non validée par personne » (index partiel de la
+/// 0012). Une demande `en_attente` n'est pas abandonnable : l'équipe
+/// LaafiCare l'examine peut-être déjà.
+///
+/// AB3 : l'affectation `responsable` du créateur (et toute autre restée
+/// active) est close dans la même transaction, datée et attribuée au compte
+/// professionnel du créateur ; sinon elle resterait active sur une
+/// structure morte. Ordre des verrous (§12) : structure, puis affectations.
+pub async fn abandonner(pool: &PgPool, patient_compte_id: Uuid, structure_id: Uuid) -> Result<(), ErreurAbandon> {
+    let interne = |etape: &'static str, e: sqlx::Error| {
+        tracing::error!(etape, nature = %nature_sqlx(&e), "abandon : erreur interne");
+        ErreurAbandon::Interne(etape)
+    };
+    let mut tx = pool.begin().await.map_err(|e| interne("transaction", e))?;
+    let ligne: Option<(String, Uuid)> = sqlx::query_as(
+        "SELECT s.statut, s.createur_compte_id \
+         FROM structure s \
+         JOIN compte pro ON pro.id = s.createur_compte_id \
+         JOIN compte pat ON pat.utilisateur_id = pro.utilisateur_id AND pat.type_compte = 'patient' \
+         WHERE s.id = $1 AND pat.id = $2 \
+         FOR UPDATE OF s",
+    )
+    .bind(structure_id)
+    .bind(patient_compte_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| interne("lecture de la structure", e))?;
+    let (statut, createur) = ligne.ok_or(ErreurAbandon::StructureInconnue)?;
+    if statut != "brouillon" && statut != "refusee" {
+        return Err(ErreurAbandon::TransitionInvalide { statut_actuel: statut });
+    }
+    sqlx::query("UPDATE structure SET statut = 'abandonnee' WHERE id = $1")
+        .bind(structure_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| interne("abandon", e))?;
+    // Une structure jamais validée n'a pu inviter personne : seules les
+    // affectations `responsable` existent, sans session d'exercice possible
+    // (structure non validée) ; aucune session à fermer.
+    sqlx::query(
+        "UPDATE affectation SET statut = 'desactivee', desactivee_le = now(), desactivee_par_compte_id = $2 \
+         WHERE structure_id = $1 AND statut = 'active'",
+    )
+    .bind(structure_id)
+    .bind(createur)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| interne("clôture des affectations", e))?;
+    tx.commit().await.map_err(|e| interne("validation de la transaction", e))
+}
+
+// ---------------------------------------------------------------------
 // Suivi (E10)
 // ---------------------------------------------------------------------
 
@@ -812,5 +881,73 @@ mod tests {
         let suivi = mes_demandes(&pool, patient_id).await.unwrap();
         assert_eq!(suivi.demandes[0].motif_refus.as_deref(), Some("Informations incomplètes (fictif)"));
         assert_eq!(serde_json::to_value(&suivi.demandes[0]).unwrap()["type"], "munaseb");
+    }
+
+    async fn statut_structure(pool: &PgPool, structure_id: Uuid) -> String {
+        sqlx::query_scalar("SELECT statut FROM structure WHERE id = $1").bind(structure_id).fetch_one(pool).await.unwrap()
+    }
+
+    /// AB1 à AB3 : abandon d'un brouillon par son créateur ; l'affectation
+    /// `responsable` est close (datée, attribuée au compte professionnel du
+    /// créateur), la place se libère ; un second abandon est refusé.
+    #[sqlx::test]
+    #[ignore]
+    async fn abandon_d_un_brouillon(pool: PgPool) {
+        let emails = EmailsRecus::default();
+        let createur = patient(&pool, "+22670150011", None).await;
+        let autre = patient(&pool, "+22670150012", None).await;
+        let creee = creer(&pool, &emails, URL, createur, &saisie(Some("abandon@example.org"), PRO)).await.unwrap();
+
+        assert!(matches!(abandonner(&pool, autre, creee.structure_id).await, Err(ErreurAbandon::StructureInconnue)));
+        assert!(matches!(abandonner(&pool, createur, Uuid::nil()).await, Err(ErreurAbandon::StructureInconnue)));
+        assert_eq!(statut_structure(&pool, creee.structure_id).await, "brouillon");
+
+        abandonner(&pool, createur, creee.structure_id).await.unwrap();
+        assert_eq!(statut_structure(&pool, creee.structure_id).await, "abandonnee");
+        let (statut, par, pro): (String, Option<Uuid>, Uuid) = sqlx::query_as(
+            "SELECT a.statut, a.desactivee_par_compte_id, s.createur_compte_id \
+             FROM affectation a JOIN structure s ON s.id = a.structure_id WHERE a.structure_id = $1",
+        )
+        .bind(creee.structure_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!((statut.as_str(), par), ("desactivee", Some(pro)));
+
+        assert!(matches!(
+            abandonner(&pool, createur, creee.structure_id).await,
+            Err(ErreurAbandon::TransitionInvalide { ref statut_actuel }) if statut_actuel == "abandonnee"
+        ));
+        // La place est libre : une nouvelle demande est acceptée.
+        creer(&pool, &emails, URL, createur, &saisie(None, PRO)).await.unwrap();
+    }
+
+    /// AB2 : une demande refusée s'abandonne ; une demande en attente ou
+    /// validée, non.
+    #[sqlx::test]
+    #[ignore]
+    async fn abandon_selon_le_statut(pool: PgPool) {
+        let emails = EmailsRecus::default();
+        let createur = patient(&pool, "+22670150013", None).await;
+        let creee = creer(&pool, &emails, URL, createur, &saisie(Some("statuts@example.org"), PRO)).await.unwrap();
+        for statut in ["en_attente", "validee"] {
+            sqlx::query("UPDATE structure SET statut = $2 WHERE id = $1")
+                .bind(creee.structure_id)
+                .bind(statut)
+                .execute(&pool)
+                .await
+                .unwrap();
+            assert!(matches!(
+                abandonner(&pool, createur, creee.structure_id).await,
+                Err(ErreurAbandon::TransitionInvalide { ref statut_actuel }) if statut_actuel == statut
+            ));
+        }
+        sqlx::query("UPDATE structure SET statut = 'refusee' WHERE id = $1")
+            .bind(creee.structure_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        abandonner(&pool, createur, creee.structure_id).await.unwrap();
+        assert_eq!(statut_structure(&pool, creee.structure_id).await, "abandonnee");
     }
 }
