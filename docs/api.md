@@ -204,6 +204,11 @@ Résumé :
 | GET | `/api/administrateurs/structures/{id}` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
 | POST | `/api/administrateurs/structures/{id}/valider` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
 | POST | `/api/administrateurs/structures/{id}/refuser` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
+| POST, GET | `/api/professionnels/invitations` | jeton en exercice, responsable | fonctionne (section 2.10) |
+| POST | `/api/professionnels/invitations/{id}/annuler` | jeton en exercice, responsable | fonctionne (section 2.10) |
+| GET | `/api/patients/invitations` | jeton `laaficare:patient` | fonctionne (section 2.10) |
+| POST | `/api/patients/invitations/{id}/accepter` | jeton `laaficare:patient` | fonctionne (section 2.10) |
+| POST | `/api/patients/invitations/{id}/refuser` | jeton `laaficare:patient` | fonctionne (section 2.10) |
 | POST | `/api/administrateurs/connexion` | tout le monde | fonctionne (section 2.5) ; testable après l'outil du premier administrateur |
 | POST | `/api/administrateurs/connexion/second-facteur` | jeton intermédiaire `laaficare:second_facteur_administrateur` | fonctionne (section 2.5) |
 | POST | `/api/administrateurs/reenrolement/commencer` | jeton `laaficare:reenrolement_administrateur` | fonctionne (section 2.5) |
@@ -957,6 +962,75 @@ Réservé à l'équipe LaafiCare : jeton d'accès `laaficare:administrateur` (se
   - 422 `motif_vide`, `motif_trop_long`.
 - Après un refus, le responsable abandonne sa demande et en crée une nouvelle. Corriger et soumettre à nouveau la même demande viendra plus tard.
 
+### 2.10 Invitations (MUNASEB pour l'instant)
+
+Le **responsable** d'une structure validée invite au numéro de téléphone. La personne répond depuis son **compte patient**. Une invitation vaut **7 jours**. Une invitation expirée se lit `expiree` et n'a plus aucune suite.
+
+- **Ce que voit l'invitant** : jamais si un compte existe pour le numéro. La réponse et le SMS sont les mêmes dans tous les cas, et aucun nom n'apparaît avant l'acceptation.
+- **Le SMS**, sans lien ni code : « LaafiCare : vous êtes invité(e) à rejoindre « {structure} » comme {rôle}. Ouvrez l'application LaafiCare avec ce numéro (ou créez votre compte) pour répondre avant le {JJ/MM/AAAA}. LaafiCare ne vous demandera jamais votre mot de passe. »
+- **En développement**, le SMS s'affiche dans le terminal du serveur.
+- **Pour la MUNASEB**, deux rôles : `agent_assurance_munaseb` et `responsable`.
+
+#### Côté responsable : jeton `laaficare:professionnel_en_exercice` sur une affectation `responsable`
+
+La structure est celle de l'affectation active, jamais un identifiant passé dans l'adresse. Avec une autre affectation, la réponse est **403 `acces_refuse`**.
+
+**`POST /api/professionnels/invitations`**, corps `{"telephone": "70 00 00 02", "role": "agent_assurance_munaseb"}` :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 201 | — | `{"invitation_id", "expire_le"}`, **la même réponse que le numéro ait un compte ou non** |
+| 409 | `invitation_deja_en_attente` | une invitation en attente existe déjà pour ce numéro et ce rôle (l'annuler pour en refaire une) |
+| 409 | `trop_d_invitations_en_attente` | 50 invitations en attente dans la structure |
+| 409 | `structure_non_validee` | la structure n'est plus validée |
+| 422 | `telephone_invalide` | numéro mal formé (section 1.6) |
+| 422 | `role_non_permis` | rôle impossible pour ce type de structure |
+| 422 | `auto_invitation` | le responsable invite son propre numéro (séparation des tâches, NIST SP 800-53 AC-5) |
+| 429 | `trop_de_demandes` | 20 invitations créées par la structure en 24 heures |
+
+Au-delà de **3 SMS d'invitation par numéro en 24 heures**, toutes structures confondues, l'invitation est enregistrée et la réponse est la même, mais **aucun SMS ne part**. La personne la voit quand même dans son application.
+
+**`GET /api/professionnels/invitations?limite=&avant=`** :
+- réponse 200 `{"invitations": [{"id", "telephone", "role", "statut", "date_creation", "expire_le", "date_reponse", "accepte_par_nom", "accepte_par_prenom"}], "suivant"}` ;
+- les plus récentes d'abord ; `avant` = `suivant` de la page précédente ; `limite` de 1 à 100 (50 par défaut) ;
+- `statut` vaut `en_attente`, `expiree`, `acceptee`, `refusee` ou `annulee` ;
+- le nom et le prénom n'apparaissent qu'après l'acceptation.
+
+**`POST /api/professionnels/invitations/{id}/annuler`**, par tout responsable de la structure :
+- 204 ;
+- 404 `invitation_inconnue` ;
+- 409 `invitation_expiree` ;
+- 409 `transition_invalide`, avec `statut_actuel`.
+
+#### Côté invité : jeton `laaficare:patient`
+
+Seules les invitations adressées au **numéro du compte patient** existent pour lui. Toute autre donne **404 `invitation_inconnue`**.
+
+**`GET /api/patients/invitations`** : réponse 200 `{"invitations": [{"id", "structure_nom", "structure_type", "role", "expire_le", "invitant_nom", "invitant_prenom"}]}`. Seules celles qui sont en attente, non expirées, dans une structure validée y figurent. Le nom de l'invitant permet de juger si l'invitation est légitime.
+
+**`POST /api/patients/invitations/{id}/accepter`** :
+- **Sans compte professionnel** : `{"email_professionnel": "…", "mot_de_passe_professionnel": "…"}`. Le compte est créé avec **les mêmes règles qu'à la création d'une structure** (section 2.8), et un lien de vérification est envoyé. **L'affectation n'est exerçable qu'une fois l'email vérifié.**
+- **Avec un compte professionnel** : `{"mot_de_passe_professionnel": "…"}`. Le mot de passe est compté dans le verrouillage.
+- **Réponses** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 200 | — | `{"affectation_id", "email_a_verifier"}` |
+| 401 | `identifiants_invalides` | mot de passe professionnel faux, compte verrouillé ou désactivé (« Mot de passe professionnel incorrect. ») ; **le jeton patient reste valable** |
+| 404 | `invitation_inconnue` | — |
+| 409 | `invitation_expiree`, `transition_invalide` | plus en attente |
+| 409 | `structure_non_validee` | la structure n'est plus validée |
+| 409 | `affectation_deja_active` | la personne a déjà ce rôle dans cette structure |
+| 409 | `email_different`, `email_deja_utilise`, `second_facteur_requis` | comme à la création d'une structure |
+| 409 | `requete_simultanee` | une autre requête de la même personne vient de créer son compte professionnel : réessayer |
+| 422 | `donnees_invalides`, `mot_de_passe_non_conforme` | comme à la création d'une structure |
+
+**`POST /api/patients/invitations/{id}/refuser`** :
+- 204 ;
+- 404 `invitation_inconnue` ;
+- 409 `invitation_expiree` ;
+- 409 `transition_invalide`.
+
 ---
 
 ## 3. Codes d'erreur : index
@@ -965,16 +1039,16 @@ Réservé à l'équipe LaafiCare : jeton d'accès `laaficare:administrateur` (se
 |---|---|---|
 | `authentification_requise` | 401 | routes protégées |
 | `jeton_invalide` | 401 | routes protégées |
-| `acces_refuse` | 403 | routes protégées (routes MUNASEB : pas agent MUNASEB, affectation désactivée, établissement suspendu, licence expirée) |
+| `acces_refuse` | 403 | routes protégées (routes MUNASEB : pas agent MUNASEB, affectation désactivée, établissement suspendu, licence expirée ; invitations : affectation qui n'est pas `responsable`) |
 | `affectation_non_exercable` | 403 | activation d'une affectation |
 | `affectation_inconnue` | 404 | activation d'une affectation |
 | `json_invalide`, `donnees_invalides`, `content_type_invalide`, `corps_illisible` | 400, 422, 415 | routes avec corps |
 | `chemin_invalide` | 400 | routes avec `{id}` |
 | `parametre_invalide` | 400 | liste des remboursements, liste des structures (administrateur) |
-| `telephone_invalide` | 422 | routes patient |
+| `telephone_invalide` | 422 | routes patient, création d'une invitation |
 | `telephone_service_invalide`, `telephone_urgence_invalide` | 422 | création de structure |
 | `code_invalide` | 401 | inscription, réinitialisation, second facteur (professionnel, administrateur), confirmation du réenrôlement |
-| `trop_de_demandes` | 429 | demande de code et renvoi du lien de vérification (avec `Retry-After`), inscription et réinitialisation (sans) |
+| `trop_de_demandes` | 429 | demande de code et renvoi du lien de vérification (avec `Retry-After`), inscription, réinitialisation et création d'une invitation (sans) |
 | `telephone_deja_utilise` | 409 | inscription |
 | `telephone_inconnu` | 404 | réinitialisation |
 | `mot_de_passe_non_conforme` | 422 | inscription, réinitialisation, création de structure |
@@ -987,6 +1061,10 @@ Réservé à l'équipe LaafiCare : jeton d'accès `laaficare:administrateur` (se
 | `decision_sur_sa_propre_structure` | 403 | validation, refus d'une structure |
 | `email_responsable_non_verifie`, `munaseb_deja_validee`, `autorisation_deja_validee` | 409 | validation d'une structure |
 | `licence_invalide` | 422 | validation d'une structure |
+| `role_non_permis`, `auto_invitation` | 422 | création d'une invitation |
+| `invitation_deja_en_attente`, `trop_d_invitations_en_attente`, `structure_non_validee` | 409 | invitations |
+| `invitation_inconnue` | 404 | invitations |
+| `invitation_expiree`, `affectation_deja_active`, `requete_simultanee` | 409 | invitations |
 | `montant_invalide`, `nip_invalide`, `partenaire_suspendu`, `non_couvert`, `en_carence` | 422 | simuler-acte |
 | `patient_inconnu`, `partenaire_inconnu` | 404 | simuler-acte |
 | `reference_acte_deja_utilisee` | 409 | simuler-acte |
@@ -1029,9 +1107,8 @@ Le module existe déjà côté serveur ; les routes manquent.
 
 ### 4.5 Invitations (étape 3.10)
 
-- Création d'une invitation à un numéro de téléphone (réponse toujours « invitation envoyée »), annulation, liste.
-- Côté invité, depuis son compte patient : liste des invitations reçues, acceptation (création du compte professionnel la première fois), refus.
-- Validité 7 jours.
+- ✅ **Codées pour la MUNASEB**, section 2.10 : création, liste, annulation ; côté invité, liste, acceptation, refus ; expiration après 7 jours.
+- Restent : les autres rôles et types de structure ; les invitations d'administrateurs (après le pilote).
 
 ### 4.6 Désactivation d'une affectation et bascule (étape 3.11)
 

@@ -341,6 +341,15 @@ Champ du modèle `Patient` : `lieuNaissance` (obligatoire à l'inscription, avec
 - `session::renouveler` verrouille **le jeton de renouvellement avant la session** (le jeton présenté, puis son successeur, puis la session) ; il lit le compte sans le verrouiller.
 Aucun cycle n'est possible : `renouveler` ne verrouille jamais le compte, et `fermer_toutes` ne verrouille jamais un jeton. Testé par `reinitialisation_et_deconnexion_partout_simultanees` et `renouvellements_simultanes`.
 
+**Ordre des verrous des structures et des invitations (règle permanente, décision du porteur, 2026-10-21, étapes 3.8 et 3.10)** : **comptes** (patient, puis professionnel) → **structure** → **invitation** → affectation créée. Il prolonge « le compte avant le reste » ci-dessus.
+- Création d'une invitation : la structure, puis l'insertion de l'invitation.
+- Annulation et refus : la structure, puis l'invitation.
+- Acceptation : le compte patient, puis le compte professionnel s'il est créé (`compte_professionnel::ecrire`), puis la structure, puis l'invitation, puis l'insertion de l'affectation.
+- Décisions sur une structure (3.8) : la structure seule.
+- La liste ne verrouille rien.
+
+Aucune opération ne prend une invitation avant sa structure, ni un compte après une structure : aucun cycle n'est possible. Testé par `acceptation_et_annulation_simultanees` (une seule réussit, sans interblocage).
+
 **Exigence pour la production (2026-09-25)** : l'application doit se connecter avec un **rôle PostgreSQL sans droits d'administration** (ni superuser, ni propriétaire des tables). Sinon, le trigger qui rend `historique_statut_demande` non modifiable (migration 0010) peut être désactivé, et l'historique perd sa garantie. En développement, l'utilisateur `laaficare` du docker-compose est superuser : la protection n'y vaut que contre les erreurs, pas contre un administrateur.
 
 **Tests et environnement (2026-09-25)** :

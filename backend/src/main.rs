@@ -1,6 +1,7 @@
 mod erreur_api;
 mod extracteur_jwt;
 mod routes_administrateur;
+mod routes_invitation;
 mod routes_patient;
 mod routes_remboursement_munaseb;
 mod routes_professionnel;
@@ -209,6 +210,14 @@ async fn main() {
         .route("/api/administrateurs/structures/{id}", get(routes_administrateur::detail_structure))
         .route("/api/administrateurs/structures/{id}/valider", post(routes_administrateur::valider_structure))
         .route("/api/administrateurs/structures/{id}/refuser", post(routes_administrateur::refuser_structure))
+        .route(
+            "/api/professionnels/invitations",
+            get(routes_invitation::lister).post(routes_invitation::creer),
+        )
+        .route("/api/professionnels/invitations/{id}/annuler", post(routes_invitation::annuler))
+        .route("/api/patients/invitations", get(routes_invitation::lister_recues))
+        .route("/api/patients/invitations/{id}/accepter", post(routes_invitation::accepter))
+        .route("/api/patients/invitations/{id}/refuser", post(routes_invitation::refuser))
         .route("/api/structures", post(routes_structure::creer))
         .route("/api/structures/mes-demandes", get(routes_structure::mes_demandes))
         .route("/api/structures/{id}/soumettre", post(routes_structure::soumettre))
