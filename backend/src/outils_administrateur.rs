@@ -19,6 +19,7 @@ use sqlx::types::Uuid;
 use sqlx::{PgConnection, PgPool};
 
 use crate::adresse_email;
+use crate::alerte_securite::{self, Evenement};
 use crate::auth_administrateur::FENETRE_REENROLEMENT_MINUTES;
 use crate::auth_professionnel::{self, ErreurAuthProfessionnel};
 use crate::config::CleTotp;
@@ -589,6 +590,7 @@ pub struct Desactivation {
 pub async fn desactiver_totp(
     pool: &PgPool,
     email_sender: &dyn EmailSender,
+    contact_securite: &str,
     operateur: Operateur,
     cible: &CompteCible,
     motif: &str,
@@ -656,27 +658,14 @@ pub async fn desactiver_totp(
         false
     };
 
-    let email: Option<String> =
-        sqlx::query_scalar("SELECT u.email FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id WHERE c.id = $1")
-            .bind(cible.compte_id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| interne_sqlx("lecture de l'email", &e))?;
     tx.commit().await.map_err(|e| interne_sqlx("validation de la transaction", &e))?;
 
-    // Texte minimal : ni motif, ni nom de l'opérateur.
-    let personne_prevenue = match email {
-        Some(adresse) => email_sender
-            .envoyer(
-                &adresse,
-                "LaafiCare : second facteur désactivé",
-                "Le second facteur (application d'authentification) de l'un de vos comptes LaafiCare \
-                 a été désactivé par l'équipe LaafiCare, à la suite d'une demande vérifiée.\n\n\
-                 Si vous n'êtes pas à l'origine de cette demande, contactez l'équipe LaafiCare immédiatement.",
-            )
-            .is_ok(),
-        None => false,
-    };
+    // Après la validation en base (B8 a ; D4 du 2026-10-21) : texte commun,
+    // daté de la trace, avec le contact de l'équipe (NIST SP 800-63B rév. 4
+    // §4.6) ; ni motif, ni nom de l'opérateur.
+    let personne_prevenue =
+        alerte_securite::prevenir(pool, email_sender, contact_securite, cible.compte_id, Evenement::SecondFacteurDesactive)
+            .await;
     Ok(Desactivation { fenetre_ouverte, personne_prevenue })
 }
 
@@ -693,6 +682,7 @@ mod tests {
 
     const PATIENT: &str = "Patient#2026";
     const ADMIN: &str = "Admin#2026x";
+    const CONTACT: &str = "securite@example.org";
 
     /// Garde les emails envoyés, pour y lire le jeton.
     #[derive(Default)]
@@ -781,9 +771,18 @@ mod tests {
             .with_secret(totp_rs::Secret::try_from_base32(&activation.cle_base32).unwrap())
             .build()
             .unwrap();
-        auth_administrateur::confirmer_reenrolement(pool, &cle(), compte_id, &generateur.generate(maintenant()).to_string())
-            .await
-            .unwrap();
+        // Alerte de l'enregistrement gardée à part : ces tests ne comptent
+        // que les emails des outils.
+        auth_administrateur::confirmer_reenrolement(
+            pool,
+            &cle(),
+            &crate::email::EmailsRecus::default(),
+            CONTACT,
+            compte_id,
+            &generateur.generate(maintenant()).to_string(),
+        )
+        .await
+        .unwrap();
         generateur.generate(maintenant() + 30).to_string()
     }
 
@@ -1115,9 +1114,24 @@ mod tests {
 
         let cible = trouver_compte(&pool, TypeCompte::Administrateur, " CIBLE@example.org ").await.unwrap();
         assert_eq!(cible.compte_id, cible_id);
-        let resultat = desactiver_totp(&pool, &emails, op, &cible, "Téléphone perdu", true).await.unwrap();
+        let resultat = desactiver_totp(&pool, &emails, CONTACT, op, &cible, "Téléphone perdu", true).await.unwrap();
         assert!(resultat.fenetre_ouverte && resultat.personne_prevenue);
         assert_eq!(emails.nombre(), emails_avant + 1);
+        // D4 : alerte commune, datée de la trace, avec le contact ; ni motif
+        // ni opérateur.
+        let (destinataire, corps) = emails.0.lock().unwrap().last().unwrap().clone();
+        assert_eq!(destinataire, "cible@example.org");
+        let quand: String = sqlx::query_scalar(
+            "SELECT to_char(date_desactivation AT TIME ZONE 'Africa/Ouagadougou', 'DD/MM/YYYY \"à\" HH24:MI') \
+             FROM desactivation_totp WHERE compte_id = $1",
+        )
+        .bind(cible_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(corps.contains(&format!("le {quand} (heure du Burkina Faso)")), "{corps}");
+        assert!(corps.contains(CONTACT), "{corps}");
+        assert!(!corps.contains("Téléphone perdu") && !corps.contains("operateur@example.org"), "{corps}");
 
         assert_eq!(compter(&pool, "SELECT count(*) FROM second_facteur_totp WHERE compte_id = $1", cible_id).await, 0);
         let codes_restants: i64 = sqlx::query_scalar("SELECT count(*) FROM code_secours").fetch_one(&pool).await.unwrap();
@@ -1134,7 +1148,7 @@ mod tests {
         );
         // Plus rien à désactiver.
         assert!(matches!(
-            desactiver_totp(&pool, &emails, op, &cible, "encore", true).await,
+            desactiver_totp(&pool, &emails, CONTACT, op, &cible, "encore", true).await,
             Err(ErreurOutil::AucunSecondFacteur)
         ));
     }
@@ -1157,12 +1171,12 @@ mod tests {
             .unwrap();
 
         let cible = trouver_compte(&pool, TypeCompte::Patient, "70 14 00 17").await.unwrap();
-        assert!(matches!(desactiver_totp(&pool, &emails, op, &cible, "  ", true).await, Err(ErreurOutil::MotifVide)));
+        assert!(matches!(desactiver_totp(&pool, &emails, CONTACT, op, &cible, "  ", true).await, Err(ErreurOutil::MotifVide)));
         assert!(matches!(
-            desactiver_totp(&pool, &emails, op, &cible, "Téléphone perdu", false).await,
+            desactiver_totp(&pool, &emails, CONTACT, op, &cible, "Téléphone perdu", false).await,
             Err(ErreurOutil::CnibNonVerifiee)
         ));
-        let resultat = desactiver_totp(&pool, &emails, op, &cible, "Téléphone perdu", true).await.unwrap();
+        let resultat = desactiver_totp(&pool, &emails, CONTACT, op, &cible, "Téléphone perdu", true).await.unwrap();
         assert!(!resultat.fenetre_ouverte);
         assert!(!resultat.personne_prevenue, "patient sans email");
 
@@ -1170,7 +1184,7 @@ mod tests {
         // administrateur ; rien n'est modifié.
         let soi = trouver_compte(&pool, TypeCompte::Administrateur, "operateur@example.org").await.unwrap();
         assert!(matches!(
-            desactiver_totp(&pool, &emails, op, &soi, "Essai", true).await,
+            desactiver_totp(&pool, &emails, CONTACT, op, &soi, "Essai", true).await,
             Err(ErreurOutil::PropreCompte)
         ));
         assert_eq!(compter(&pool, "SELECT count(*) FROM second_facteur_totp WHERE compte_id = $1 AND statut = 'actif'", op.compte_id()).await, 1);

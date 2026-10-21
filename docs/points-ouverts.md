@@ -55,11 +55,13 @@ Réglé par l'option 3, décidée le 2026-10-12 : jetons d'accès de 15 minutes,
 
 **Noté le 2026-10-15 (étape 3.6.4, migration 0019).** Seul un outil local de l'équipe doit pouvoir ouvrir la fenêtre de 10 minutes pendant laquelle un administrateur sans second facteur en enregistre un nouveau (`compte.reenrolement_autorise_jusqu_au`). Aujourd'hui, c'est garanti **par le code seulement** : le serveur et les outils utilisent le même compte PostgreSQL. **En production**, un compte PostgreSQL séparé pour les outils locaux, **seul autorisé à écrire cette colonne** (droits par colonne de PostgreSQL), garantirait par la base qu'aucune route ne peut ouvrir une fenêtre. À traiter avec le compte PostgreSQL sans droits d'administration (section 3).
 
-### Prévenir l'administrateur quand son second facteur change (étape 3.7)
+### Prévenir l'administrateur quand son second facteur change
 
 **Exigence notée le 2026-10-15.** Quand un second facteur est enregistré ou désactivé sur un compte administrateur, la personne doit en être prévenue **par email**, par un autre canal que l'opération elle-même. Sources : NIST SP 800-63B rév. 4, §4.1.2.1 (« When an authenticator is added, the CSP SHALL notify the subscriber via a mechanism independent of the transaction binding the new authenticator ») et §4.2.3 (« account recovery SHALL cause a notification to be sent to the subscriber ») ; OWASP ASVS 5.0, 6.3.7.
 - **Fait pour la désactivation** (2026-10-18, étape 3.6.5) : `desactiver_totp` prévient la personne à son email, si elle en a un.
-- **Reste pour l'enregistrement** : la confirmation du réenrôlement (`POST /api/administrateurs/reenrolement/confirmer`, étape 3.6.4) ne prévient pas encore la personne. Commit séparé juste après la 3.7 réduite, sur le modèle de la notification de `desactiver_totp` (NIST SP 800-63B rév. 4 §4.1.2.1, OWASP ASVS 5.0 6.3.7).
+- **Fait pour l'enregistrement** (2026-10-21) : la confirmation du réenrôlement prévient la personne par email. Les deux alertes passent par `alerte_securite.rs` et donnent l'adresse de l'équipe (`CONTACT_SECURITE`), exigée par NIST §4.6 (« including contact information »).
+- **Reste, avant le pilote** : créer une **vraie adresse email de l'équipe, lue régulièrement**, pour `CONTACT_SECURITE` (décision du porteur, 2026-10-21). En production, les adresses d'exemple de la RFC 2606 y sont refusées.
+- **Reste, pour la production** : NIST SP 800-63B rév. 4 §4.6 exige d'accepter **au moins deux adresses de notification** par compte (« CSPs SHALL support at least two notification addresses per subscriber account »). Aujourd'hui, seul l'email est utilisé, le SMS restant réservé à l'OTP. À choisir : un SMS de sécurité, ou une seconde adresse email.
 
 ### Essai manuel à faire : parcours du premier administrateur (étape 3.6.5)
 

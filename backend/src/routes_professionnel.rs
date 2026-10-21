@@ -329,6 +329,7 @@ mod tests {
             cle_totp: Arc::new(laaficare_backend::config::CleTotp::depuis_octets([7; 32])),
             email: Arc::new(laaficare_backend::email::EmailSenderConsole),
             url_application_web: Arc::from("http://localhost:4200"),
+            contact_securite: Arc::from("securite@example.org"),
         };
         let utilisateur_id: Uuid = sqlx::query_scalar(
             "INSERT INTO utilisateur (telephone, email) VALUES ('+22670060001', 'pro.route@example.org') RETURNING id",
@@ -396,6 +397,7 @@ mod tests {
             cle_totp: Arc::new(CleTotp::depuis_octets([7; 32])),
             email: Arc::new(laaficare_backend::email::EmailSenderConsole),
             url_application_web: Arc::from("http://localhost:4200"),
+            contact_securite: Arc::from("securite@example.org"),
         };
         let utilisateur_id: Uuid = sqlx::query_scalar(
             "INSERT INTO utilisateur (telephone, email) VALUES ('+22670060002', 'pro.sf.route@example.org') RETURNING id",

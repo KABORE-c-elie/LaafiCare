@@ -170,6 +170,7 @@ Changer d'établissement ferme la session en cours et en ouvre une nouvelle, **q
 - les mots de passe, les codes et les jetons se tapent **sans s'afficher** (crate `rpassword`), puis sont effacés de la mémoire ;
 - un nouvel administrateur **choisit lui-même son mot de passe**, différent de celui de son compte patient ; il enregistre lui-même son second facteur pendant la fenêtre de 10 minutes : **aucun outil n'affiche de secret de second facteur** ;
 - `desactiver_totp` exige l'attestation que la CNIB de la personne a été vérifiée ; il supprime le second facteur et ses codes de secours, ferme toutes les sessions du compte, prévient la personne par email, et la base refuse qu'un administrateur l'utilise sur ses propres comptes ;
+- **alertes de sécurité par email** : quand un second facteur est enregistré (réenrôlement d'un administrateur) ou désactivé par l'équipe, la personne reçoit un email, après l'enregistrement en base. Il donne la date et l'heure (heure du Burkina Faso) et l'adresse de l'équipe à contacter (`CONTACT_SECURITE`), sans aucun code ni lien. Un échec d'envoi n'annule rien. Sources : NIST SP 800-63B rév. 4, §4.1.2.1 et §4.6 ; OWASP ASVS 5.0, 6.3.7 ;
 - un seul « premier administrateur » peut jamais exister, garanti par la base, même si deux outils sont lancés en même temps ;
 - **chaque création, reprise et désactivation est tracée**, sans pouvoir être modifiée ni supprimée.
 

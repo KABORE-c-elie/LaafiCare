@@ -44,6 +44,8 @@ pub(crate) struct AppState {
     pub(crate) email: Arc<dyn EmailSender>,
     /// `URL_APPLICATION_WEB` (E5), base des liens envoyés par email.
     pub(crate) url_application_web: Arc<str>,
+    /// `CONTACT_SECURITE` (D3), donné dans les alertes de sécurité.
+    pub(crate) contact_securite: Arc<str>,
 }
 
 // Struct typée plutôt qu'un `json!` en ligne : le compilateur fixe le format
@@ -213,6 +215,7 @@ async fn main() {
             cle_totp: Arc::new(config.totp_cle_chiffrement),
             email,
             url_application_web: Arc::from(config.url_application_web),
+            contact_securite: Arc::from(config.contact_securite),
         });
 
     // 127.0.0.1 : cohérent avec PostgreSQL exposé en local seulement. À

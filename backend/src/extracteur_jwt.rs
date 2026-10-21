@@ -498,6 +498,7 @@ mod tests {
             cle_totp: Arc::new(laaficare_backend::config::CleTotp::depuis_octets([7; 32])),
             email: Arc::new(laaficare_backend::email::EmailSenderConsole),
             url_application_web: Arc::from("http://localhost:4200"),
+            contact_securite: Arc::from("securite@example.org"),
         }
     }
 

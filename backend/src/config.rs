@@ -5,6 +5,8 @@ use std::fmt;
 
 use zeroize::Zeroizing;
 
+use crate::adresse_email;
+
 // Pas de `#[derive(Debug)]` volontaire : `database_url` contient le mot de
 // passe de la base. Sans `Debug`, un `{:?}` oublié dans un log ne peut pas le
 // faire fuiter (le compilateur refuse).
@@ -21,6 +23,11 @@ pub struct Config {
     /// Adresse de l'application web, sans `/` final : les liens envoyés par
     /// email y mènent (E5, page `/verifier-email`).
     pub url_application_web: String,
+    /// Adresse email de l'équipe LaafiCare, donnée dans les alertes de
+    /// sécurité (`alerte_securite.rs`) : NIST SP 800-63B rév. 4 §4.6, « The
+    /// notification SHALL provide clear instructions, including contact
+    /// information » (décision du porteur, 2026-10-21).
+    pub contact_securite: String,
 }
 
 /// Où tourne le programme (variable `ENVIRONNEMENT`, obligatoire). Aucune
@@ -89,6 +96,14 @@ pub enum ConfigError {
     #[error("URL_APPLICATION_WEB doit commencer par https:// en production (ENVIRONNEMENT=production)")]
     UrlApplicationWebSansHttps,
 
+    #[error("CONTACT_SECURITE invalide : une adresse email attendue (ASCII, sans espace)")]
+    ContactSecuriteInvalide,
+
+    // Une adresse fictive ne doit jamais partir dans une alerte réelle
+    // (décision du porteur, 2026-10-21).
+    #[error("CONTACT_SECURITE est une adresse d'exemple (RFC 2606) : refusée en production (ENVIRONNEMENT=production)")]
+    ContactSecuriteFictif,
+
     // Le SMS porte le code d'inscription, l'email le jeton de vérification :
     // simulés, ils ne partent jamais et s'affichent dans le terminal.
     #[error("envoi de {0} simulé : refusé en production (ENVIRONNEMENT=production)")]
@@ -105,6 +120,7 @@ impl Config {
         let totp_cle_chiffrement = decoder_cle_totp(&lire("TOTP_CLE_CHIFFREMENT")?)?;
         let environnement = parse_environnement(env::var("ENVIRONNEMENT").ok().as_deref())?;
         let url_application_web = valider_url_application_web(&lire("URL_APPLICATION_WEB")?, environnement)?;
+        let contact_securite = valider_contact_securite(&lire("CONTACT_SECURITE")?, environnement)?;
 
         Ok(Config {
             database_url,
@@ -113,8 +129,31 @@ impl Config {
             totp_cle_chiffrement,
             environnement,
             url_application_web,
+            contact_securite,
         })
     }
+}
+
+// Même contrôle que toute adresse enregistrée (`adresse_email.rs`). En
+// production, les noms réservés aux exemples et aux essais par la RFC 2606
+// sont refusés : §2, domaines de premier niveau « .test », « .example »,
+// « .invalid » et « .localhost » ; §3, « example.com », « example.net » et
+// « example.org » (et leurs sous-domaines). Comparaison sans tenir compte
+// des majuscules (RFC 5321 §2.4 : « Mailbox domains follow normal DNS rules
+// and are hence not case sensitive »).
+fn valider_contact_securite(valeur: &str, environnement: Environnement) -> Result<String, ConfigError> {
+    adresse_email::controler(valeur).map_err(|_| ConfigError::ContactSecuriteInvalide)?;
+    if environnement == Environnement::Production {
+        let domaine = valeur.rsplit_once('@').map(|(_, d)| d.to_ascii_lowercase()).unwrap_or_default();
+        let reserve = |nom: &str| domaine == nom || domaine.ends_with(&format!(".{nom}"));
+        let fictif = ["example.com", "example.net", "example.org", "test", "example", "invalid", "localhost"]
+            .into_iter()
+            .any(reserve);
+        if fictif {
+            return Err(ConfigError::ContactSecuriteFictif);
+        }
+    }
+    Ok(valeur.to_string())
 }
 
 // Le lien de vérification est construit en ajoutant
@@ -297,6 +336,36 @@ mod tests {
             valider_url_application_web("http://exemple.bf", prod),
             Err(ConfigError::UrlApplicationWebSansHttps)
         ));
+    }
+
+    #[test]
+    fn contact_securite() {
+        let dev = Environnement::Developpement;
+        let prod = Environnement::Production;
+        // En développement, une adresse d'exemple est acceptée.
+        assert_eq!(valider_contact_securite("securite@example.org", dev).unwrap(), "securite@example.org");
+        assert_eq!(valider_contact_securite("securite@laaficare.bf", prod).unwrap(), "securite@laaficare.bf");
+        for valeur in ["", "pas une adresse", "sécurité@laaficare.bf", " securite@laaficare.bf"] {
+            for environnement in [dev, prod] {
+                assert!(
+                    matches!(valider_contact_securite(valeur, environnement), Err(ConfigError::ContactSecuriteInvalide)),
+                    "{valeur:?}"
+                );
+            }
+        }
+        for valeur in [
+            "securite@example.org",
+            "securite@EXAMPLE.COM",
+            "securite@mail.example.net",
+            "securite@laaficare.test",
+            "securite@laaficare.example",
+            "securite@x.invalid",
+            "securite@localhost",
+        ] {
+            assert!(matches!(valider_contact_securite(valeur, prod), Err(ConfigError::ContactSecuriteFictif)), "{valeur}");
+        }
+        // Un domaine qui contient « example » sans être réservé reste accepté.
+        assert!(valider_contact_securite("securite@counterexample.org", prod).is_ok());
     }
 
     #[test]

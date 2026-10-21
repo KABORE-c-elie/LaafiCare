@@ -213,13 +213,14 @@ git checkout dev
 | `DATABASE_URL` | adresse de la base, avec ce même mot de passe | `postgres://utilisateur:motdepasse@127.0.0.1:5433/laaficare` |
 | `ENVIRONNEMENT` | `developpement` sur votre machine, `production` sur le vrai serveur ; obligatoire | `developpement` |
 | `URL_APPLICATION_WEB` | adresse de l'application web, sans `/` final : les liens envoyés par email y mènent ; obligatoire ; `https://` exigé en production | `http://localhost:4200` |
+| `CONTACT_SECURITE` | adresse email de l'équipe, donnée dans les alertes de sécurité (second facteur enregistré ou désactivé) ; obligatoire ; en production, une vraie adresse (les adresses d'exemple sont refusées) | `securite@example.org` |
 | `SERVER_PORT` | port du serveur | `8080` |
 | `JWT_SECRET` | signe les jetons de connexion, 32 caractères au moins | 64 caractères hexadécimaux générés |
 | `TOTP_CLE_CHIFFREMENT` | chiffre les secrets du second facteur, exactement 64 caractères hexadécimaux | une autre valeur générée |
 
 Le fichier `.env` contient des secrets : il n'est jamais envoyé dans Git.
 
-**Vous aviez déjà un `.env` ?** Ajoutez-y les lignes `ENVIRONNEMENT=developpement` et `URL_APPLICATION_WEB=http://localhost:4200` (variables obligatoires) : sans elles, le serveur et les outils refusent de démarrer. En `production`, ils refusent aussi tant que les SMS et les emails sont seulement simulés, ce qui est le cas aujourd'hui.
+**Vous aviez déjà un `.env` ?** Ajoutez-y les lignes `ENVIRONNEMENT=developpement`, `URL_APPLICATION_WEB=http://localhost:4200` et `CONTACT_SECURITE=securite@example.org` (variables obligatoires) : sans elles, le serveur et les outils refusent de démarrer. En `production`, ils refusent aussi tant que les SMS et les emails sont seulement simulés, ce qui est le cas aujourd'hui.
 
 **Votre base de développement contient déjà une structure ?** La migration 0022 rend obligatoires le numéro d'urgence, la région et l'email d'une structure : elle refuse de s'appliquer sur une base qui contient déjà une structure, et le serveur ne démarre pas. Repartez alors d'une base vide (`docker compose down -v`, qui **efface toute la base de développement**), puis relancez le serveur.
 
@@ -334,7 +335,7 @@ Les tests qui utilisent la base créent chacun une base temporaire, supprimée e
 | Ce qu'on voit | Cause | Que faire |
 |---|---|---|
 | Les tests en base échouent tous avec `PoolTimedOut` | PostgreSQL ne répond pas : Docker Desktop n'est pas démarré | démarrer Docker Desktop, puis `docker compose up -d` et `docker compose ps` |
-| Le serveur s'arrête aussitôt avec « configuration invalide » | il reste un `A_GENERER` dans `backend/.env`, une valeur mal formée (secret trop court, clé qui n'est pas en hexadécimal), ou `ENVIRONNEMENT` ou `URL_APPLICATION_WEB` manque | compléter `.env` (voir « Préparer la configuration ») |
+| Le serveur s'arrête aussitôt avec « configuration invalide » | il reste un `A_GENERER` dans `backend/.env`, une valeur mal formée (secret trop court, clé qui n'est pas en hexadécimal), ou `ENVIRONNEMENT`, `URL_APPLICATION_WEB` ou `CONTACT_SECURITE` manque | compléter `.env` (voir « Préparer la configuration ») |
 | Le serveur s'arrête sur « échec des migrations » après la mise à jour | la base de développement contient déjà une structure (migration 0022) | repartir d'une base vide, `docker compose down -v` (voir « Préparer la configuration ») |
 | « envoi de SMS simulé : refusé en production » | `ENVIRONNEMENT=production` sur une machine de développement | mettre `ENVIRONNEMENT=developpement` |
 | Un outil répond « base pas à jour » | le serveur n'a pas encore appliqué les dernières migrations | lancer `cargo run` une fois, puis relancer l'outil |

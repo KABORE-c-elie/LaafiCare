@@ -6,6 +6,7 @@
 
 pub mod adresse_email;
 pub mod affectation;
+pub mod alerte_securite;
 pub mod auth_administrateur;
 pub mod auth_patient;
 pub mod auth_professionnel;

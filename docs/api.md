@@ -707,6 +707,7 @@ Identique à la route professionnelle (section 2.4) : en-tête `Authorization: B
 - **Aucune session n'est ouverte** : après avoir montré les codes de secours, l'application revient à l'écran de connexion. La personne se connecte avec son mot de passe, puis un code de son nouveau TOTP.
 - Après la confirmation, le jeton de réenrôlement est refusé (401 `jeton_invalide`), et la fenêtre est refermée.
 - Chaque essai faux (mot de passe ou code) compte dans le verrouillage du compte (5 essais, puis 15 minutes).
+- Après une confirmation réussie, **un email d'alerte** part à l'adresse de l'administrateur : date et heure de l'enregistrement (heure du Burkina Faso), et adresse de l'équipe à contacter si ce n'était pas lui. Il ne contient aucun code ni aucun lien. Un échec d'envoi ne change pas la réponse : le second facteur est déjà enregistré.
 
 ### 2.6 Professionnels : choisir son affectation
 

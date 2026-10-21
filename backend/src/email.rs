@@ -10,6 +10,14 @@
 #[error("échec d'envoi de l'email : {0}")]
 pub struct ErreurEmail(String);
 
+#[cfg(test)]
+impl ErreurEmail {
+    /// Tests : un envoi qui échoue.
+    pub(crate) fn simulee() -> Self {
+        ErreurEmail("échec simulé".into())
+    }
+}
+
 pub trait EmailSender: Send + Sync {
     fn envoyer(&self, destinataire: &str, sujet: &str, corps: &str) -> Result<(), ErreurEmail>;
 

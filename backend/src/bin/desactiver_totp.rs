@@ -57,9 +57,17 @@ async fn executer() -> Result<(), String> {
     // Y2 : on atteste le contrôle de la carte ; son numéro n'est pas saisi.
     let cnib_verifiee = console::confirmer("Avez-vous vérifié la CNIB de la personne, en sa présence ?").map_err(|e| e.to_string())?;
 
-    let resultat = outils_administrateur::desactiver_totp(&contexte.pool, &contexte.email, operateur, &cible, &motif, cnib_verifiee)
-        .await
-        .map_err(|e| console::expliquer(&e))?;
+    let resultat = outils_administrateur::desactiver_totp(
+        &contexte.pool,
+        &contexte.email,
+        &contexte.config.contact_securite,
+        operateur,
+        &cible,
+        &motif,
+        cnib_verifiee,
+    )
+    .await
+    .map_err(|e| console::expliquer(&e))?;
 
     println!("Second facteur désactivé ; toutes les sessions du compte sont fermées.");
     if resultat.personne_prevenue {
