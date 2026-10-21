@@ -41,8 +41,10 @@ async fn creer_compte(pool: &PgPool, telephone: &str, type_compte: &str) -> Uuid
 
 async fn inserer_structure(pool: &PgPool, createur: Uuid, type_structure: &str) -> Result<Uuid, sqlx::Error> {
     sqlx::query_scalar(
-        "INSERT INTO structure (type_structure, nom, telephone, commune, province, latitude, longitude, createur_compte_id) \
-         VALUES ($1, 'Structure de test', '+22670000000', 'Ouagadougou', 'Kadiogo', 12.371400, -1.519700, $2) RETURNING id",
+        "INSERT INTO structure (type_structure, nom, telephone, telephone_urgence, region, email, commune, province, latitude, longitude, \
+                                createur_compte_id) \
+         VALUES ($1, 'Structure de test', '+22670000000', '+22670000000', 'Région fictive', 'structure@example.org', 'Ouagadougou', 'Kadiogo', \
+                 12.371400, -1.519700, $2) RETURNING id",
     )
     .bind(type_structure)
     .bind(createur)

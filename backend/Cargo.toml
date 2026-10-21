@@ -46,6 +46,14 @@ unicode-normalization = "0.1.25"
 # les URL (Path). Cargo fusionne les fonctionnalités : sqlx::types::Uuid est
 # le même type (une seule version d'uuid dans Cargo.lock).
 uuid = { version = "1.26.1", features = ["serde"] }
+# Forme des adresses email (décision du porteur, 2026-10-21) : OWASP, Input
+# Validation Cheat Sheet, « Use a maintained email validation library
+# compatible with the addresses your mail system supports ». 0.21.0 stable du
+# 2026-07-27, non retirée, Rust 1.88 au moins, vérifiée sur crates.io le
+# 2026-10-21. Seul le trait `ValidateEmail` sert (`adresse_email.rs`) : la
+# crate n'a aucune fonctionnalité par défaut, et ni `derive` ni `card` ne
+# sont activées ; `default-features = false` le dit explicitement.
+validator = { version = "0.21.0", default-features = false }
 # Effacement du secret TOTP déchiffré (totp.rs, `dechiffrer_secret`), là où
 # la fonctionnalité zeroize de totp-rs ne suffit pas. Déjà présente via
 # aes-gcm et totp-rs, à la même version : la déclarer ne compile rien de

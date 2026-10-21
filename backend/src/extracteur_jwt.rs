@@ -496,6 +496,8 @@ mod tests {
             jwt: JwtService::new(SECRET),
             sms: Arc::new(SmsSenderConsole),
             cle_totp: Arc::new(laaficare_backend::config::CleTotp::depuis_octets([7; 32])),
+            email: Arc::new(laaficare_backend::email::EmailSenderConsole),
+            url_application_web: Arc::from("http://localhost:4200"),
         }
     }
 
@@ -940,8 +942,10 @@ mod tests {
 
     async fn structure(db: &PgPool, createur: Uuid, type_structure: &str, statut: &str) -> Uuid {
         sqlx::query_scalar(
-            "INSERT INTO structure (type_structure, nom, telephone, commune, province, latitude, longitude, createur_compte_id, statut) \
-             VALUES ($2, 'Structure', '+22670000000', 'Ouagadougou', 'Kadiogo', 12.371400, -1.519700, $1, $3) RETURNING id",
+            "INSERT INTO structure (type_structure, nom, telephone, telephone_urgence, region, email, commune, province, latitude, longitude, \
+                                    createur_compte_id, statut) \
+             VALUES ($2, 'Structure', '+22670000000', '+22670000000', 'Région fictive', 'structure@example.org', 'Ouagadougou', 'Kadiogo', \
+                     12.371400, -1.519700, $1, $3) RETURNING id",
         )
         .bind(createur)
         .bind(type_structure)

@@ -18,6 +18,9 @@ pub struct Config {
     pub totp_cle_chiffrement: CleTotp,
     /// Développement ou production (décision du porteur, 2026-10-18).
     pub environnement: Environnement,
+    /// Adresse de l'application web, sans `/` final : les liens envoyés par
+    /// email y mènent (E5, page `/verifier-email`).
+    pub url_application_web: String,
 }
 
 /// Où tourne le programme (variable `ENVIRONNEMENT`, obligatoire). Aucune
@@ -77,6 +80,15 @@ pub enum ConfigError {
     #[error("ENVIRONNEMENT invalide : « developpement » ou « production » attendu")]
     EnvironnementInvalide,
 
+    #[error("URL_APPLICATION_WEB invalide : adresse en http:// ou https://, sans espace, sans « ? » ni « # »")]
+    UrlApplicationWebInvalide,
+
+    // Les liens envoyés par email portent un jeton : en production, la page
+    // qui le reçoit et le renvoie au serveur doit être servie en https
+    // (décision du porteur, 2026-10-21).
+    #[error("URL_APPLICATION_WEB doit commencer par https:// en production (ENVIRONNEMENT=production)")]
+    UrlApplicationWebSansHttps,
+
     // Le SMS porte le code d'inscription, l'email le jeton de vérification :
     // simulés, ils ne partent jamais et s'affichent dans le terminal.
     #[error("envoi de {0} simulé : refusé en production (ENVIRONNEMENT=production)")]
@@ -92,6 +104,7 @@ impl Config {
         let jwt_secret = valider_secret_jwt(lire("JWT_SECRET")?)?;
         let totp_cle_chiffrement = decoder_cle_totp(&lire("TOTP_CLE_CHIFFREMENT")?)?;
         let environnement = parse_environnement(env::var("ENVIRONNEMENT").ok().as_deref())?;
+        let url_application_web = valider_url_application_web(&lire("URL_APPLICATION_WEB")?, environnement)?;
 
         Ok(Config {
             database_url,
@@ -99,7 +112,35 @@ impl Config {
             jwt_secret,
             totp_cle_chiffrement,
             environnement,
+            url_application_web,
         })
+    }
+}
+
+// Le lien de vérification est construit en ajoutant
+// `/verifier-email#jeton=…` : une adresse qui contiendrait déjà « ? » ou
+// « # » donnerait un lien faux, où le jeton pourrait partir en paramètre
+// (envoyé au serveur, jamais voulu : R6). Le `/` final est retiré pour ne
+// pas doubler celui du chemin.
+//
+// En production, https seulement (décision du porteur, 2026-10-21) : le
+// jeton du lien est un secret d'authentification, et NIST SP 800-63B rév. 4
+// exige un canal authentifié et chiffré pour ces secrets. En
+// développement, http reste permis (http://localhost:4200, rien ne sort de
+// la machine).
+fn valider_url_application_web(valeur: &str, environnement: Environnement) -> Result<String, ConfigError> {
+    let sans_schema = valeur.strip_prefix("https://").or_else(|| valeur.strip_prefix("http://"));
+    match sans_schema {
+        Some(reste)
+            if !reste.trim_end_matches('/').is_empty()
+                && !valeur.chars().any(|c| c.is_whitespace() || c.is_control() || c == '?' || c == '#') =>
+        {
+            if environnement == Environnement::Production && !valeur.starts_with("https://") {
+                return Err(ConfigError::UrlApplicationWebSansHttps);
+            }
+            Ok(valeur.trim_end_matches('/').to_string())
+        }
+        _ => Err(ConfigError::UrlApplicationWebInvalide),
     }
 }
 
@@ -234,6 +275,28 @@ mod tests {
             Err(ConfigError::EnvoiSimuleEnProduction("email"))
         ));
         assert!(verifier_envois(Environnement::Production, &[("SMS", false), ("email", false)]).is_ok());
+    }
+
+    #[test]
+    fn url_application_web() {
+        let dev = Environnement::Developpement;
+        let prod = Environnement::Production;
+        assert_eq!(valider_url_application_web("http://localhost:4200", dev).unwrap(), "http://localhost:4200");
+        assert_eq!(valider_url_application_web("https://exemple.bf/app/", dev).unwrap(), "https://exemple.bf/app");
+        for valeur in ["localhost:4200", "ftp://exemple.bf", "https://", "https:///", "https://a.bf/?x=1", "https://a.bf/#x", "https://a b.bf"] {
+            for environnement in [dev, prod] {
+                assert!(
+                    matches!(valider_url_application_web(valeur, environnement), Err(ConfigError::UrlApplicationWebInvalide)),
+                    "{valeur}"
+                );
+            }
+        }
+        // En production, https seulement.
+        assert_eq!(valider_url_application_web("https://exemple.bf", prod).unwrap(), "https://exemple.bf");
+        assert!(matches!(
+            valider_url_application_web("http://exemple.bf", prod),
+            Err(ConfigError::UrlApplicationWebSansHttps)
+        ));
     }
 
     #[test]

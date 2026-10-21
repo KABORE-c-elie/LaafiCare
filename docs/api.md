@@ -191,10 +191,15 @@ Résumé :
 | POST | `/api/sessions/renouveler` | tout le monde, avec un jeton de renouvellement | fonctionne (section 1.7) |
 | POST | `/api/sessions/deconnexion` | tout le monde, avec un jeton de renouvellement | fonctionne (section 1.7) |
 | POST | `/api/sessions/deconnexion-partout` | tout jeton d'accès (patient, professionnel, administrateur) | fonctionne (section 1.7) |
-| POST | `/api/professionnels/connexion` | tout le monde | fonctionne (section 2.4) ; pas encore testable sans compte professionnel (étape 3.7) |
+| POST | `/api/professionnels/connexion` | tout le monde | fonctionne (section 2.4) ; un compte professionnel naît à la création d'une structure (section 2.8) |
 | POST | `/api/professionnels/connexion/second-facteur` | jeton intermédiaire `laaficare:second_facteur_professionnel` | fonctionne (section 2.4) ; même remarque |
 | GET | `/api/professionnels/affectations` | jeton professionnel, sans affectation ou en exercice | fonctionne (section 2.6) ; même remarque |
 | POST | `/api/professionnels/affectations/{id}/activer` | jeton professionnel, sans affectation ou en exercice | fonctionne (section 2.6) ; même remarque |
+| POST | `/api/professionnels/email/verifier` | tout le monde, avec le jeton du lien | fonctionne (section 2.7) |
+| POST | `/api/professionnels/email/renvoyer` | tout le monde, avec email et mot de passe professionnels | fonctionne (section 2.7) |
+| POST | `/api/structures` | jeton `laaficare:patient` | fonctionne (section 2.8) ; type `munaseb` seulement |
+| POST | `/api/structures/{id}/soumettre` | jeton `laaficare:patient` du créateur | fonctionne (section 2.8) |
+| GET | `/api/structures/mes-demandes` | jeton `laaficare:patient` | fonctionne (section 2.8) |
 | POST | `/api/administrateurs/connexion` | tout le monde | fonctionne (section 2.5) ; testable après l'outil du premier administrateur |
 | POST | `/api/administrateurs/connexion/second-facteur` | jeton intermédiaire `laaficare:second_facteur_administrateur` | fonctionne (section 2.5) |
 | POST | `/api/administrateurs/reenrolement/commencer` | jeton `laaficare:reenrolement_administrateur` | fonctionne (section 2.5) |
@@ -607,9 +612,9 @@ L'email est comparé sans les espaces autour et sans tenir compte des majuscules
 | 500 | `erreur_interne` | panne |
 
 - **L'application teste toujours `etape`**, même si aucun professionnel ne peut encore activer de second facteur (après l'étape 3.11).
-- Le **403** n'arrive qu'après un mot de passe correct : seul le détenteur du mot de passe l'apprend. La vérification de l'email (lien valable 24 h) arrive à l'étape 3.7 ; la route qui renvoie un lien aussi.
+- Le **403** n'arrive qu'après un mot de passe correct : seul le détenteur du mot de passe l'apprend. Sur ce 403, l'application propose « Renvoyer le lien » (section 2.7).
 - **Verrouillage** : après 5 échecs, 15 minutes ; la réponse reste 401 `identifiants_invalides`. La récupération du mot de passe se fera par email (étape 3.12).
-- **Pas encore testable dans Postman** : aucune route ne crée de compte professionnel avant la création d'un établissement (étape 3.7).
+- Un compte professionnel naît quand un patient crée sa structure (section 2.8).
 
 #### `POST /api/professionnels/connexion/second-facteur`
 
@@ -751,6 +756,151 @@ Après la connexion professionnelle, le jeton d'accès (`laaficare:professionnel
 - La nouvelle session **finit à la même heure** que l'ancienne (12 h après la connexion au plus) : changer d'affectation ne prolonge jamais une session.
 - Sur un jeton en exercice, une réponse **403 `acces_refuse`** d'une route métier veut dire que le droit a été retiré (affectation désactivée, établissement suspendu, licence expirée) : l'application relit la liste des affectations.
 
+### 2.7 Professionnels : vérification de l'email
+
+L'email d'un compte professionnel doit être vérifié avant toute connexion et avant la soumission d'une structure. Le serveur envoie un **lien** à l'adresse :
+
+```
+<URL_APPLICATION_WEB>/verifier-email#jeton=<64 caractères hexadécimaux>
+```
+
+- Le lien est **valable 24 heures** et **ne sert qu'une fois**. Un nouveau lien annule le précédent.
+- **Page `/verifier-email` de l'application web** : elle lit le jeton **après `#`** (il n'est jamais envoyé au serveur par le navigateur, ni dans l'en-tête Referer), affiche un bouton « Confirmer mon adresse », et n'envoie le jeton qu'au clic. **Ouvrir le lien ne vérifie rien** : les filtres de messagerie ouvrent les liens tout seuls.
+- La page ne garde le jeton nulle part (ni stockage du navigateur, ni journal).
+- En développement, l'email n'est pas envoyé : il s'affiche dans le terminal du serveur, avec le lien.
+
+#### `POST /api/professionnels/email/verifier`
+
+- **Appelant** : la page `/verifier-email`, sans jeton d'accès. **Corps** : `{"jeton": "…"}`.
+- **Réponses** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 204 | — | email vérifié ; la page propose de se connecter |
+| 400 | `lien_invalide` | lien inconnu, déjà utilisé, remplacé par un plus récent, expiré, ou email changé depuis l'envoi (jamais distingués) ; message « Ce lien n'est plus valable. Demandez-en un nouveau. » |
+| 422 | `donnees_invalides` | champ manquant |
+| 500 | `erreur_interne` | panne |
+
+#### `POST /api/professionnels/email/renvoyer`
+
+- **Appelant** : tout le monde, depuis l'écran qui a reçu `email_non_verifie`. **Corps** : `{"email": "…", "mot_de_passe": "…"}` (mot de passe **professionnel**, même forme que la connexion).
+- **Réponses** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 204 | — | un nouveau lien est parti ; ou l'email était déjà vérifié (rien n'est envoyé, même réponse) |
+| 401 | `identifiants_invalides` | mêmes cas et même message que la connexion ; l'essai compte dans le verrouillage |
+| 429 | `trop_de_demandes` | un lien a été envoyé il y a moins d'**une minute** ; en-tête `Retry-After` en secondes |
+| 422 | `donnees_invalides` | champ manquant |
+| 500 | `erreur_interne` | panne |
+
+### 2.8 Demande de structure (MUNASEB pour l'instant)
+
+N'importe quel patient peut créer sa structure ; il en devient **responsable**. Tout se fait avec le **jeton patient** (`laaficare:patient`). L'écran qui portera ce parcours (application mobile, ou espace patient du web) reste à décider. Seul le type `munaseb` est ouvert pour l'instant : les autres attendent la liste de leurs pièces justificatives.
+
+Cycle : `brouillon` (création) → `en_attente` (soumission) → `validee` ou `refusee` (décision de l'équipe LaafiCare, étape 3.8). Une seule demande non validée à la fois par personne.
+
+**Une seule MUNASEB peut être validée** (ou suspendue). Plusieurs demandes MUNASEB peuvent exister en brouillon ou en attente : sinon, n'importe qui bloquerait le vrai responsable de la mutuelle avec un brouillon. **La création et la soumission d'une seconde MUNASEB ne sont donc jamais refusées pour ce motif** ; le refus arrive à la **validation** par l'équipe LaafiCare (étape 3.8, code à documenter alors).
+
+**Pour les applications web et mobile** (liste complète dans `docs/points-ouverts.md`, « À faire dans les applications web et mobile ») :
+- le lien de vérification a la forme `<URL_APPLICATION_WEB>/verifier-email#jeton=<64 caractères hexadécimaux>` ;
+- la page `/verifier-email` lit le jeton **après `#`** et l'envoie par **`POST /api/professionnels/email/verifier`** (section 2.7), **jamais par un GET** : RFC 9110 §9.2.1 (un GET est une méthode « sûre », qui ne doit rien changer ; les filtres de messagerie ouvrent les liens tout seuls) et RFC 3986 §3.5 (le fragment après `#` n'est jamais envoyé au serveur par le navigateur) ;
+- réponses : **204** (email vérifié) ou **400 `lien_invalide`** (lien inconnu, déjà utilisé, remplacé ou expiré).
+
+#### `POST /api/structures`
+
+- **Appelant** : en-tête `Authorization: Bearer <jeton_acces patient>`.
+- **Corps** :
+
+```json
+{
+  "type": "munaseb",
+  "nom": "MUNASEB",
+  "telephone": "70 00 00 01",
+  "telephone_urgence": "70 00 00 02",
+  "region": "Région fictive",
+  "province": "Province fictive",
+  "commune": "Commune fictive",
+  "parcelle": "12",
+  "lot": "3",
+  "section": "B",
+  "latitude": 12.3714,
+  "longitude": -1.5197,
+  "email": "contact.munaseb@example.org",
+  "email_professionnel": "responsable@example.org",
+  "mot_de_passe_professionnel": "Exemple#2026"
+}
+```
+
+- **Obligatoires** : `type`, `nom`, `telephone` (numéro de service), `telephone_urgence` (peut être le même), `email` (email **de la structure**), `region`, `province`, `commune`, `latitude`, `longitude`, `mot_de_passe_professionnel`. **Facultatifs** : `parcelle`, `lot`, `section` (zones non loties).
+- **`email`** : la coordonnée de l'établissement. Elle n'est pas vérifiée par lien et ne sert pas à se connecter.
+- **`email_professionnel`** : l'email de connexion du responsable. Obligatoire **seulement si la personne n'a pas encore de compte professionnel** ; le compte est alors créé avec cet email et ce mot de passe, qui doit suivre les règles de la section 1.5 (il peut être le même que celui du compte patient). Si l'identité a déjà un email, il doit être le même (majuscules près). C'est cet email qui reçoit le lien de vérification (section 2.7). Avec un compte professionnel existant, `email_professionnel` est ignoré et `mot_de_passe_professionnel` est son mot de passe actuel.
+- **Région, province, commune** : texte libre (aucune liste officielle fermée pour l'instant).
+- **Position** : envoyée par l'application (position de la structure, confirmée ou corrigée à l'écran), en degrés décimaux ; elle doit tomber dans le rectangle du Burkina Faso (latitude 8 à 16 nord, longitude 6 ouest à 3 est, soit `-6` à `3`). Enregistrée avec 6 décimales.
+- Les deux numéros suivent la section 1.6.
+- **Forme des deux emails** (`email` et `email_professionnel`), un seul contrôle :
+  - lettres, chiffres et signes **ASCII seulement**, domaine compris (pas d'accent, pas de domaine international pour l'instant) ;
+  - ni espace, ni retour à la ligne, ni caractère de contrôle ;
+  - 64 caractères au plus avant le `@`, 254 au total ;
+  - ni `Nom <adresse>`, ni adresse IP entre crochets à la place du domaine ;
+  - sinon, règle de l'adresse valide du HTML5.
+  - Les majuscules sont gardées telles que saisies ; deux adresses qui ne diffèrent que par les majuscules sont la même adresse.
+- **Réponses** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 201 | — | `{"structure_id": "…", "statut": "brouillon", "email_a_verifier": true}` ; si le compte professionnel vient d'être créé, le lien de vérification est parti (section 2.7) |
+| 401 | `identifiants_invalides` | compte professionnel existant : mot de passe professionnel faux, compte verrouillé ou désactivé ; message « Mot de passe professionnel incorrect. » (**le jeton patient reste valable** : ne pas renvoyer à la connexion) |
+| 401 | `jeton_invalide`, `authentification_requise` | jeton patient absent, expiré ou révoqué |
+| 409 | `demande_deja_en_cours` | une demande non validée existe déjà (brouillon, en attente ou refusée) |
+| 409 | `email_different` | l'identité a déjà un autre email que `email_professionnel` |
+| 409 | `email_deja_utilise` | `email_professionnel` appartient à une autre personne |
+| 409 | `second_facteur_requis` | le compte professionnel a un second facteur : pas encore pris en charge ici |
+| 422 | `donnees_invalides` | champ obligatoire manquant ou vide, `email` ou `email_professionnel` refusé par le contrôle ci-dessus (le message nomme le champ : « Le champ « email » n'est pas une adresse email valide. »), type inconnu |
+| 422 | `type_non_disponible` | type connu mais pas encore ouvert (clinique, hôpital, pharmacie, laboratoire) |
+| 422 | `telephone_service_invalide` | numéro de service : format non reconnu (section 1.6) |
+| 422 | `telephone_urgence_invalide` | numéro d'urgence : format non reconnu (section 1.6) |
+| 422 | `localisation_hors_burkina` | position hors du rectangle |
+| 422 | `mot_de_passe_non_conforme` | avec `regles_non_respectees` (section 1.5) |
+| 500 | `erreur_interne` | panne |
+
+#### `POST /api/structures/{id}/soumettre`
+
+- **Appelant** : jeton patient du **créateur**. Pas de corps. La MUNASEB se soumet sans pièce justificative.
+- **Réponses** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 204 | — | demande soumise : statut `en_attente` |
+| 403 | `email_non_verifie` | l'email professionnel n'est pas encore vérifié (section 2.7) |
+| 403 | `acces_refuse` | compte professionnel désactivé |
+| 404 | `structure_inconnue` | structure inexistante, ou créée par une autre personne (jamais distingués) |
+| 409 | `transition_invalide` | la structure n'est pas en brouillon ; `statut_actuel` dans la réponse |
+| 500 | `erreur_interne` | panne |
+
+#### `GET /api/structures/mes-demandes`
+
+- **Appelant** : jeton patient. **Réponse 200** :
+
+```json
+{
+  "email_a_verifier": false,
+  "demandes": [
+    {
+      "id": "…",
+      "type": "munaseb",
+      "nom": "MUNASEB",
+      "statut": "refusee",
+      "date_creation": "2026-10-21T08:00:00Z",
+      "licence_expire_le": null,
+      "motif_refus": "…"
+    }
+  ]
+}
+```
+
+- Toutes les structures créées par la personne, les plus récentes d'abord. `motif_refus` n'est rempli que pour une structure `refusee`. `email_a_verifier` vaut `true` si le compte professionnel existe et que son email n'est pas vérifié : l'application propose alors de renvoyer le lien.
+
 ---
 
 ## 3. Codes d'erreur : index
@@ -766,18 +916,23 @@ Après la connexion professionnelle, le jeton d'accès (`laaficare:professionnel
 | `chemin_invalide` | 400 | routes avec `{id}` |
 | `parametre_invalide` | 400 | liste des remboursements |
 | `telephone_invalide` | 422 | routes patient |
+| `telephone_service_invalide`, `telephone_urgence_invalide` | 422 | création de structure |
 | `code_invalide` | 401 | inscription, réinitialisation, second facteur (professionnel, administrateur), confirmation du réenrôlement |
-| `trop_de_demandes` | 429 | demande de code (avec `Retry-After`), inscription et réinitialisation (sans) |
+| `trop_de_demandes` | 429 | demande de code et renvoi du lien de vérification (avec `Retry-After`), inscription et réinitialisation (sans) |
 | `telephone_deja_utilise` | 409 | inscription |
 | `telephone_inconnu` | 404 | réinitialisation |
-| `mot_de_passe_non_conforme` | 422 | inscription, réinitialisation |
-| `identifiants_invalides` | 401 | connexions, début du réenrôlement administrateur |
-| `email_non_verifie` | 403 | connexions professionnelle et administrateur |
+| `mot_de_passe_non_conforme` | 422 | inscription, réinitialisation, création de structure |
+| `identifiants_invalides` | 401 | connexions, début du réenrôlement administrateur, renvoi du lien, création de structure (mot de passe professionnel) |
+| `email_non_verifie` | 403 | connexions professionnelle et administrateur, soumission d'une structure |
+| `lien_invalide` | 400 | vérification de l'email |
+| `type_non_disponible`, `localisation_hors_burkina` | 422 | création de structure |
+| `demande_deja_en_cours`, `email_different`, `email_deja_utilise`, `second_facteur_requis` | 409 | création de structure |
+| `structure_inconnue` | 404 | soumission d'une structure |
 | `montant_invalide`, `nip_invalide`, `partenaire_suspendu`, `non_couvert`, `en_carence` | 422 | simuler-acte |
 | `patient_inconnu`, `partenaire_inconnu` | 404 | simuler-acte |
 | `reference_acte_deja_utilisee` | 409 | simuler-acte |
 | `demande_inconnue` | 404 | détail, transitions |
-| `transition_invalide` | 409 | transitions |
+| `transition_invalide` | 409 | transitions, soumission d'une structure |
 | `motif_vide`, `motif_trop_long` | 422 | rejet |
 | `erreur_interne` | 500 | toutes |
 
@@ -803,9 +958,9 @@ Le module existe déjà côté serveur ; les routes manquent.
 
 ### 4.3 Structures et pièces justificatives (étapes 3.7 et 3.8)
 
-- Création d'une structure par un patient (qui en devient responsable ; création du compte professionnel au passage s'il n'en a pas), brouillon, modification, abandon.
+- ✅ Création, soumission et suivi, **type MUNASEB seulement** : **codés**, section 2.8 ; vérification de l'email, section 2.7.
+- Restent : modification du brouillon, abandon, autres types de structure.
 - Téléversement d'une pièce, **une requête par fichier** (réseau faible) : PDF, JPEG ou PNG, 5 Mo au plus.
-- Soumission, suivi de la demande par le responsable.
 - Côté administrateur : liste des demandes en attente (avec avertissements de numéros d'autorisation en double, de plusieurs demandes MUNASEB), consultation et téléchargement des pièces, validation (licence), refus (motif), suspension, réactivation.
 
 ### 4.4 Affectations et rôle actif (étape 3.9)

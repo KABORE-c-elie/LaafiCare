@@ -18,6 +18,7 @@
 use sqlx::types::Uuid;
 use sqlx::{PgConnection, PgPool};
 
+use crate::adresse_email;
 use crate::auth_administrateur::FENETRE_REENROLEMENT_MINUTES;
 use crate::auth_professionnel::{self, ErreurAuthProfessionnel};
 use crate::config::CleTotp;
@@ -41,6 +42,8 @@ pub enum ErreurOutil {
     PasDeComptePatient,
     #[error("Email vide.")]
     EmailVide,
+    #[error("Adresse email invalide.")]
+    EmailInvalide,
     #[error("Cette identité a déjà un autre email : l'outil ne le change pas (outil « changer l'email », à concevoir).")]
     EmailDifferent,
     #[error("Cet email est déjà utilisé par une autre personne.")]
@@ -284,6 +287,9 @@ async fn creer(
     if email.is_empty() {
         return Err(ErreurOutil::EmailVide);
     }
+    // Contrôle commun de toutes les adresses (`adresse_email.rs`, décisions
+    // du porteur du 2026-10-21).
+    adresse_email::controler(email).map_err(|_| ErreurOutil::EmailInvalide)?;
     mot_de_passe::controler(saisie.mot_de_passe).map_err(ErreurOutil::MotDePasseNonConforme)?;
     let cnib = numero_cnib(saisie.cnib_chiffres)?;
 
@@ -905,6 +911,13 @@ mod tests {
             creer_premier_administrateur(&pool, &emails, &saisie("+22670140007", "  ", "")).await,
             Err(ErreurOutil::EmailVide)
         ));
+        // Contrôle commun des adresses : accent, ou nom et adresse.
+        for email in ["élodie@example.org", "Awa <a@example.org>"] {
+            assert!(matches!(
+                creer_premier_administrateur(&pool, &emails, &saisie("+22670140007", email, "")).await,
+                Err(ErreurOutil::EmailInvalide)
+            ));
+        }
         assert!(matches!(
             creer_premier_administrateur(&pool, &emails, &saisie("+22670140007", "a@example.org", "123")).await,
             Err(ErreurOutil::CnibInvalide)

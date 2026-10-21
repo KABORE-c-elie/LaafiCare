@@ -911,8 +911,10 @@ mod tests {
         let structure_id = match existante {
             Some(id) => id,
             None => sqlx::query_scalar(
-                "INSERT INTO structure (type_structure, nom, telephone, commune, province, latitude, longitude, createur_compte_id, statut) \
-                 VALUES ('munaseb', 'MUNASEB', '+22670000000', 'Ouagadougou', 'Kadiogo', 12.371400, -1.519700, $1, 'validee') RETURNING id",
+                "INSERT INTO structure (type_structure, nom, telephone, telephone_urgence, region, email, commune, province, latitude, \
+                                        longitude, createur_compte_id, statut) \
+                 VALUES ('munaseb', 'MUNASEB', '+22670000000', '+22670000000', 'Région fictive', 'structure@example.org', 'Ouagadougou', 'Kadiogo', \
+                         12.371400, -1.519700, $1, 'validee') RETURNING id",
             )
             .bind(compte_id)
             .fetch_one(pool)

@@ -4,6 +4,7 @@
 //! modules dépendent de `AppState` (défini dans `main.rs`, propre au serveur
 //! HTTP), aucun outil local n'en a besoin.
 
+pub mod adresse_email;
 pub mod affectation;
 pub mod auth_administrateur;
 pub mod auth_patient;
@@ -24,6 +25,8 @@ pub mod outils_administrateur;
 pub mod patient;
 pub mod session;
 pub mod sms;
+pub mod structure;
 pub mod telephone;
 pub mod totp;
+pub mod verification_email;
 pub mod verrouillage;

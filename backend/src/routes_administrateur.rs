@@ -182,6 +182,8 @@ mod tests {
             jwt: JwtService::new(&"a".repeat(32)),
             sms: Arc::new(SmsSenderConsole),
             cle_totp: Arc::new(CleTotp::depuis_octets([7; 32])),
+            email: Arc::new(laaficare_backend::email::EmailSenderConsole),
+            url_application_web: Arc::from("http://localhost:4200"),
         };
         let utilisateur_id: Uuid =
             sqlx::query_scalar("INSERT INTO utilisateur (telephone, email) VALUES ('+22670120001', $1) RETURNING id")

@@ -186,7 +186,7 @@ Ces tables existent (migration 0012), mais les fonctions et routes qui les utili
 
 ### `structure` : un établissement
 
-Clinique, hôpital, pharmacie, laboratoire ou MUNASEB, avec son nom, son téléphone, son adresse (commune et province obligatoires ; parcelle, lot et section facultatifs, pour les zones non loties) et ses coordonnées GPS.
+Clinique, hôpital, pharmacie, laboratoire ou MUNASEB, avec son nom, son numéro de service et son numéro d'urgence (obligatoires, éventuellement identiques ; migration 0022), son email (obligatoire, distinct de l'email de connexion de son responsable, non vérifié), son adresse (région, province et commune obligatoires, en texte libre ; parcelle, lot et section facultatifs, pour les zones non loties) et ses coordonnées GPS, contrôlées dans le rectangle du Burkina Faso à la création. Elle est créée par un patient, qui en devient responsable (affectation `responsable` posée dans la même transaction) ; une seule demande non validée par personne.
 
 ```mermaid
 stateDiagram-v2
@@ -290,5 +290,6 @@ Règles garanties par la base : **jamais modifiées ni supprimées** ; seulement
 | 0019 | Fenêtre de réenrôlement d'un administrateur (`compte.reenrolement_autorise_jusqu_au`) |
 | 0020 | Codes envoyés par email (`jeton_email`), motif de session `desactivation_totp`, traces de la création et de la reprise des administrateurs |
 | 0021 | Historique des demandes MUNASEB : l'agent désigné par son affectation (établissement et rôle) |
+| 0022 | Numéro d'urgence, région et email d'une structure, obligatoires ; email enregistré sans espaces autour (`utilisateur_email_sans_espaces_autour`) |
 
 Une migration déjà appliquée ne change plus jamais : toute évolution passe par une nouvelle migration. Un test vérifie aussi qu'aucun caractère invisible ne s'y glisse ([`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs)).
