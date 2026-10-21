@@ -95,6 +95,39 @@ describe('intercepteurJournalDev', () => {
     expect(journal()).toBe('[API] 502 (réponse sans champ code) GET /api/x');
   });
 
+  it('vérification de l’email : ni le jeton ni rien du corps', async () => {
+    const jeton = 'c0ffee'.repeat(10) + 'beef';
+    const resultat = firstValueFrom(http.post('/api/professionnels/email/verifier', { jeton }));
+    controleur
+      .expectOne('/api/professionnels/email/verifier')
+      .flush({ erreur: 'message du serveur', code: 'lien_invalide' }, { status: 400, statusText: 'Bad Request' });
+    await expect(resultat).rejects.toBeDefined();
+    expect(journal()).toBe('[API] 400 lien_invalide POST /api/professionnels/email/verifier');
+    expect(journal()).not.toContain(jeton);
+    expect(journal()).not.toContain('c0ffee');
+  });
+
+  it('renvoi du lien : ni l’email ni le mot de passe, refus 401 comme 429', async () => {
+    const corps = { email: 'agent@example.org', mot_de_passe: 'Exemple#2026' };
+    for (const [status, code] of [
+      [401, 'identifiants_invalides'],
+      [429, 'trop_de_demandes'],
+    ] as const) {
+      const resultat = firstValueFrom(http.post('/api/professionnels/email/renvoyer', corps));
+      controleur
+        .expectOne('/api/professionnels/email/renvoyer')
+        .flush({ erreur: 'message du serveur', code }, { status, statusText: 'x', headers: { 'Retry-After': '42' } });
+      await expect(resultat).rejects.toBeDefined();
+    }
+    expect(journal()).toBe(
+      '[API] 401 identifiants_invalides POST /api/professionnels/email/renvoyer\n' +
+        '[API] 429 trop_de_demandes POST /api/professionnels/email/renvoyer',
+    );
+    for (const valeur of [...SENSIBLES, 'agent@example.org']) {
+      expect(journal()).not.toContain(valeur);
+    }
+  });
+
   it('n’écrit rien quand la requête réussit', async () => {
     const resultat = firstValueFrom(http.get('/api/x'));
     controleur.expectOne('/api/x').flush({ patient_nom: 'OUEDRAOGO' });

@@ -42,6 +42,16 @@ Puis ouvrir `http://localhost:4200` dans le navigateur.
    - onglet **Réseau** : filtre **Fetch/XHR**, case **Conserver le journal**. Un clic sur une ligne montre **En-têtes** (méthode, adresse, code HTTP), **Charge utile** (ce qui a été envoyé) et **Réponse** (le JSON reçu, avec le champ `code` en cas d'erreur).
 4. **Attention** : l'onglet Réseau montre l'en-tête `Authorization` et les mots de passe envoyés. Ne jamais en faire de capture d'écran ni le copier dans un message.
 
+### Vérifier un email (lien reçu)
+
+Un compte professionnel doit avoir vérifié son email avant de se connecter. En développement, le backend n'envoie pas l'email : il l'**affiche dans son terminal** (celui de `cargo run`), avec un lien de la forme `http://localhost:4200/verifier-email#jeton=…` (`URL_APPLICATION_WEB` dans `backend/.env`).
+
+1. Copier ce lien dans le navigateur, avec `npm start` lancé ici. La partie après `#` disparaît aussitôt de l'adresse : c'est voulu.
+2. Cliquer sur **« Confirmer mon adresse »**. Ouvrir le lien seul ne vérifie rien.
+3. Ce qu'on doit voir : « Votre email est vérifié. Vous pouvez maintenant vous connecter. » Rouvrir le même lien affiche « Ce lien n'est plus valable ou a déjà servi. Demandez-en un nouveau. », avec un petit formulaire pour recevoir un nouveau lien.
+
+Sur l'écran de connexion, un compte dont l'email n'est pas vérifié reçoit le message du serveur et un bouton **« Renvoyer le lien »**. Un second renvoi dans la minute est refusé : le bouton reste grisé, avec le temps restant.
+
 ## Lancer les tests automatiques
 
 ```powershell
@@ -73,7 +83,7 @@ npm run serve:prod
 
 Puis ouvrir `http://127.0.0.1:8082`. Ce petit serveur (`outils/serveur-production.mjs`) envoie la politique de sécurité (CSP) prévue pour la production, compresse les fichiers et transmet `/api` au backend. Ce n'est **pas** un serveur de production.
 
-- Le **service worker** ne fonctionne que dans cette version, pas avec `npm start`.
+- Le **service worker** ne fonctionne que dans cette version, pas avec `npm start`. Il ne sert jamais la page `/verifier-email` depuis son cache : elle vient toujours du serveur, dans sa dernière version.
 - **Hors connexion** : après une première visite, couper le réseau (DevTools, onglet Réseau, « Hors connexion »), puis recharger. L'application s'ouvre et affiche « Pas de connexion. Vos demandes s'afficheront dès le retour du réseau. »
 
 ## Mesures (2026-10-20)

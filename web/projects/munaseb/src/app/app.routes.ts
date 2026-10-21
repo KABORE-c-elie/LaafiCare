@@ -11,6 +11,12 @@ export const routes: Routes = [
     loadComponent: () => import('./pages/connexion').then((m) => m.ConnexionPage),
   },
   {
+    // Lien reçu par email (docs/api.md §2.7) : accessible sans connexion, sans garde.
+    path: 'verifier-email',
+    title: 'Vérification de l’email · Assurance MUNASEB',
+    loadComponent: () => import('./pages/verifier-email').then((m) => m.VerifierEmailPage),
+  },
+  {
     path: 'second-facteur',
     title: 'Code de vérification · Assurance MUNASEB',
     canActivate: [exigerSecondFacteur],

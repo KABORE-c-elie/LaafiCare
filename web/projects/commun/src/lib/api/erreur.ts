@@ -34,6 +34,20 @@ export function codeErreur(erreur: unknown): string | null {
   return decodee.genre === 'api' ? decodee.code : null;
 }
 
+/**
+ * Secondes à attendre d'après l'en-tête `Retry-After` d'une réponse 429
+ * (RFC 6585 §4). docs/api.md (§2.2.5, §2.7) le donne toujours en secondes :
+ * la forme « date HTTP » de la RFC 9110 §10.2.3 n'est pas lue. `null` si
+ * l'en-tête manque ou n'est pas un nombre entier.
+ */
+export function secondesRetryAfter(erreur: unknown): number | null {
+  if (!(erreur instanceof HttpErrorResponse)) {
+    return null;
+  }
+  const valeur = erreur.headers.get('Retry-After')?.trim() ?? '';
+  return /^\d+$/u.test(valeur) ? Number(valeur) : null;
+}
+
 function estCorpsErreur(valeur: unknown): valeur is CorpsErreur {
   if (typeof valeur !== 'object' || valeur === null) {
     return false;

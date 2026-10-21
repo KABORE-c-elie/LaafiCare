@@ -86,6 +86,7 @@ Pour tester le backend depuis l'application, sans Postman : en développement se
 | **vite 8.3.0** (`npm audit` : 1 faille élevée, 1 modérée, `launch-editor`) | Épinglé exactement par `@angular/build` 22.2.3. Concerne le serveur de développement seulement, pas la construction de production. | **Attendre `@angular/build` 22.2.4** (porteur, 2026-10-20) : ni `overrides`, ni retour à la 22.1.9. `ng serve` reste sur `localhost`, jamais `--host`. `npm audit` est relancé au début de chaque séance. |
 | **Option C des jetons** | Voir section 3. | À décider côté backend, avant le pilote. |
 | **Favicon** | Aucune icône web dans le dépôt. | En attente des fichiers. |
+| **Conseil sous le mot de passe professionnel** : « Choisissez un mot de passe différent de celui de votre compte patient » (`docs/points-ouverts.md`, étape 3.7 ; un conseil, pas une obligation, le serveur accepte un mot de passe identique) | Aucun formulaire de création de mot de passe dans le web pour l'instant : la connexion et le renvoi du lien demandent un mot de passe existant. | À placer sous le champ « mot de passe professionnel » de l'**écran de création de structure**, dont l'emplacement (application mobile ou espace patient du web, docs/api.md §2.8) reste à décider. |
 
 ## 9. Palette de l'application MUNASEB
 
@@ -106,3 +107,38 @@ Toutes les couleurs sont des variables CSS dans `projects/munaseb/src/styles.css
 | Bord des champs (non textuel, 3:1 exigé) | `#828D87` sur blanc | 3,44:1 |
 
 Jamais de rouge ni d'orange (réservés aux alertes de santé, CLAUDE.md §6). Chaque statut a une icône et un texte. Le contour de focus (3 px, `#2A5F94`) est dessiné à 2 px de l'élément, sur le fond de la page (6,64:1).
+
+## 10. Vérification de l'email et renvoi du lien (2026-10-21)
+
+Contrat : `docs/api.md` §2.4 (403 `email_non_verifie`) et §2.7 (`/verifier`, `/renvoyer`).
+
+**Page `/verifier-email`**, sans connexion ni garde (`pages/verifier-email.ts`) :
+- **Le jeton est lu après `#`**, puis le fragment est **retiré aussitôt de l'adresse** par `history.replaceState()` (MDN : remplace l'entrée courante de l'historique, sans recharger la page). L'état de l'historique est gardé (le routeur y range son numéro de navigation). Le fragment n'est jamais envoyé au serveur par le navigateur (RFC 3986 §3.5).
+- **Un second lien ouvert dans le même onglet** ne change que le fragment : la page ne se recharge pas et le routeur réutilise la page. Le fragment est donc relu à chaque fin de navigation. Trouvé à l'essai dans Chrome : sans cela, le second jeton restait dans l'adresse.
+- **Ouvrir le lien ne vérifie rien** : le jeton part au clic sur « Confirmer mon adresse » (§2.7), par **POST**, dans le corps, jamais par GET (RFC 9110 §9.2.1). Il reste en mémoire dans la page seulement (ni stockage du navigateur, ni journal), et il est oublié dès la réponse 204 ou `lien_invalide`. Après une erreur réseau, il est gardé pour réessayer.
+- **Pas de jeton dans l'adresse** : même écran que `lien_invalide`, avec le formulaire de renvoi.
+
+**Renvoi du lien** (`renvoi-lien.ts`, partagé par la connexion et `/verifier-email`) :
+- **Sur l'écran de connexion**, après un 403 `email_non_verifie`, le mot de passe reste dans son champ (masqué) au lieu d'être effacé. « Renvoyer le lien » réutilise l'email et le mot de passe saisis, puis efface le mot de passe : il n'est gardé que le temps de cet envoi.
+- **Sur 429 `trop_de_demandes`**, la page lit `Retry-After` (jamais le message), ou 60 s s'il manque (« moins d'une minute », §2.7). Le bouton est désactivé pendant ce délai, avec le décompte sur le bouton. Le message « Vous pourrez demander un nouveau lien dans 42 s. » est écrit une seule fois : réécrit chaque seconde, il serait relu sans cesse par les lecteurs d'écran. Le format suit §2.2.5 : en secondes jusqu'à une minute, en minutes au-delà.
+
+**Textes affichés**, du porteur :
+
+| Situation | Texte |
+|---|---|
+| 204 | « Votre email est vérifié. Vous pouvez maintenant vous connecter. » |
+| 400 `lien_invalide`, ou aucun jeton | « Ce lien n'est plus valable ou a déjà servi. Demandez-en un nouveau. » |
+| Renvoi réussi | « Si votre compte existe, un nouveau lien vous a été envoyé. » |
+
+docs/api.md ne fixe pas de texte pour ces cas. Le message `erreur` du serveur pour `lien_invalide` (« Ce lien n'est plus valable. Demandez-en un nouveau. ») n'est jamais affiché, comme tous les messages du serveur.
+
+**Aide « Sans accent ni espace »** sous les champs email (connexion, renvoi), reliée au champ par `aria-describedby` (`lc-champ`, entrée `aide`).
+
+**Service worker** : `/verifier-email` est exclu des navigations qu'il sert (`"!/verifier-email"` dans `ngsw-config.json`). La page vient donc toujours du réseau, dans sa dernière version. Sinon, une ancienne version gardée en cache, qui ne connaîtrait pas encore cette page, renverrait vers la connexion et perdrait le jeton. Les fichiers JavaScript de la nouvelle version, absents de l'ancien manifeste, passent eux aussi par le réseau (code de `ngsw-worker.js` : une requête qu'aucun groupe ne sert part au réseau). Hors connexion, la page ne s'ouvre pas, mais la vérification exige le réseau de toute façon. Le POST n'est jamais mis en cache : le service worker d'Angular ne sert que les GET, et il n'a aucun `dataGroups`.
+
+**Vérifié le 2026-10-21** dans Chrome 155 sans interface, sur la construction de production servie par `serveur-production.mjs` (CSP stricte), avec un faux backend :
+- `/connexion` vient du cache du service worker, `/verifier-email` du réseau ;
+- aucune requête avant le clic, puis un POST avec le jeton dans le corps ;
+- adresse et historique sans jeton, second lien compris ;
+- aucune violation de la CSP ;
+- ni jeton ni mot de passe dans la console.

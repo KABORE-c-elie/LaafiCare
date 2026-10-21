@@ -20,7 +20,7 @@ import { SessionService } from './session';
  */
 export const FENETRE_RELANCE_RENOUVELLEMENT_MS = 30_000;
 
-/** Connexion professionnelle, second facteur, affectations, sessions (docs/api.md §1.7, §2.4, §2.6). */
+/** Connexion professionnelle, second facteur, affectations, sessions, vérification de l'email (docs/api.md §1.7, §2.4, §2.6, §2.7). */
 @Injectable({ providedIn: 'root' })
 export class AccesService {
   private readonly http = inject(HttpClient);
@@ -58,6 +58,33 @@ export class AccesService {
       }),
     );
     this.session.ouvrirSansAffectation(reponse);
+  }
+
+  /**
+   * Vérification de l'email (§2.7). Toujours un POST, jamais un GET : un GET
+   * est une méthode « sûre » qui ne doit rien changer (RFC 9110 §9.2.1), et
+   * les filtres de messagerie ouvrent les liens tout seuls. Le jeton part dans
+   * le corps, jamais dans l'adresse.
+   */
+  async verifierEmail(jeton: string): Promise<void> {
+    await firstValueFrom(
+      this.http.post<void>(
+        '/api/professionnels/email/verifier',
+        { jeton },
+        { context: contexteJeton('aucun'), timeout: DELAI_REQUETE_MS },
+      ),
+    );
+  }
+
+  /** Renvoi du lien de vérification (§2.7), avec le mot de passe professionnel. */
+  async renvoyerLien(email: string, motDePasse: string): Promise<void> {
+    await firstValueFrom(
+      this.http.post<void>(
+        '/api/professionnels/email/renvoyer',
+        { email, mot_de_passe: motDePasse },
+        { context: contexteJeton('aucun'), timeout: DELAI_REQUETE_MS },
+      ),
+    );
   }
 
   async listerAffectations(): Promise<Affectation[]> {

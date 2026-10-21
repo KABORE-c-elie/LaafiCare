@@ -1,5 +1,5 @@
-import { HttpErrorResponse } from '@angular/common/http';
-import { codeErreur, decoderErreur } from './erreur';
+import { HttpErrorResponse, HttpHeaders } from '@angular/common/http';
+import { codeErreur, decoderErreur, secondesRetryAfter } from './erreur';
 import { MESSAGES, messagePourErreur } from './messages';
 
 function reponse(status: number, error: unknown): HttpErrorResponse {
@@ -63,5 +63,23 @@ describe('messagePourErreur', () => {
     const decodee = decoderErreur(reponse(500, { erreur: 'détail', code: 'erreur_interne' }));
     expect(messagePourErreur(decodee)).toBe(MESSAGES.erreurInterne);
     expect(messagePourErreur({ genre: 'inconnue', statut: 502 })).toBe(MESSAGES.erreurInterne);
+  });
+});
+
+describe('secondesRetryAfter', () => {
+  function avecEnTete(valeur: string | null): HttpErrorResponse {
+    const headers = valeur === null ? new HttpHeaders() : new HttpHeaders({ 'Retry-After': valeur });
+    return new HttpErrorResponse({ status: 429, headers, error: { erreur: 'x', code: 'trop_de_demandes' } });
+  }
+
+  it('lit un nombre de secondes', () => {
+    expect(secondesRetryAfter(avecEnTete('45'))).toBe(45);
+  });
+
+  it('null si l’en-tête manque, n’est pas un entier, ou si ce n’est pas une réponse HTTP', () => {
+    expect(secondesRetryAfter(avecEnTete(null))).toBeNull();
+    expect(secondesRetryAfter(avecEnTete('Wed, 21 Oct 2026 07:28:00 GMT'))).toBeNull();
+    expect(secondesRetryAfter(avecEnTete('-3'))).toBeNull();
+    expect(secondesRetryAfter(new Error('x'))).toBeNull();
   });
 });

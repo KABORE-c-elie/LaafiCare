@@ -97,6 +97,75 @@ describe('ConnexionPage', () => {
     expect(element().querySelector<HTMLInputElement>('#mot-de-passe')?.value).toBe('');
   });
 
+  it('aide « Sans accent ni espace » sous l’email, reliée au champ', () => {
+    expect(element().querySelector('#email-aide')?.textContent).toContain('Sans accent ni espace');
+    expect(element().querySelector('#email')?.getAttribute('aria-describedby')).toBe('email-aide');
+  });
+
+  async function arriverSurEmailNonVerifie(): Promise<void> {
+    saisir('email', 'agent@example.org');
+    saisir('mot-de-passe', 'Exemple#2026');
+    await soumettre();
+    controleur
+      .expectOne('/api/professionnels/connexion')
+      .flush({ erreur: 'x', code: 'email_non_verifie' }, { status: 403, statusText: 'Forbidden' });
+    await attendre();
+    await fixture.whenStable();
+  }
+
+  // Trouvé par sa classe : son texte change pendant l'envoi (« Envoi… »).
+  function boutonRenvoi(): HTMLButtonElement | undefined {
+    return element().querySelector<HTMLButtonElement>('button.bouton--secondaire') ?? undefined;
+  }
+
+  it('403 email_non_verifie : message de docs/api.md et bouton « Renvoyer le lien », qui réutilise la saisie une fois', async () => {
+    expect(boutonRenvoi()).toBeUndefined();
+    await arriverSurEmailNonVerifie();
+    expect(element().querySelector('[role="alert"]')?.textContent).toContain(
+      "Votre email n'est pas encore vérifié. Ouvrez le lien que nous vous avons envoyé, ou demandez-en un nouveau.",
+    );
+    expect(element().querySelector<HTMLInputElement>('#mot-de-passe')?.value).toBe('Exemple#2026');
+
+    boutonRenvoi()?.click();
+    await fixture.whenStable();
+    expect(boutonRenvoi()?.disabled).toBe(true);
+    expect(boutonRenvoi()?.textContent).toContain('Envoi…');
+    const requete = controleur.expectOne({ method: 'POST', url: '/api/professionnels/email/renvoyer' });
+    expect(requete.request.body).toEqual({ email: 'agent@example.org', mot_de_passe: 'Exemple#2026' });
+    requete.flush(null, { status: 204, statusText: 'No Content' });
+    await attendre();
+    await fixture.whenStable();
+    expect(element().querySelector('[role="status"]')?.textContent).toContain(
+      'Si votre compte existe, un nouveau lien vous a été envoyé.',
+    );
+    // Gardé le temps de cet envoi seulement.
+    expect(element().querySelector<HTMLInputElement>('#mot-de-passe')?.value).toBe('');
+    expect(router.navigate).not.toHaveBeenCalled();
+  });
+
+  it('renvoi refusé 429 : bouton désactivé avec le décompte', async () => {
+    await arriverSurEmailNonVerifie();
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    try {
+      boutonRenvoi()?.click();
+      controleur
+        .expectOne('/api/professionnels/email/renvoyer')
+        .flush(
+          { erreur: 'x', code: 'trop_de_demandes' },
+          { status: 429, statusText: 'Too Many Requests', headers: { 'Retry-After': '60' } },
+        );
+      await attendre();
+      await fixture.whenStable();
+      expect(element().textContent).toContain('Vous pourrez demander un nouveau lien dans 60 s.');
+      expect(boutonRenvoi()?.disabled).toBe(true);
+      vi.advanceTimersByTime(60_000);
+      await fixture.whenStable();
+      expect(boutonRenvoi()?.disabled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('erreur réseau : message de connexion internet', async () => {
     saisir('email', 'agent@example.org');
     saisir('mot-de-passe', 'Exemple#2026');

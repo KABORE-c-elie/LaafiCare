@@ -8,6 +8,10 @@ export const MESSAGES = {
   emailNonVerifie:
     "Votre email n'est pas encore vérifié. Ouvrez le lien que nous vous avons envoyé, ou demandez-en un nouveau.",
   codeInvalide: 'Code incorrect.',
+  // Vérification de l'email (docs/api.md §2.7) : textes du porteur (2026-10-21).
+  emailVerifie: 'Votre email est vérifié. Vous pouvez maintenant vous connecter.',
+  lienInvalide: "Ce lien n'est plus valable ou a déjà servi. Demandez-en un nouveau.",
+  lienRenvoye: 'Si votre compte existe, un nouveau lien vous a été envoyé.',
   delaiDepasse: 'Le délai est dépassé. Reconnectez-vous.',
   affectationNonExercable: "Cet espace n'est pas disponible pour le moment.",
   accesRetire: 'Votre accès à cet espace a été retiré.',
@@ -20,6 +24,7 @@ const PAR_CODE: Readonly<Record<string, string>> = {
   identifiants_invalides: MESSAGES.identifiantsInvalides,
   email_non_verifie: MESSAGES.emailNonVerifie,
   code_invalide: MESSAGES.codeInvalide,
+  lien_invalide: MESSAGES.lienInvalide,
   affectation_non_exercable: MESSAGES.affectationNonExercable,
   acces_refuse: MESSAGES.accesRetire,
 };
