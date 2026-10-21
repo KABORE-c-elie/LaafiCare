@@ -116,6 +116,10 @@ pub enum ErreurStructure {
     EmailInvalide(&'static str),
     #[error("Ce type de structure ne peut pas encore être créé.")]
     TypeNonDisponible,
+    #[error("Le nom de la structure dépasse {NOM_LONGUEUR_MAX} caractères.")]
+    NomTropLong,
+    #[error("Le nom de la structure contient un retour à la ligne ou un caractère invisible.")]
+    NomInvalide,
     /// Deux erreurs, deux codes (décision du porteur, 2026-10-21) :
     /// l'application sait quel champ signaler sans lire le message.
     #[error("Numéro de service invalide.")]
@@ -163,6 +167,25 @@ fn obligatoire(champ: &'static str, valeur: &str) -> Result<String, ErreurStruct
         return Err(ErreurStructure::ChampObligatoire(champ));
     }
     Ok(valeur.to_string())
+}
+
+/// Longueur maximale du nom, en caractères (décision du porteur,
+/// 2026-10-21) : le nom est repris dans le SMS d'invitation, qui tient alors
+/// en 2 parties au plus (3GPP TS 23.040 §9.2.3.24.1). Garantie aussi par la
+/// base (migration 0023).
+pub const NOM_LONGUEUR_MAX: usize = 100;
+
+/// Mêmes règles que la migration 0023 : 100 caractères au plus, ni
+/// caractère de contrôle (`char::is_control`, catégorie Unicode Cc) ni
+/// séparateur de ligne ou de paragraphe (U+2028, U+2029).
+fn controler_nom(nom: &str) -> Result<(), ErreurStructure> {
+    if nom.chars().count() > NOM_LONGUEUR_MAX {
+        return Err(ErreurStructure::NomTropLong);
+    }
+    if nom.chars().any(|c| c.is_control() || c == '\u{2028}' || c == '\u{2029}') {
+        return Err(ErreurStructure::NomInvalide);
+    }
+    Ok(())
 }
 
 /// Texte facultatif : vide ou absent devient `None`.
@@ -217,6 +240,7 @@ pub async fn creer(
         return Err(ErreurStructure::TypeNonDisponible);
     }
     let nom = obligatoire("nom", saisie.nom)?;
+    controler_nom(&nom)?;
     let region = obligatoire("region", saisie.region)?;
     let province = obligatoire("province", saisie.province)?;
     let commune = obligatoire("commune", saisie.commune)?;
@@ -620,6 +644,9 @@ mod tests {
         let emails = EmailsRecus::default();
         let patient_id = patient(&pool, "+22670150004", Some("deja@example.org")).await;
         let base = || saisie(Some("deja@example.org"), PRO);
+        // 101 caractères accentués : la limite compte des caractères, pas des
+        // octets.
+        let nom_trop_long = "é".repeat(NOM_LONGUEUR_MAX + 1);
 
         let cas: Vec<(NouvelleStructure, fn(&ErreurStructure) -> bool)> = vec![
             (NouvelleStructure { type_structure: TypeStructure::Clinique, ..base() }, |e| {
@@ -627,6 +654,12 @@ mod tests {
             }),
             (NouvelleStructure { nom: "  ", ..base() }, |e| matches!(e, ErreurStructure::ChampObligatoire("nom"))),
             (NouvelleStructure { region: "", ..base() }, |e| matches!(e, ErreurStructure::ChampObligatoire("region"))),
+            // Migration 0023 : 100 caractères au plus, ni retour à la ligne
+            // ni caractère de contrôle.
+            (NouvelleStructure { nom: &nom_trop_long, ..base() }, |e| matches!(e, ErreurStructure::NomTropLong)),
+            (NouvelleStructure { nom: "MUNASEB\nCentre", ..base() }, |e| matches!(e, ErreurStructure::NomInvalide)),
+            (NouvelleStructure { nom: "MUNASEB\u{2028}Centre", ..base() }, |e| matches!(e, ErreurStructure::NomInvalide)),
+            (NouvelleStructure { nom: "MUNASEB\u{7}", ..base() }, |e| matches!(e, ErreurStructure::NomInvalide)),
             (NouvelleStructure { telephone: "12", ..base() }, |e| {
                 matches!(e, ErreurStructure::TelephoneServiceInvalide)
             }),

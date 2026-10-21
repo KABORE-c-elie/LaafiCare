@@ -843,6 +843,7 @@ Cycle : `brouillon` (création) → `en_attente` (soumission) → `validee` ou `
 ```
 
 - **Obligatoires** : `type`, `nom`, `telephone` (numéro de service), `telephone_urgence` (peut être le même), `email` (email **de la structure**), `region`, `province`, `commune`, `latitude`, `longitude`, `mot_de_passe_professionnel`. **Facultatifs** : `parcelle`, `lot`, `section` (zones non loties).
+- **`nom`** : **100 caractères au plus**, sans retour à la ligne ni caractère invisible. Il est repris dans le SMS d'invitation : en lettres sans accent, le SMS tient alors en 2 parties.
 - **`email`** : la coordonnée de l'établissement. Elle n'est pas vérifiée par lien et ne sert pas à se connecter.
 - **`email_professionnel`** : l'email de connexion du responsable. Obligatoire **seulement si la personne n'a pas encore de compte professionnel** ; le compte est alors créé avec cet email et ce mot de passe, qui doit suivre les règles de la section 1.5 (il peut être le même que celui du compte patient). Si l'identité a déjà un email, il doit être le même (majuscules près). C'est cet email qui reçoit le lien de vérification (section 2.7). Avec un compte professionnel existant, `email_professionnel` est ignoré et `mot_de_passe_professionnel` est son mot de passe actuel.
 - **Région, province, commune** : texte libre (aucune liste officielle fermée pour l'instant).
@@ -868,6 +869,8 @@ Cycle : `brouillon` (création) → `en_attente` (soumission) → `validee` ou `
 | 409 | `second_facteur_requis` | le compte professionnel a un second facteur : pas encore pris en charge ici |
 | 422 | `donnees_invalides` | champ obligatoire manquant ou vide, `email` ou `email_professionnel` refusé par le contrôle ci-dessus (le message nomme le champ : « Le champ « email » n'est pas une adresse email valide. »), type inconnu |
 | 422 | `type_non_disponible` | type connu mais pas encore ouvert (clinique, hôpital, pharmacie, laboratoire) |
+| 422 | `nom_trop_long` | nom de plus de 100 caractères |
+| 422 | `nom_invalide` | nom avec un retour à la ligne ou un caractère invisible |
 | 422 | `telephone_service_invalide` | numéro de service : format non reconnu (section 1.6) |
 | 422 | `telephone_urgence_invalide` | numéro d'urgence : format non reconnu (section 1.6) |
 | 422 | `localisation_hors_burkina` | position hors du rectangle |
@@ -967,7 +970,7 @@ Réservé à l'équipe LaafiCare : jeton d'accès `laaficare:administrateur` (se
 Le **responsable** d'une structure validée invite au numéro de téléphone. La personne répond depuis son **compte patient**. Une invitation vaut **7 jours**. Une invitation expirée se lit `expiree` et n'a plus aucune suite.
 
 - **Ce que voit l'invitant** : jamais si un compte existe pour le numéro. La réponse et le SMS sont les mêmes dans tous les cas, et aucun nom n'apparaît avant l'acceptation.
-- **Le SMS**, sans lien ni code : « LaafiCare : vous êtes invité(e) à rejoindre « {structure} » comme {rôle}. Ouvrez l'application LaafiCare avec ce numéro (ou créez votre compte) pour répondre avant le {JJ/MM/AAAA}. LaafiCare ne vous demandera jamais votre mot de passe. »
+- **Le SMS**, sans lien ni code, entièrement dans l'alphabet GSM 7 bits (3GPP TS 23.038) : `LaafiCare : invitation à rejoindre "{structure}" comme {agent MUNASEB | responsable}. Ouvrez ou installez LaafiCare avec ce numéro pour répondre avant le {JJ/MM/AAAA}. LaafiCare ne demande jamais votre mot de passe.` Avec un nom de 100 caractères GSM 7 bits, il tient en 2 parties au plus. Un nom qui contient un caractère hors de cet alphabet (un `ê`, par exemple) le fait partir en UCS-2, plus long.
 - **En développement**, le SMS s'affiche dans le terminal du serveur.
 - **Pour la MUNASEB**, deux rôles : `agent_assurance_munaseb` et `responsable`.
 
@@ -1055,7 +1058,7 @@ Seules les invitations adressées au **numéro du compte patient** existent pour
 | `identifiants_invalides` | 401 | connexions, début du réenrôlement administrateur, renvoi du lien, création de structure (mot de passe professionnel) |
 | `email_non_verifie` | 403 | connexions professionnelle et administrateur, soumission d'une structure |
 | `lien_invalide` | 400 | vérification de l'email |
-| `type_non_disponible`, `localisation_hors_burkina` | 422 | création de structure |
+| `type_non_disponible`, `localisation_hors_burkina`, `nom_trop_long`, `nom_invalide` | 422 | création de structure |
 | `demande_deja_en_cours`, `email_different`, `email_deja_utilise`, `second_facteur_requis` | 409 | création de structure |
 | `structure_inconnue` | 404 | soumission d'une structure, routes administrateur des structures |
 | `decision_sur_sa_propre_structure` | 403 | validation, refus d'une structure |

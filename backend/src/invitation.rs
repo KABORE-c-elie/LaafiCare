@@ -81,14 +81,21 @@ fn roles_permis(type_structure: &str) -> &'static [RoleInvitation] {
     }
 }
 
-/// Texte du SMS (I6, décision du porteur, 2026-10-21), identique que le
-/// numéro ait un compte ou non ; aucun lien ni code (un lien serait un appât
-/// facile à imiter).
+/// Texte du SMS (I6 ; texte révisé par le porteur le 2026-10-21),
+/// identique que le numéro ait un compte ou non ; aucun lien ni code (un
+/// lien serait un appât facile à imiter).
+///
+/// **Entièrement dans l'alphabet GSM 7 bits par défaut** (3GPP TS 23.038,
+/// §6.2.1) : ni « ê », ni « ç » minuscule, ni guillemets « », mais des
+/// guillemets droits. Un SMS seul porte alors 160 caractères, et chaque
+/// partie d'un SMS en plusieurs parties 153 (TS 23.040 §9.2.3.24.1) ; avec
+/// un nom de 100 caractères GSM 7 bits (`structure::NOM_LONGUEUR_MAX`), le
+/// SMS tient en 2 parties. Un nom qui contient un caractère hors de cet
+/// alphabet fait partir le SMS en UCS-2 (accepté par le porteur).
 pub fn texte_sms(structure_nom: &str, role: RoleInvitation, expire_le: &str) -> String {
     format!(
-        "LaafiCare : vous êtes invité(e) à rejoindre « {structure_nom} » comme {}. Ouvrez l'application LaafiCare \
-         avec ce numéro (ou créez votre compte) pour répondre avant le {expire_le}. LaafiCare ne vous demandera \
-         jamais votre mot de passe.",
+        "LaafiCare : invitation à rejoindre \"{structure_nom}\" comme {}. Ouvrez ou installez LaafiCare avec ce \
+         numéro pour répondre avant le {expire_le}. LaafiCare ne demande jamais votre mot de passe.",
         role.libelle()
     )
 }
@@ -620,8 +627,8 @@ mod tests {
         let recus = sms.0.lock().unwrap().clone();
         assert_eq!(recus.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["+22670200002", "+22670200003"]);
         assert_eq!(recus[0].1, recus[1].1, "SMS identique");
-        assert!(recus[0].1.contains("« MUNASEB (test) » comme agent MUNASEB"), "{}", recus[0].1);
-        assert!(recus[0].1.ends_with("LaafiCare ne vous demandera jamais votre mot de passe."));
+        assert!(recus[0].1.contains("\"MUNASEB (test)\" comme agent MUNASEB"), "{}", recus[0].1);
+        assert!(recus[0].1.ends_with("LaafiCare ne demande jamais votre mot de passe."));
         assert!(!recus[0].1.contains("http"));
     }
 
@@ -943,8 +950,70 @@ mod tests {
     #[test]
     fn texte_du_sms() {
         let texte = texte_sms("MUNASEB", RoleInvitation::AgentAssuranceMunaseb, "28/10/2026");
-        assert!(texte.starts_with("LaafiCare : vous êtes invité(e) à rejoindre « MUNASEB » comme agent MUNASEB."));
-        assert!(texte.contains("avant le 28/10/2026."));
-        assert!(texte.ends_with("LaafiCare ne vous demandera jamais votre mot de passe."));
+        assert_eq!(
+            texte,
+            "LaafiCare : invitation à rejoindre \"MUNASEB\" comme agent MUNASEB. Ouvrez ou installez LaafiCare avec ce \
+             numéro pour répondre avant le 28/10/2026. LaafiCare ne demande jamais votre mot de passe."
+        );
+        assert!(texte_sms("X", RoleInvitation::Responsable, "28/10/2026").contains("comme responsable."));
+    }
+
+    /// Alphabet GSM 7 bits par défaut, 3GPP TS 23.038 §6.2.1 (128
+    /// caractères, ici sans l'échappement 0x1B), plus la table d'extension
+    /// §6.2.1.1 (chaque caractère y compte pour deux). Non ASCII écrits en
+    /// échappements `\u{…}`.
+    const GSM7_BASE: &str = "@\u{a3}$\u{a5}\u{e8}\u{e9}\u{f9}\u{ec}\u{f2}\u{c7}\n\u{d8}\u{f8}\r\u{c5}\u{e5}\
+        \u{394}_\u{3a6}\u{393}\u{39b}\u{3a9}\u{3a0}\u{3a8}\u{3a3}\u{398}\u{39e}\u{c6}\u{e6}\u{df}\u{c9} \
+        !\"#\u{a4}%&'()*+,-./0123456789:;<=>?\
+        \u{a1}ABCDEFGHIJKLMNOPQRSTUVWXYZ\u{c4}\u{d6}\u{d1}\u{dc}\u{a7}\
+        \u{bf}abcdefghijklmnopqrstuvwxyz\u{e4}\u{f6}\u{f1}\u{fc}\u{e0}";
+    const GSM7_EXTENSION: &str = "\u{c}^{}\\[~]|\u{20ac}";
+
+    /// Nombre de « septets » du texte en GSM 7 bits, ou `None` si un
+    /// caractère n'y figure pas (le SMS partirait en UCS-2).
+    fn septets_gsm7(texte: &str) -> Option<usize> {
+        texte
+            .chars()
+            .map(|c| {
+                if GSM7_BASE.contains(c) {
+                    Some(1)
+                } else if GSM7_EXTENSION.contains(c) {
+                    Some(2)
+                } else {
+                    None
+                }
+            })
+            .sum()
+    }
+
+    /// Parties d'un SMS GSM 7 bits : 160 septets seul, 153 par partie au-delà
+    /// (TS 23.040 §9.2.3.24.1).
+    fn parties(septets: usize) -> usize {
+        if septets <= 160 { 1 } else { septets.div_ceil(153) }
+    }
+
+    #[test]
+    fn table_gsm7_complete() {
+        // 128 positions moins l'échappement 0x1B.
+        assert_eq!(GSM7_BASE.chars().count(), 127);
+        assert!(septets_gsm7("ê").is_none() && septets_gsm7("\u{ab}").is_none() && septets_gsm7("\u{e7}").is_none());
+    }
+
+    /// Texte fixe (sans le nom) entièrement GSM 7 bits, pour les deux rôles ;
+    /// avec un nom de 100 caractères GSM 7 bits, 306 septets au plus, soit 2
+    /// parties.
+    #[test]
+    fn sms_en_gsm7_et_en_deux_parties_au_plus() {
+        for role in [RoleInvitation::AgentAssuranceMunaseb, RoleInvitation::Responsable] {
+            let fixe = texte_sms("", role, "28/10/2026");
+            assert!(septets_gsm7(&fixe).is_some(), "{fixe}");
+
+            let nom = "M".repeat(crate::structure::NOM_LONGUEUR_MAX);
+            let complet = septets_gsm7(&texte_sms(&nom, role, "28/10/2026")).unwrap();
+            assert!(complet <= 306, "{complet}");
+            assert!(parties(complet) <= 2);
+        }
+        // Un nom hors GSM 7 bits : UCS-2 (accepté par le porteur).
+        assert!(septets_gsm7(&texte_sms("Sant\u{e9} et Bien-\u{ea}tre", RoleInvitation::Responsable, "28/10/2026")).is_none());
     }
 }
