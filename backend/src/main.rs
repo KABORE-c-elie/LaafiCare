@@ -1,6 +1,7 @@
 mod erreur_api;
 mod extracteur_jwt;
 mod routes_administrateur;
+mod routes_espace_patient;
 mod routes_invitation;
 mod routes_membres;
 mod routes_mot_de_passe;
@@ -231,6 +232,12 @@ async fn main() {
         .route("/api/structures/{id}/abandonner", post(routes_structure::abandonner))
         .route("/api/professionnels/membres", get(routes_membres::lister))
         .route("/api/professionnels/membres/{id}/desactiver", post(routes_membres::desactiver))
+        .route("/api/patients/munaseb/droits", get(routes_espace_patient::droits))
+        .route("/api/patients/munaseb/demandes", get(routes_espace_patient::lister_demandes))
+        .route("/api/patients/munaseb/demandes/{id}", get(routes_espace_patient::detail_demande))
+        .route("/api/patients/notifications", get(routes_espace_patient::lister_notifications))
+        .route("/api/patients/notifications/lues", post(routes_espace_patient::marquer_toutes_lues))
+        .route("/api/patients/notifications/{id}/lue", post(routes_espace_patient::marquer_lue))
         .with_state(AppState {
             db: pool,
             jwt,

@@ -147,7 +147,8 @@ Le projet a commencé par une phase de cadrage : un cahier des charges et des di
 - **Ce qui marche déjà** : la connexion des administrateurs et les outils de l'équipe (premier administrateur, administrateurs suivants, désactivation d'un second facteur) ; la création et la soumission d'un établissement MUNASEB, avec la vérification de l'email du responsable ; la validation ou le refus de la demande par l'équipe (routes administrateur, avec second facteur).
 - **Ce qui marche aussi** : le parcours complet de la MUNASEB, de la création à l'agent qui traite les remboursements (structure créée, validée, agent invité, invitation acceptée, email vérifié, connexion, affectation activée).
 - **Ce qui marche encore** : l'abandon d'une demande en brouillon ou refusée par son créateur ; la liste des membres d'un établissement et le retrait de l'accès d'un agent ou d'un autre responsable par un responsable (ses sessions sur cet établissement se ferment aussitôt, et un email le prévient).
-- **Ce qui n'est pas encore utilisable** : les routes du contrat MUNASEB (étape 5) et celles du patient (étape 6). Les autres types d'établissement attendent la liste de leurs pièces justificatives.
+- **Espace patient MUNASEB** (étape 6) : le patient voit ses droits (couvert, en carence, expiré, suspendu, avec le solde de sa période), ses demandes de remboursement et leur détail (motif d'un rejet compris), et ses notifications, qu'il peut marquer comme lues. Il ne voit jamais que ses propres données.
+- **Ce qui n'est pas encore utilisable** : les routes du contrat MUNASEB (étape 5, en attente des réponses de la MUNASEB) ; un contrat se crée encore en SQL. Les autres types d'établissement attendent la liste de leurs pièces justificatives.
 - **Les détails** : les tables et leurs règles dans [`docs/modele-donnees.md`](docs/modele-donnees.md), la double authentification dans [`docs/securite.md`](docs/securite.md), les routes prévues dans [`docs/api.md`](docs/api.md) (section 4).
 
 Les modules médicaux (dossier, ordonnances, pharmacie, laboratoire, suivi de grossesse) viendront ensuite. La liste détaillée des décisions encore ouvertes est dans [`docs/points-ouverts.md`](docs/points-ouverts.md).
@@ -281,6 +282,18 @@ Toutes les routes, leurs réponses et leurs erreurs sont décrites dans [`docs/a
 | 10. Retirer un accès | le responsable, son affectation `responsable` active : `GET …/api/professionnels/membres`, puis `POST …/api/professionnels/membres/<affectation_id>/desactiver` | aucun | 200 avec la liste (sans téléphone ni email), puis 204 ; un email simulé « accès retiré » s'affiche dans le terminal ; le jeton d'accès de l'agent reçoit ensuite 401 `jeton_invalide`. Retirer le dernier responsable donne 409 `dernier_responsable` |
 
 Abandonner une demande en brouillon ou refusée : `POST …/api/structures/<structure_id>/abandonner` avec le jeton patient du créateur (204) ; la personne peut ensuite en créer une nouvelle.
+
+### Voir ses droits et ses demandes (espace patient MUNASEB)
+
+Avec le `jeton_acces` d'un compte patient (en-tête `Authorization: Bearer <jeton_acces>`) :
+
+| Demande | Réponse attendue |
+|---|---|
+| `GET …/api/patients/munaseb/droits` | 200, `"etat": "aucun_contrat"` tant que le patient n'a pas de contrat (un contrat ne se crée encore qu'en SQL dans la base de développement, avec une période d'adhésion qui contient la date du jour) ; ensuite `"etat": "couvert"` avec le plafond, la somme consommée et le solde |
+| `GET …/api/patients/munaseb/demandes` | 200, les demandes du patient, les plus récentes d'abord (après une demande créée par un agent avec `simuler-acte` et le NIP du patient) |
+| `GET …/api/patients/munaseb/demandes/<id>` | 200 avec le détail ; 404 `demande_inconnue` pour la demande d'un autre patient |
+| `GET …/api/patients/notifications` | 200, avec `non_lues` |
+| `POST …/api/patients/notifications/<id>/lue` | 204 ; `non_lues` diminue de 1 |
 
 Lien perdu ou expiré (24 h) : `POST …/api/professionnels/email/renvoyer` avec `{"email": "…", "mot_de_passe": "…"}` (mot de passe professionnel), une fois par minute au plus.
 

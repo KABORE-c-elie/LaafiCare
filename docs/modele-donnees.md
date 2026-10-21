@@ -177,8 +177,10 @@ Depuis la migration 0021, l'agent est désigné par son **affectation** (l'affec
 
 ### `notification` : les messages au patient
 
-Chaque changement de statut d'une demande crée une notification, que l'application patient affichera : titre, message, lue ou non. Le texte reste **volontairement vague** (ni type d'acte, ni nom de l'établissement), car il pourrait un jour s'afficher sur l'écran verrouillé du téléphone. Une notification qui échoue n'annule jamais la demande.
+Chaque changement de statut d'une demande crée une notification, que l'application patient affichera : titre, message, lue ou non. Le texte reste **volontairement vague** (ni type d'acte, ni nom de l'établissement), car il pourrait un jour s'afficher sur l'écran verrouillé du téléphone. Une notification qui échoue n'annule jamais la demande. Le patient lit ses notifications et les marque comme lues depuis son application ; il ne voit jamais celles d'une autre personne.
 Fichier : [`notification.rs`](../backend/src/notification.rs). Migration 0008.
+
+Le **solde d'une période** (plafond moins les montants validés et payés) se calcule à un seul endroit, pour l'agent comme pour le patient : [`contrat_assurance_munaseb.rs`](../backend/src/contrat_assurance_munaseb.rs). Ce que le patient voit de ses droits et de ses demandes : [`espace_patient_munaseb.rs`](../backend/src/espace_patient_munaseb.rs).
 
 ## 4. Établissements, pièces et affectations
 

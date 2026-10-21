@@ -210,6 +210,12 @@ Résumé :
 | GET | `/api/professionnels/membres` | jeton en exercice, responsable | fonctionne (section 2.12) |
 | POST | `/api/professionnels/membres/{id}/desactiver` | jeton en exercice, responsable | fonctionne (section 2.12) |
 | GET | `/api/patients/invitations` | jeton `laaficare:patient` | fonctionne (section 2.10) |
+| GET | `/api/patients/munaseb/droits` | jeton `laaficare:patient` | fonctionne (section 2.13) |
+| GET | `/api/patients/munaseb/demandes` | jeton `laaficare:patient` | fonctionne (section 2.13) |
+| GET | `/api/patients/munaseb/demandes/{id}` | jeton `laaficare:patient` | fonctionne (section 2.13) |
+| GET | `/api/patients/notifications` | jeton `laaficare:patient` | fonctionne (section 2.13) |
+| POST | `/api/patients/notifications/{id}/lue` | jeton `laaficare:patient` | fonctionne (section 2.13) |
+| POST | `/api/patients/notifications/lues` | jeton `laaficare:patient` | fonctionne (section 2.13) |
 | POST | `/api/patients/invitations/{id}/accepter` | jeton `laaficare:patient` | fonctionne (section 2.10) |
 | POST | `/api/patients/invitations/{id}/refuser` | jeton `laaficare:patient` | fonctionne (section 2.10) |
 | POST | `/api/professionnels/mot-de-passe/oubli` | tout le monde | fonctionne (section 2.11) |
@@ -1111,6 +1117,72 @@ Jeton `laaficare:professionnel_en_exercice` sur une affectation **`responsable`*
 - **Email** à la personne, après l'enregistrement, si son email est vérifié : « Votre accès à une structure LaafiCare a été retiré le JJ/MM/AAAA à HH:MM (heure du Burkina Faso). Si vous pensez que c'est une erreur, contactez le responsable de la structure ou l'équipe LaafiCare à {adresse}. » Un échec d'envoi n'annule rien.
 - L'application demande une confirmation avant l'appel.
 
+### 2.13 Espace patient : droits MUNASEB, demandes, notifications
+
+Jeton `laaficare:patient` seulement. **Le patient est toujours celui du jeton** : aucune route ne prend un NIP ni un identifiant de patient ou de contrat. Une demande ou une notification d'une autre personne répond exactement comme une qui n'existe pas (404). Un compte patient sans dossier patient donne 500 `erreur_interne`, comme `GET /api/patients/moi`.
+
+#### `GET /api/patients/munaseb/droits`
+
+**Toujours 200**, avec un champ `etat`. Les champs sans objet valent `null`. Le patient ne reçoit jamais l'université, l'UFR, le matricule ni la personne à prévenir.
+
+```json
+{
+  "etat": "couvert",
+  "numero_carte": "…",
+  "periode_en_cours": {"debut": "2026-04-15", "fin": "2027-04-14"},
+  "periode_suivante": null,
+  "plafond_fcfa": 100000,
+  "consomme_fcfa": 96000,
+  "solde_fcfa": 4000,
+  "debut_couverture": null,
+  "fin_derniere_periode": null
+}
+```
+
+| `etat` | Champs remplis | Texte conseillé |
+|---|---|---|
+| `aucun_contrat` | aucun | « Vous n'avez pas de contrat MUNASEB. » |
+| `couvert` | `numero_carte`, `periode_en_cours`, `plafond_fcfa`, `consomme_fcfa`, `solde_fcfa` ; `periode_suivante` si un renouvellement est déjà payé | « Couvert jusqu'au JJ/MM/AAAA. Reste : N FCFA. » |
+| `en_carence` | `numero_carte`, `periode_suivante`, `debut_couverture` | « Couverture à partir du JJ/MM/AAAA. » (jamais « expiré ») |
+| `expire` | `numero_carte`, `fin_derniere_periode` | « Votre contrat a pris fin le JJ/MM/AAAA. » |
+| `suspendu` | `numero_carte` | « Votre contrat est suspendu. Contactez la MUNASEB. » |
+
+- Le solde est **indicatif** : c'est celui qu'utilise l'agent, recalculé au moment de chaque validation. Seuls les montants validés et payés le consomment.
+- La date du jour est celle du Burkina Faso.
+
+#### `GET /api/patients/munaseb/demandes?statut=&limite=&avant=`
+
+- Les demandes du patient, **les plus récentes d'abord**. `statut` facultatif : `en_attente`, `en_cours`, `valide`, `rejete`, `paye`. `limite` de 1 à 100 (50 par défaut) ; `avant` = `suivant` de la page précédente. Sans contrat : liste vide.
+- **Réponse 200** : `{"demandes": [{"id", "statut", "type_acte", "date_acte", "partenaire", "montant_acte_fcfa", "montant_demande_fcfa", "montant_rembourse_fcfa", "date_demande", "date_dernier_changement"}], "suivant": "…" | null}`.
+  - `montant_demande_fcfa` : la **part MUNASEB demandée** (taux ou forfait du type d'acte) ;
+  - `montant_rembourse_fcfa` : fixé à la validation, `null` avant ; il peut être plus petit que la part demandée si le plafond est atteint.
+- 400 `parametre_invalide` : limite hors bornes, statut inconnu, curseur qui n'est pas un UUID.
+
+#### `GET /api/patients/munaseb/demandes/{id}`
+
+- **Réponse 200** : les champs de la liste, plus :
+  - `motif_rejet` : rempli pour une demande rejetée. Il n'est **jamais** dans la liste ni dans une notification ;
+  - `periode` : `{"debut", "fin"}`, la période d'adhésion de la demande ;
+  - `plafond_atteint` : `true` quand la demande a été validée pour moins que la part demandée ;
+  - `historique` : `[{"statut", "date"}]`, du plus ancien au plus récent, **sans l'agent**.
+- 404 `demande_inconnue` : demande inexistante ou d'un autre patient. 400 `chemin_invalide`.
+- Jamais renvoyés : le nom ou l'affectation d'un agent, le NIP, la référence de l'acte chez le partenaire.
+
+Libellés conseillés : `en_attente` « Reçue », `en_cours` « En cours de traitement », `valide` « Validée », `rejete` « Rejetée », `paye` « Payée ». **Une demande rejetée, un contrat expiré ou suspendu ne s'affichent ni en rouge ni en orange** (couleurs réservées aux alertes de santé) : couleur neutre, avec une icône et un texte.
+
+#### `GET /api/patients/notifications?limite=&avant=`
+
+- **Réponse 200** : `{"notifications": [{"id", "titre", "message", "lu", "date_creation", "demande_id"}], "non_lues": 3, "suivant": "…" | null}`.
+  - Les plus récentes d'abord ; `limite` de 1 à 100 (50 par défaut) ; `avant` = `suivant`.
+  - `non_lues` : le nombre total de notifications non lues, pour le badge.
+  - `demande_id` : la demande concernée, à ouvrir avec la route de détail.
+- Les textes restent minimaux : ni montant, ni type d'acte, ni motif.
+
+#### `POST /api/patients/notifications/{id}/lue` et `POST /api/patients/notifications/lues`
+
+- Sans corps. **204** : la notification est lue, même si elle l'était déjà (la requête peut être rejouée sans effet). La seconde route marque toutes les notifications de la personne.
+- 404 `notification_inconnue` : notification inexistante ou d'une autre personne.
+
 ---
 
 ## 3. Codes d'erreur : index
@@ -1125,7 +1197,7 @@ Jeton `laaficare:professionnel_en_exercice` sur une affectation **`responsable`*
 | `dernier_responsable` | 409 | désactivation d'une affectation |
 | `json_invalide`, `donnees_invalides`, `content_type_invalide`, `corps_illisible` | 400, 422, 415 | routes avec corps |
 | `chemin_invalide` | 400 | routes avec `{id}` |
-| `parametre_invalide` | 400 | liste des remboursements, liste des structures (administrateur) |
+| `parametre_invalide` | 400 | listes paginées (remboursements, structures, invitations, demandes et notifications du patient) |
 | `telephone_invalide` | 422 | routes patient, création d'une invitation |
 | `telephone_service_invalide`, `telephone_urgence_invalide` | 422 | création de structure |
 | `code_invalide` | 401 | inscription, réinitialisation, second facteur (professionnel, administrateur), confirmation du réenrôlement |
@@ -1150,7 +1222,8 @@ Jeton `laaficare:professionnel_en_exercice` sur une affectation **`responsable`*
 | `montant_invalide`, `nip_invalide`, `partenaire_suspendu`, `non_couvert`, `en_carence` | 422 | simuler-acte |
 | `patient_inconnu`, `partenaire_inconnu` | 404 | simuler-acte |
 | `reference_acte_deja_utilisee` | 409 | simuler-acte |
-| `demande_inconnue` | 404 | détail, transitions |
+| `demande_inconnue` | 404 | détail, transitions ; détail d'une demande du patient (inexistante ou d'un autre patient) |
+| `notification_inconnue` | 404 | notification lue (inexistante ou d'une autre personne) |
 | `transition_invalide` | 409 | transitions, soumission, abandon, validation et refus d'une structure, désactivation d'une affectation |
 | `motif_vide`, `motif_trop_long` | 422 | rejet d'une demande de remboursement, refus d'une structure |
 | `erreur_interne` | 500 | toutes |
@@ -1205,6 +1278,4 @@ Le module existe déjà côté serveur ; les routes manquent.
 
 ### 4.8 Côté patient (étape 6)
 
-- Ses droits MUNASEB (plafond restant, période, carence).
-- Ses demandes de remboursement et leur statut.
-- Ses notifications : liste, marquer comme lue.
+- ✅ **Codé**, section 2.13 : droits MUNASEB, demandes de remboursement, notifications.

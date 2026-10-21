@@ -26,7 +26,9 @@ use serde::Serialize;
 use sqlx::PgPool;
 use sqlx::types::Uuid;
 
-use crate::contrat_assurance_munaseb::PLAFOND_ANNUEL_FCFA;
+// Un seul calcul du solde pour la validation, l'agent et le patient
+// (décision E4, 2026-10-21).
+use crate::contrat_assurance_munaseb::solde_periode;
 use crate::nip;
 use crate::notification::{self, TypeNotification};
 
@@ -591,7 +593,7 @@ pub async fn valider(
         .execute(&mut *tx)
         .await?;
 
-    let solde = solde_periode(&mut *tx, demande.periode_id).await?;
+    let solde = solde_periode(&mut *tx, demande.periode_id).await?.solde_fcfa;
     let montant_rembourse = demande.montant_demande_fcfa.min(solde);
 
     sqlx::query(
@@ -672,24 +674,6 @@ pub async fn marquer_payee(
     Ok(())
 }
 
-/// Solde restant d'une période : plafond moins la somme des montants
-/// Validé et Payé (décisions actées, section 12). Utilisé sous verrou par
-/// `valider`, et sans verrou par la lecture du détail (valeur indicative).
-async fn solde_periode<'e, E>(executeur: E, periode_id: Uuid) -> Result<i32, sqlx::Error>
-where
-    E: sqlx::PgExecutor<'e>,
-{
-    let consomme: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(montant_rembourse_fcfa), 0)::BIGINT FROM demande_remboursement_munaseb \
-         WHERE periode_id = $1 AND statut IN ('valide', 'paye')",
-    )
-    .bind(periode_id)
-    .fetch_one(executeur)
-    .await?;
-    // Le `max(0)` couvre une baisse future du plafond ; le résultat reste
-    // <= PLAFOND_ANNUEL_FCFA, il tient dans un i32.
-    Ok((i64::from(PLAFOND_ANNUEL_FCFA) - consomme).max(0) as i32)
-}
 
 // ---------------------------------------------------------------------
 // Lectures pour les agents
@@ -826,7 +810,7 @@ pub async fn detail_demande(pool: &PgPool, demande_id: Uuid) -> Result<Option<De
         motif_rejet,
         periode_debut,
         periode_fin,
-        solde_restant_periode_fcfa: solde_periode(pool, periode_id).await?,
+        solde_restant_periode_fcfa: solde_periode(pool, periode_id).await?.solde_fcfa,
         historique,
     }))
 }
@@ -834,6 +818,7 @@ pub async fn detail_demande(pool: &PgPool, demande_id: Uuid) -> Result<Option<De
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::contrat_assurance_munaseb::PLAFOND_ANNUEL_FCFA;
     use chrono::Utc;
 
     #[test]

@@ -80,6 +80,55 @@ pub struct DroitsContrat {
     pub plafond_restant_fcfa: i32,
 }
 
+/// Plafond, consommation et solde d'une période (décision E4 du
+/// 2026-10-21) : le seul calcul du solde, pour la validation (sous verrou),
+/// le détail vu par l'agent et les droits vus par le patient.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SoldePeriode {
+    pub plafond_fcfa: i32,
+    pub consomme_fcfa: i32,
+    pub solde_fcfa: i32,
+}
+
+/// Solde d'une période : plafond moins la somme des montants Validé et Payé
+/// (décisions actées, section 12). Chaque demande est rattachée à sa
+/// période dès sa création : aucun filtre de dates n'est nécessaire.
+pub async fn solde_periode<'e, E>(executeur: E, periode_id: Uuid) -> Result<SoldePeriode, sqlx::Error>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let consomme: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(montant_rembourse_fcfa), 0)::BIGINT FROM demande_remboursement_munaseb \
+         WHERE periode_id = $1 AND statut IN ('valide', 'paye')",
+    )
+    .bind(periode_id)
+    .fetch_one(executeur)
+    .await?;
+    // Le plafonnement au passage à Validé empêche tout dépassement ; le
+    // `max(0)` couvre une baisse future du plafond. Le solde reste <=
+    // PLAFOND_ANNUEL_FCFA, et la consommation d'une période aussi (chaque
+    // validation est plafonnée au solde) : les deux tiennent dans un i32 ;
+    // `min` garde la conversion sûre dans tous les cas.
+    let solde = (i64::from(PLAFOND_ANNUEL_FCFA) - consomme).max(0) as i32;
+    Ok(SoldePeriode {
+        plafond_fcfa: PLAFOND_ANNUEL_FCFA,
+        consomme_fcfa: consomme.min(i64::from(i32::MAX)) as i32,
+        solde_fcfa: solde,
+    })
+}
+
+/// Date du jour au Burkina, lue dans PostgreSQL (décision D9 : une seule
+/// horloge, `AT TIME ZONE 'Africa/Ouagadougou'`, doc PostgreSQL 18
+/// §9.9.4). Pour les lectures des droits (décision E4).
+pub(crate) async fn aujourdhui_au_burkina<'e, E>(executeur: E) -> Result<NaiveDate, sqlx::Error>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    sqlx::query_scalar("SELECT (now() AT TIME ZONE 'Africa/Ouagadougou')::date")
+        .fetch_one(executeur)
+        .await
+}
+
 /// Date du jour. UTC suffit : le Burkina Faso est à UTC+0 toute l'année,
 /// la date UTC est donc la date locale.
 fn aujourdhui() -> NaiveDate {
@@ -261,7 +310,7 @@ pub async fn verifier_droits(
         return Err(ErreurContratAssuranceMunaseb::ContratSuspendu);
     }
 
-    let jour = aujourdhui();
+    let jour = aujourdhui_au_burkina(pool).await?;
 
     let periode_en_cours: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM periode_adhesion_munaseb \
@@ -288,27 +337,8 @@ pub async fn verifier_droits(
         });
     };
 
-    // Décisions actées (section 12) : plafond par période ; seuls les
-    // montants Validé et Payé le consomment. Chaque demande est rattachée à
-    // sa période dès sa création, aucun filtre de dates n'est nécessaire.
-    let consomme: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(montant_rembourse_fcfa), 0)::BIGINT FROM demande_remboursement_munaseb \
-         WHERE periode_id = $1 AND statut IN ('valide', 'paye')",
-    )
-    .bind(periode_id)
-    .fetch_one(pool)
-    .await?;
-
-    // Le plafonnement au passage à Validé empêche normalement tout
-    // dépassement ; le `max(0)` couvre une baisse future du plafond, qui
-    // laisserait une consommation passée supérieure au nouveau montant.
-    let restant = (i64::from(PLAFOND_ANNUEL_FCFA) - consomme).max(0);
-
-    Ok(DroitsContrat {
-        plafond_annuel_fcfa: PLAFOND_ANNUEL_FCFA,
-        // restant <= PLAFOND_ANNUEL_FCFA : tient dans un i32.
-        plafond_restant_fcfa: restant as i32,
-    })
+    let solde = solde_periode(pool, periode_id).await?;
+    Ok(DroitsContrat { plafond_annuel_fcfa: solde.plafond_fcfa, plafond_restant_fcfa: solde.solde_fcfa })
 }
 
 #[cfg(test)]

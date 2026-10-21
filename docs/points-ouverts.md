@@ -124,6 +124,16 @@ Détail dans `web/docs/decisions.md` (branche `web`) :
 - **Confirmation avant d'abandonner une demande de structure** (AB4) : l'abandon est définitif ; contrat dans `docs/api.md`, section 2.8.
 - **Confirmation avant de retirer l'accès d'un membre** : contrat dans `docs/api.md`, section 2.12.
 
+### À faire dans l'application mobile (espace patient MUNASEB, étape 6, 2026-10-21)
+
+Contrat dans `docs/api.md`, section 2.13.
+- **Écran « Mes droits »** selon `etat`, avec les textes conseillés. En carence, « Couverture à partir du JJ/MM/AAAA », jamais « expiré ». Le solde est présenté comme indicatif.
+- **Écrans « Mes demandes » et « Détail »** : le motif de rejet n'apparaît que dans le détail ; la « part MUNASEB demandée » est distincte du « montant remboursé » ; `plafond_atteint` explique l'écart.
+- **Couleurs** : une demande rejetée, un contrat expiré ou suspendu ne s'affichent ni en rouge ni en orange (réservés aux alertes de santé, CLAUDE.md §6) ; couleur neutre, icône et texte.
+- **Notifications** : badge avec `non_lues` ; ouvrir une notification la marque comme lue, puis ouvre la demande liée (`demande_id`). Sans push, les notifications sont rechargées à l'ouverture de l'application et quand on tire l'écran vers le bas.
+- **Hors connexion (règle du porteur, 2026-10-21)** : si l'application garde les droits et les demandes pour les afficher hors connexion, **ces données sont chiffrées sur le téléphone**, comme les rappels (base locale chiffrée, clé dans `flutter_secure_storage`) ; sinon, **rien n'est gardé**. L'écran affiche alors « mis à jour le … ».
+- **Jeton** : renouvelé avant l'appel quand il expire dans moins d'une minute, comme ailleurs.
+
 ---
 
 ## 3. Mise en production
@@ -241,7 +251,9 @@ Un soignant a besoin du NIP pour ouvrir le dossier. Le patient peut être trop m
 
 ### MUNASEB
 
-- Suspension d'un contrat : à concevoir.
+- Suspension d'un contrat : à concevoir (étape 5, après les réponses de la MUNASEB ; l'étape 6 passe avant, décision du porteur du 2026-10-21).
+- **Plafond en base plutôt qu'en constante** (`PLAFOND_ANNUEL_FCFA`, noté le 2026-10-21) : à décider à l'étape 5, avec la question à la MUNASEB sur un plafond qui change.
+- **Durée de conservation des notifications** (noté le 2026-10-21) : aujourd'hui, elles ne s'effacent jamais. À décider avec la purge de l'étape 7.
 - Types d'actes sans valeur dans les sources : dentaire et prothèses, accouchement et consultations prénatales, chirurgie, frais funéraires, radiologie.
 - Partenaires de la MUNASEB et structures : à rapprocher (un partenaire deviendra un lien entre la MUNASEB et une structure).
 - **Rattacher les contrats et les demandes à une structure, avant d'admettre un second assureur** (noté le 2026-10-18, étape 3.9). Aujourd'hui, un contrat et une demande de remboursement ne disent pas à quelle mutuelle ils appartiennent : MUNASEB est câblée en dur. Un agent ne touche que les demandes de sa mutuelle parce qu'il doit exercer dans une structure MUNASEB validée et que la base n'en admet qu'une (index `structure_une_seule_munaseb_validee`, migration 0012). Avec le futur module « Assurance » générique, plusieurs assureurs existeront : il faudra alors rattacher chaque contrat (et donc ses demandes) à la structure de son assureur, et ne permettre une transition qu'à un agent de cette structure.
@@ -252,7 +264,7 @@ Un soignant a besoin du NIP pour ouvrir le dossier. Le patient peut être trop m
 
 - Requêtes SQLx vérifiées à la compilation : après la stabilisation du module MUNASEB.
 - Synchronisation de l'application mobile hors ligne avec le serveur : protocole à concevoir.
-- Calcul du solde d'une période MUNASEB, présent en double (demandes et contrat) : à regrouper.
+- Calcul du solde d'une période MUNASEB : regroupé le 2026-10-21 (étape 6), une seule fonction `solde_periode` pour la validation, l'agent et le patient.
 
 ### Après le pilote (décision du porteur, 2026-10-21)
 
