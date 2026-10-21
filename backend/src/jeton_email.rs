@@ -96,6 +96,64 @@ pub async fn emettre_verification(
     Ok(email.map(|email| VerificationEmise { jeton, email }))
 }
 
+/// Durée de validité d'un lien de réinitialisation du mot de passe (R2,
+/// décision du porteur). NIST SP 800-63B rév. 4, §4.2 « Issued Recovery
+/// Codes » : « 24 hours when sent to an email address » au plus.
+pub const DUREE_REINITIALISATION_MINUTES: i32 = 30;
+/// Liens de réinitialisation valables en attente, au plus, par compte (R5).
+pub const LIENS_REINITIALISATION_MAX: i64 = 3;
+/// Délai minimal entre deux liens de réinitialisation d'un compte (R13,
+/// décision du porteur du 2026-10-21 ; même valeur que le renvoi du lien de
+/// vérification, E7).
+pub const DELAI_REINITIALISATION_SECONDES: i32 = 60;
+
+/// Émet un lien de réinitialisation pour l'email actuel du compte, dans la
+/// transaction de l'appelant ; `None` si rien n'est émis : plus de
+/// `LIENS_REINITIALISATION_MAX` liens valables en attente (R5), un lien émis
+/// il y a moins de `DELAI_REINITIALISATION_SECONDES` (R13), ou pas d'email.
+/// Une nouvelle demande n'annule pas les liens précédents (R3).
+///
+/// Le compte est verrouillé en premier (le compte avant le reste, §12) :
+/// deux demandes simultanées se suivent et ne dépassent pas les limites.
+pub async fn emettre_reinitialisation(
+    conn: &mut PgConnection,
+    compte_id: Uuid,
+) -> Result<Option<VerificationEmise>, sqlx::Error> {
+    sqlx::query("SELECT id FROM compte WHERE id = $1 FOR UPDATE")
+        .bind(compte_id)
+        .fetch_one(&mut *conn)
+        .await?;
+    let (en_attente, trop_tot): (i64, bool) = sqlx::query_as(
+        "SELECT count(*) FILTER (WHERE expire_le > now()), \
+                coalesce(bool_or(date_creation > now() - make_interval(secs => $2::double precision)), false) \
+         FROM jeton_email \
+         WHERE compte_id = $1 AND objet = 'reinitialisation_mot_de_passe' AND utilise_le IS NULL AND annule_le IS NULL",
+    )
+    .bind(compte_id)
+    .bind(DELAI_REINITIALISATION_SECONDES)
+    .fetch_one(&mut *conn)
+    .await?;
+    if en_attente >= LIENS_REINITIALISATION_MAX || trop_tot {
+        return Ok(None);
+    }
+
+    let (octets, texte) = session::octets_aleatoires_hexadecimaux();
+    let jeton = JetonEmail(texte);
+    let email: Option<String> = sqlx::query_scalar(
+        "INSERT INTO jeton_email (compte_id, compte_type, objet, empreinte, email_vise, expire_le) \
+         SELECT c.id, c.type_compte, 'reinitialisation_mot_de_passe', $2, u.email, now() + make_interval(mins => $3) \
+         FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
+         WHERE c.id = $1 AND u.email IS NOT NULL \
+         RETURNING email_vise",
+    )
+    .bind(compte_id)
+    .bind(session::empreinte(&octets))
+    .bind(DUREE_REINITIALISATION_MINUTES)
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(email.map(|email| VerificationEmise { jeton, email }))
+}
+
 /// Délai minimal entre deux jetons de vérification d'un même compte, pour la
 /// route de renvoi (décision du porteur, 2026-10-20, E7 : une minute). Même
 /// valeur que l'OTP patient (O1) ; aucune source n'en donne.

@@ -42,6 +42,12 @@ pub enum Evenement {
     /// L'équipe a désactivé le second facteur du compte
     /// (`outils_administrateur::desactiver_totp`).
     SecondFacteurDesactive,
+    /// Mot de passe d'un compte professionnel ou administrateur réinitialisé
+    /// par un lien envoyé par email (étape 3.12, R17). NIST SP 800-63B rév.
+    /// 4, §4.2 : « account recovery SHALL cause a notification to be sent to
+    /// the subscriber » ; OWASP *Forgot Password Cheat Sheet* : « Notify the
+    /// user […] Include instructions and contact information ».
+    MotDePasseReinitialise,
 }
 
 /// Date et heure de l'événement, lues dans la ligne qui l'enregistre (une
@@ -63,12 +69,42 @@ fn requete(evenement: Evenement) -> &'static str {
                            WHERE compte_id = c.id ORDER BY date_desactivation DESC LIMIT 1) d ON true \
              WHERE c.id = $1"
         }
+        // Date de l'utilisation du lien, enregistrée dans la même transaction
+        // que le nouveau mot de passe.
+        Evenement::MotDePasseReinitialise => {
+            "SELECT u.email, to_char(j.utilise_le AT TIME ZONE 'Africa/Ouagadougou', 'DD/MM/YYYY \"à\" HH24:MI') \
+             FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
+             JOIN LATERAL (SELECT utilise_le FROM jeton_email \
+                           WHERE compte_id = c.id AND objet = 'reinitialisation_mot_de_passe' AND utilise_le IS NOT NULL \
+                           ORDER BY utilise_le DESC LIMIT 1) j ON true \
+             WHERE c.id = $1"
+        }
     }
 }
 
-/// Sujet et corps de l'email (textes D7, validés par le porteur).
-fn message(evenement: Evenement, quand: &str, contact: &str) -> (&'static str, String) {
+/// « professionnel » ou « administrateur », pour l'alerte du mot de passe.
+async fn sorte_de_compte(pool: &PgPool, compte_id: Uuid) -> Result<&'static str, sqlx::Error> {
+    let type_compte: String = sqlx::query_scalar("SELECT type_compte FROM compte WHERE id = $1")
+        .bind(compte_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(if type_compte == "administrateur_laaficare" { "administrateur" } else { "professionnel" })
+}
+
+/// Sujet et corps de l'email (textes D7 et R17, validés par le porteur).
+/// `sorte` : « professionnel » ou « administrateur » (mot de passe
+/// seulement).
+fn message(evenement: Evenement, quand: &str, contact: &str, sorte: &str) -> (&'static str, String) {
     match evenement {
+        Evenement::MotDePasseReinitialise => (
+            "LaafiCare : mot de passe modifié",
+            format!(
+                "Bonjour,\n\n\
+                 Le mot de passe de votre compte {sorte} LaafiCare a été réinitialisé le {quand} (heure du Burkina \
+                 Faso). Toutes vos sessions ont été fermées.\n\n\
+                 Si ce n'est pas vous, écrivez immédiatement à l'équipe LaafiCare, à {contact}."
+            ),
+        ),
         Evenement::SecondFacteurEnregistre => (
             "LaafiCare : nouveau second facteur enregistré",
             format!(
@@ -119,7 +155,17 @@ pub async fn prevenir(
             return false;
         }
     };
-    let (sujet, corps) = message(evenement, &quand, contact);
+    let sorte = match evenement {
+        Evenement::MotDePasseReinitialise => match sorte_de_compte(pool, compte_id).await {
+            Ok(sorte) => sorte,
+            Err(e) => {
+                tracing::error!(?evenement, nature = %nature_sqlx(&e), "alerte de sécurité : lecture impossible");
+                return false;
+            }
+        },
+        _ => "",
+    };
+    let (sujet, corps) = message(evenement, &quand, contact, sorte);
     match email_sender.envoyer(&adresse, sujet, &corps) {
         Ok(()) => true,
         Err(_) => {
@@ -135,8 +181,10 @@ mod tests {
 
     #[test]
     fn textes_avec_date_et_contact_sans_lien() {
-        for evenement in [Evenement::SecondFacteurEnregistre, Evenement::SecondFacteurDesactive] {
-            let (sujet, corps) = message(evenement, "21/10/2026 à 10:42", "securite@example.org");
+        for evenement in [Evenement::SecondFacteurEnregistre, Evenement::SecondFacteurDesactive, Evenement::MotDePasseReinitialise] {
+            let (sujet, corps) = message(evenement, "21/10/2026 à 10:42", "securite@example.org", "professionnel");
+            // Pas de tiret cadratin (décision du porteur, 2026-10-21).
+            assert!(!sujet.contains('\u{2014}') && !corps.contains('\u{2014}'));
             assert!(sujet.starts_with("LaafiCare : "));
             assert!(corps.contains("le 21/10/2026 à 10:42 (heure du Burkina Faso)"), "{corps}");
             assert!(corps.contains("securite@example.org"), "{corps}");

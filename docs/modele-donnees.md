@@ -292,5 +292,6 @@ Règles garanties par la base : **jamais modifiées ni supprimées** ; seulement
 | 0021 | Historique des demandes MUNASEB : l'agent désigné par son affectation (établissement et rôle) |
 | 0022 | Numéro d'urgence, région et email d'une structure, obligatoires ; email enregistré sans espaces autour (`utilisateur_email_sans_espaces_autour`) |
 | 0023 | Nom d'une structure : 100 caractères au plus, ni retour à la ligne ni caractère de contrôle (le nom est repris dans le SMS d'invitation) |
+| 0024 | Liens de réinitialisation du mot de passe (professionnels et administrateurs) dans la table des jetons d'email |
 
 Une migration déjà appliquée ne change plus jamais : toute évolution passe par une nouvelle migration. Un test vérifie aussi qu'aucun caractère invisible ne s'y glisse ([`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs)).

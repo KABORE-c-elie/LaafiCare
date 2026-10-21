@@ -330,6 +330,7 @@ mod tests {
             email: Arc::new(laaficare_backend::email::EmailSenderConsole),
             url_application_web: Arc::from("http://localhost:4200"),
             contact_securite: Arc::from("securite@example.org"),
+            taches_reinitialisation: Arc::new(Default::default()),
         };
         let utilisateur_id: Uuid = sqlx::query_scalar(
             "INSERT INTO utilisateur (telephone, email) VALUES ('+22670060001', 'pro.route@example.org') RETURNING id",
@@ -398,6 +399,7 @@ mod tests {
             email: Arc::new(laaficare_backend::email::EmailSenderConsole),
             url_application_web: Arc::from("http://localhost:4200"),
             contact_securite: Arc::from("securite@example.org"),
+            taches_reinitialisation: Arc::new(Default::default()),
         };
         let utilisateur_id: Uuid = sqlx::query_scalar(
             "INSERT INTO utilisateur (telephone, email) VALUES ('+22670060002', 'pro.sf.route@example.org') RETURNING id",

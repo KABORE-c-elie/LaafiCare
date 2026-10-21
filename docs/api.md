@@ -209,6 +209,9 @@ Résumé :
 | GET | `/api/patients/invitations` | jeton `laaficare:patient` | fonctionne (section 2.10) |
 | POST | `/api/patients/invitations/{id}/accepter` | jeton `laaficare:patient` | fonctionne (section 2.10) |
 | POST | `/api/patients/invitations/{id}/refuser` | jeton `laaficare:patient` | fonctionne (section 2.10) |
+| POST | `/api/professionnels/mot-de-passe/oubli` | tout le monde | fonctionne (section 2.11) |
+| POST | `/api/administrateurs/mot-de-passe/oubli` | tout le monde | fonctionne (section 2.11) |
+| POST | `/api/mot-de-passe/reinitialiser` | tout le monde, avec le jeton du lien | fonctionne (section 2.11) |
 | POST | `/api/administrateurs/connexion` | tout le monde | fonctionne (section 2.5) ; testable après l'outil du premier administrateur |
 | POST | `/api/administrateurs/connexion/second-facteur` | jeton intermédiaire `laaficare:second_facteur_administrateur` | fonctionne (section 2.5) |
 | POST | `/api/administrateurs/reenrolement/commencer` | jeton `laaficare:reenrolement_administrateur` | fonctionne (section 2.5) |
@@ -1034,6 +1037,41 @@ Seules les invitations adressées au **numéro du compte patient** existent pour
 - 409 `invitation_expiree` ;
 - 409 `transition_invalide`.
 
+### 2.11 Mot de passe oublié : professionnels et administrateurs
+
+Les patients gardent la réinitialisation par SMS (section 2.2.4). Pour un compte professionnel ou administrateur, un **lien** est envoyé à l'email du compte.
+
+#### `POST /api/professionnels/mot-de-passe/oubli` et `POST /api/administrateurs/mot-de-passe/oubli`
+
+- **Corps** : `{"email": "…"}`. Une route par sorte de compte : une même personne peut avoir un compte professionnel et un compte administrateur avec le même email.
+- **Réponse** : **toujours 204, tout de suite**, que l'email soit connu, inconnu, non vérifié, d'un compte désactivé, ou mal formé. Le travail se fait ensuite, en tâche de fond. Seul un champ manquant donne 422 `donnees_invalides`.
+- **Un lien ne part que vers un compte actif dont l'email est vérifié.** Un compte verrouillé le reçoit, puisque la réinitialisation lève le verrouillage.
+- **Limites par compte** : une minute au moins entre deux liens ; au plus 3 liens valables en attente. Au-delà, rien ne part, avec la même réponse.
+- **Le lien** : `<URL_APPLICATION_WEB>/reinitialiser-mot-de-passe#jeton=<64 caractères hexadécimaux>`, valable **30 minutes**, **une seule fois**. Une nouvelle demande n'annule pas les liens précédents.
+- L'application affiche toujours le même message : « Si un compte correspond à cette adresse, un lien vient d'être envoyé. »
+
+#### `POST /api/mot-de-passe/reinitialiser`
+
+- **Appelant** : la page `/reinitialiser-mot-de-passe` de l'application web. Elle lit le jeton **après `#`**, sans jamais le garder, et l'envoie **par POST au clic, jamais par un GET**. Elle porte l'en-tête `Referrer-Policy: no-referrer`. La même page sert aux administrateurs.
+- **Corps** : `{"jeton": "…", "nouveau_mot_de_passe": "…"}`.
+- **Réponses** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 204 | — | mot de passe changé ; l'application renvoie à l'écran de connexion |
+| 400 | `lien_invalide` | lien inconnu, déjà utilisé, annulé, expiré, ou email changé depuis l'envoi (jamais distingués) |
+| 422 | `mot_de_passe_non_conforme` | avec `regles_non_respectees` (section 1.5) ; le lien reste valable |
+| 422 | `mot_de_passe_identique_patient` | administrateur seulement : le même mot de passe que son compte patient ; le lien reste valable |
+| 500 | `erreur_interne` | panne |
+
+**Après une réinitialisation réussie** :
+- toutes les sessions sont fermées : les anciens jetons, d'accès et de renouvellement, sont refusés ;
+- le verrouillage est levé ;
+- les autres liens en attente sont annulés ;
+- **le second facteur (TOTP) ne change pas** : il reste exigé à la connexion ;
+- **aucune session n'est ouverte** : la personne se reconnecte ;
+- un email d'alerte « mot de passe modifié » part, avec la date (heure du Burkina Faso) et l'adresse de l'équipe à contacter.
+
 ---
 
 ## 3. Codes d'erreur : index
@@ -1054,10 +1092,11 @@ Seules les invitations adressées au **numéro du compte patient** existent pour
 | `trop_de_demandes` | 429 | demande de code et renvoi du lien de vérification (avec `Retry-After`), inscription, réinitialisation et création d'une invitation (sans) |
 | `telephone_deja_utilise` | 409 | inscription |
 | `telephone_inconnu` | 404 | réinitialisation |
-| `mot_de_passe_non_conforme` | 422 | inscription, réinitialisation, création de structure |
+| `mot_de_passe_non_conforme` | 422 | inscription, réinitialisation (patient, professionnel, administrateur), création de structure, acceptation d'une invitation |
+| `mot_de_passe_identique_patient` | 422 | réinitialisation du mot de passe d'un administrateur |
 | `identifiants_invalides` | 401 | connexions, début du réenrôlement administrateur, renvoi du lien, création de structure (mot de passe professionnel) |
 | `email_non_verifie` | 403 | connexions professionnelle et administrateur, soumission d'une structure |
-| `lien_invalide` | 400 | vérification de l'email |
+| `lien_invalide` | 400 | vérification de l'email, réinitialisation du mot de passe |
 | `type_non_disponible`, `localisation_hors_burkina`, `nom_trop_long`, `nom_invalide` | 422 | création de structure |
 | `demande_deja_en_cours`, `email_different`, `email_deja_utilise`, `second_facteur_requis` | 409 | création de structure |
 | `structure_inconnue` | 404 | soumission d'une structure, routes administrateur des structures |

@@ -493,6 +493,7 @@ mod tests {
             email: Arc::new(laaficare_backend::email::EmailSenderConsole),
             url_application_web: Arc::from("http://localhost:4200"),
             contact_securite: Arc::from("securite@example.org"),
+            taches_reinitialisation: Arc::new(Default::default()),
         }
     }
 

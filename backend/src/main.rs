@@ -2,6 +2,7 @@ mod erreur_api;
 mod extracteur_jwt;
 mod routes_administrateur;
 mod routes_invitation;
+mod routes_mot_de_passe;
 mod routes_patient;
 mod routes_remboursement_munaseb;
 mod routes_professionnel;
@@ -47,6 +48,8 @@ pub(crate) struct AppState {
     pub(crate) url_application_web: Arc<str>,
     /// `CONTACT_SECURITE` (D3), donné dans les alertes de sécurité.
     pub(crate) contact_securite: Arc<str>,
+    /// Tâches de fond du mot de passe oublié, bornées (R11).
+    pub(crate) taches_reinitialisation: Arc<laaficare_backend::reinitialisation::LimiteTaches>,
 }
 
 // Struct typée plutôt qu'un `json!` en ligne : le compilateur fixe le format
@@ -218,6 +221,9 @@ async fn main() {
         .route("/api/patients/invitations", get(routes_invitation::lister_recues))
         .route("/api/patients/invitations/{id}/accepter", post(routes_invitation::accepter))
         .route("/api/patients/invitations/{id}/refuser", post(routes_invitation::refuser))
+        .route("/api/professionnels/mot-de-passe/oubli", post(routes_mot_de_passe::oubli_professionnel))
+        .route("/api/administrateurs/mot-de-passe/oubli", post(routes_mot_de_passe::oubli_administrateur))
+        .route("/api/mot-de-passe/reinitialiser", post(routes_mot_de_passe::reinitialiser))
         .route("/api/structures", post(routes_structure::creer))
         .route("/api/structures/mes-demandes", get(routes_structure::mes_demandes))
         .route("/api/structures/{id}/soumettre", post(routes_structure::soumettre))
@@ -229,6 +235,7 @@ async fn main() {
             email,
             url_application_web: Arc::from(config.url_application_web),
             contact_securite: Arc::from(config.contact_securite),
+            taches_reinitialisation: Arc::new(laaficare_backend::reinitialisation::LimiteTaches::default()),
         });
 
     // 127.0.0.1 : cohérent avec PostgreSQL exposé en local seulement. À
