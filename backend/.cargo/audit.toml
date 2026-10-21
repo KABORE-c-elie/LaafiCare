@@ -1,0 +1,22 @@
+# Configuration de cargo-audit pour le backend LaafiCare. Emplacement et
+# format : `audit.toml.example` du dépôt rustsec/rustsec (cargo-audit), « in
+# the project root (`.cargo/audit.toml`) ».
+
+[advisories]
+# RUSTSEC-2023-0071 (crate `rsa`, attaque Marvin) — exception décidée par le
+# porteur le 2026-10-21.
+#
+# L'avis : une clé RSA **privée** peut fuiter par le temps de calcul ; aucune
+# version corrigée n'existe (`patched = []`). `rsa` arrive seulement par la
+# fonctionnalité `rust_crypto` de `jsonwebtoken` 11.1.0, qui l'impose avec
+# `hmac` et `sha2` ; aucune fonctionnalité ne garde HMAC sans RSA.
+#
+# Pourquoi nous ne sommes pas touchés : les jetons sont en HS256 seulement,
+# avec un secret partagé ; aucune clé RSA n'existe dans le projet
+# (`src/jwt.rs` : `EncodingKey::from_secret`, `DecodingKey::from_secret`,
+# `Validation::new(Algorithm::HS256)`). Le test `jwt::tests::hs256_seulement`
+# vérifie qu'un jeton d'un autre algorithme est refusé.
+#
+# À retirer dès qu'une version corrigée de rsa existe ou si une clé RSA entre
+# dans le projet. Détail : docs/points-ouverts.md.
+ignore = ["RUSTSEC-2023-0071"]

@@ -97,6 +97,10 @@ Le code est enregistré en SHA-256 simple. Avec seulement un million de codes po
   - changer le numéro de CNIB d'un administrateur (renouvellement de la carte, future carte de l'AES).
 - **Désactivation du second facteur par les structures validées** (vérification de la CNIB à l'accueil) : à rediscuter. En V1, seule l'équipe LaafiCare le désactive.
 
+### Exception cargo audit : `rsa` (RUSTSEC-2023-0071)
+
+**Décidée le 2026-10-21.** L'attaque Marvin permet, par le temps de calcul, de retrouver une clé RSA **privée** ; aucune version corrigée de `rsa` n'existe. La crate arrive seulement par la fonctionnalité `rust_crypto` de `jsonwebtoken`, qui l'impose ; aucune fonctionnalité ne garde HMAC sans RSA. **Nous ne sommes pas touchés** : les jetons sont en HS256 seulement, avec un secret partagé, et aucune clé RSA n'existe dans le projet (`src/jwt.rs` ; test `hs256_seulement`). L'exception est dans `backend/.cargo/audit.toml`. **À retirer** dès qu'une version corrigée de `rsa` existe, ou si une clé RSA entre dans le projet.
+
 ### Application web (noté le 2026-10-20)
 
 Détail dans `web/docs/decisions.md` (branche `web`) :
