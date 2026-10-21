@@ -264,13 +264,7 @@ impl FromRequestParts<AppState> for ReenrolementAdministrateur {
 }
 
 /// Administrateur LaafiCare authentifié (étape 3.6.4, A6), pour les routes
-/// réservées à l'équipe (décisions sur les structures, étape 3.8). Aucune
-/// route ne l'utilise encore : testé sur ses seules requêtes.
-// `expect` plutôt qu'`allow` (référence Rust, attribut `expect`, Rust
-// 1.81) : dès qu'une route l'utilisera (étape 3.8), le compilateur
-// signalera que l'attribut est devenu inutile. Hors tests seulement : les
-// tests le construisent.
-#[cfg_attr(not(test), expect(dead_code, reason = "première route administrateur à l'étape 3.8"))]
+/// réservées à l'équipe (décisions sur les structures, étape 3.8).
 #[derive(Debug)]
 pub struct AdministrateurAuthentifie {
     pub compte_id: Uuid,

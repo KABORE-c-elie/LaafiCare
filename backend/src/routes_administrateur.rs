@@ -12,13 +12,14 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
-use crate::erreur_api::{JsonApi, reponse_erreur, reponse_erreur_interne};
-use crate::extracteur_jwt::{IntermediaireAdministrateur, ReenrolementAdministrateur};
+use crate::erreur_api::{CheminApi, ErreurApi, JsonApi, RequeteApi, reponse_erreur, reponse_erreur_interne};
+use crate::extracteur_jwt::{AdministrateurAuthentifie, IntermediaireAdministrateur, ReenrolementAdministrateur};
 use crate::routes_professionnel::{
     ConnexionRequete, SecondFacteurRequete, mapper_erreur, reponse_second_facteur, terminer_second_facteur,
 };
 use laaficare_backend::auth_administrateur::{self, ConnexionAdministrateur, ErreurReenrolement};
 use laaficare_backend::auth_professionnel::JetonIntermediaire;
+use laaficare_backend::decision_structure::{self, ErreurDecision, ResumeStructure, StatutStructure};
 
 #[derive(Serialize)]
 struct CorpsReenrolement<'a> {
@@ -142,9 +143,274 @@ pub async fn confirmer_reenrolement(
     }
 }
 
+// ---------------------------------------------------------------------
+// Demandes de structure (étape 3.8 réduite, V1 à V12, A, B)
+// ---------------------------------------------------------------------
+
+// Pagination par curseur, mêmes bornes que la liste des remboursements.
+const LIMITE_PAR_DEFAUT: i64 = 50;
+const LIMITE_MAX: i64 = 100;
+
+#[derive(Deserialize)]
+pub struct FiltreStructures {
+    pub statut: Option<StatutStructure>,
+    pub limite: Option<i64>,
+    pub apres: Option<sqlx::types::Uuid>,
+}
+
+#[derive(Serialize)]
+struct ListeStructures {
+    structures: Vec<ResumeStructure>,
+    suivant: Option<sqlx::types::Uuid>,
+}
+
+/// `GET /api/administrateurs/structures?statut=&limite=&apres=` (V2).
+pub async fn lister_structures(
+    _administrateur: AdministrateurAuthentifie,
+    State(state): State<AppState>,
+    RequeteApi(filtre): RequeteApi<FiltreStructures>,
+) -> Response {
+    let limite = filtre.limite.unwrap_or(LIMITE_PAR_DEFAUT);
+    if !(1..=LIMITE_MAX).contains(&limite) {
+        return reponse_erreur(
+            StatusCode::BAD_REQUEST,
+            "parametre_invalide",
+            format!("limite doit être comprise entre 1 et {LIMITE_MAX}"),
+        )
+        .into_response();
+    }
+    match decision_structure::lister(&state.db, filtre.statut, filtre.apres, limite).await {
+        Ok(structures) => {
+            let suivant = if structures.len() as i64 == limite { structures.last().map(|s| s.id) } else { None };
+            (StatusCode::OK, Json(ListeStructures { structures, suivant })).into_response()
+        }
+        Err(_) => reponse_erreur_interne("liste des structures", "erreur de la base").into_response(),
+    }
+}
+
+/// `GET /api/administrateurs/structures/{id}` (V3).
+pub async fn detail_structure(
+    _administrateur: AdministrateurAuthentifie,
+    State(state): State<AppState>,
+    CheminApi(structure_id): CheminApi<sqlx::types::Uuid>,
+) -> Response {
+    match decision_structure::detail(&state.db, structure_id).await {
+        Ok(Some(detail)) => (StatusCode::OK, Json(detail)).into_response(),
+        Ok(None) => reponse_erreur(StatusCode::NOT_FOUND, "structure_inconnue", ErreurDecision::StructureInconnue.to_string())
+            .into_response(),
+        Err(_) => reponse_erreur_interne("détail d'une structure", "erreur de la base").into_response(),
+    }
+}
+
+fn reponse_erreur_decision(erreur: ErreurDecision) -> Response {
+    let (statut, code) = match &erreur {
+        ErreurDecision::StructureInconnue => (StatusCode::NOT_FOUND, "structure_inconnue"),
+        // A : droit refusé à cet administrateur pour cette structure.
+        ErreurDecision::PropreStructure => (StatusCode::FORBIDDEN, "decision_sur_sa_propre_structure"),
+        ErreurDecision::TransitionInvalide { statut_actuel } => {
+            let mut corps = ErreurApi::simple("transition_invalide", erreur.to_string());
+            corps.statut_actuel = Some(statut_actuel.clone());
+            return (StatusCode::CONFLICT, Json(corps)).into_response();
+        }
+        ErreurDecision::EmailResponsableNonVerifie => (StatusCode::CONFLICT, "email_responsable_non_verifie"),
+        ErreurDecision::LicenceInvalide => (StatusCode::UNPROCESSABLE_ENTITY, "licence_invalide"),
+        ErreurDecision::MunasebDejaValidee => (StatusCode::CONFLICT, "munaseb_deja_validee"),
+        ErreurDecision::AutorisationDejaValidee => (StatusCode::CONFLICT, "autorisation_deja_validee"),
+        ErreurDecision::MotifVide => (StatusCode::UNPROCESSABLE_ENTITY, "motif_vide"),
+        ErreurDecision::MotifTropLong => (StatusCode::UNPROCESSABLE_ENTITY, "motif_trop_long"),
+        ErreurDecision::Interne(etape) => return reponse_erreur_interne("décision sur une structure", etape).into_response(),
+    };
+    reponse_erreur(statut, code, erreur.to_string()).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct ValiderRequete {
+    /// Absent : licence sans fin (V4).
+    pub licence_expire_le: Option<chrono::NaiveDate>,
+}
+
+/// `POST /api/administrateurs/structures/{id}/valider` -- corps
+/// `{"licence_expire_le": "AAAA-MM-JJ"}` ou `{}`. 204.
+pub async fn valider_structure(
+    administrateur: AdministrateurAuthentifie,
+    State(state): State<AppState>,
+    CheminApi(structure_id): CheminApi<sqlx::types::Uuid>,
+    JsonApi(corps): JsonApi<ValiderRequete>,
+) -> Response {
+    match decision_structure::valider(
+        &state.db,
+        state.email.as_ref(),
+        administrateur.compte_id,
+        structure_id,
+        corps.licence_expire_le,
+    )
+    .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(erreur) => reponse_erreur_decision(erreur),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RefuserRequete {
+    pub motif: String,
+}
+
+/// `POST /api/administrateurs/structures/{id}/refuser` -- corps
+/// `{"motif": "…"}`. 204.
+pub async fn refuser_structure(
+    administrateur: AdministrateurAuthentifie,
+    State(state): State<AppState>,
+    CheminApi(structure_id): CheminApi<sqlx::types::Uuid>,
+    JsonApi(corps): JsonApi<RefuserRequete>,
+) -> Response {
+    match decision_structure::refuser(&state.db, state.email.as_ref(), administrateur.compte_id, structure_id, &corps.motif)
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(erreur) => reponse_erreur_decision(erreur),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codes_des_decisions() {
+        for (erreur, statut, code) in [
+            (ErreurDecision::StructureInconnue, StatusCode::NOT_FOUND, "structure_inconnue"),
+            (ErreurDecision::PropreStructure, StatusCode::FORBIDDEN, "decision_sur_sa_propre_structure"),
+            (ErreurDecision::EmailResponsableNonVerifie, StatusCode::CONFLICT, "email_responsable_non_verifie"),
+            (ErreurDecision::LicenceInvalide, StatusCode::UNPROCESSABLE_ENTITY, "licence_invalide"),
+            (ErreurDecision::MunasebDejaValidee, StatusCode::CONFLICT, "munaseb_deja_validee"),
+            (ErreurDecision::AutorisationDejaValidee, StatusCode::CONFLICT, "autorisation_deja_validee"),
+            (ErreurDecision::MotifVide, StatusCode::UNPROCESSABLE_ENTITY, "motif_vide"),
+            (ErreurDecision::MotifTropLong, StatusCode::UNPROCESSABLE_ENTITY, "motif_trop_long"),
+        ] {
+            assert_eq!(reponse_erreur_decision(erreur).status(), statut, "{code}");
+        }
+        let reponse = reponse_erreur_decision(ErreurDecision::TransitionInvalide { statut_actuel: "validee".into() });
+        assert_eq!(reponse.status(), StatusCode::CONFLICT);
+    }
+
+    /// De bout en bout, avec une vraie session administrateur (TOTP actif) :
+    /// liste, détail, validation (204), puis seconde validation (409). Sans
+    /// TOTP actif, l'extracteur refuse (A6, Y4).
+    #[sqlx::test]
+    #[ignore]
+    async fn structures_de_bout_en_bout(pool: sqlx::PgPool) {
+        use axum::body::to_bytes;
+        use axum::extract::FromRequestParts;
+        use axum::http::{Request, header::AUTHORIZATION};
+        use laaficare_backend::config::CleTotp;
+        use laaficare_backend::jwt::JwtService;
+        use laaficare_backend::session;
+        use laaficare_backend::sms::SmsSenderConsole;
+        use sqlx::types::Uuid;
+        use std::sync::Arc;
+
+        let state = AppState {
+            db: pool,
+            jwt: JwtService::new(&"a".repeat(32)),
+            sms: Arc::new(SmsSenderConsole),
+            cle_totp: Arc::new(CleTotp::depuis_octets([7; 32])),
+            email: Arc::new(laaficare_backend::email::EmailSenderConsole),
+            url_application_web: Arc::from("http://localhost:4200"),
+            contact_securite: Arc::from("securite@example.org"),
+        };
+        let identite = |telephone: &'static str, email: &'static str| {
+            let db = state.db.clone();
+            async move {
+                let id: Uuid = sqlx::query_scalar("INSERT INTO utilisateur (nom, prenom, telephone, email) VALUES ('KABRE', 'Ali', $1, $2) RETURNING id")
+                    .bind(telephone)
+                    .bind(email)
+                    .fetch_one(&db)
+                    .await
+                    .unwrap();
+                sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1").bind(id).execute(&db).await.unwrap();
+                id
+            }
+        };
+        let compte = |utilisateur: Uuid, type_compte: &'static str| {
+            let db = state.db.clone();
+            async move {
+                sqlx::query_scalar::<_, Uuid>(
+                    "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, $2, 'x') RETURNING id",
+                )
+                .bind(utilisateur)
+                .bind(type_compte)
+                .fetch_one(&db)
+                .await
+                .unwrap()
+            }
+        };
+
+        // Responsable et sa structure en attente.
+        let pro = compte(identite("+22670190001", "resp.route@example.org").await, "professionnel").await;
+        let structure_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO structure (type_structure, nom, telephone, telephone_urgence, region, email, commune, province, \
+                                    latitude, longitude, createur_compte_id, statut) \
+             VALUES ('munaseb', 'MUNASEB (test)', '+22670000000', '+22670000000', 'Région fictive', 'structure@example.org', \
+                     'Commune fictive', 'Province fictive', 12.371400, -1.519700, $1, 'en_attente') RETURNING id",
+        )
+        .bind(pro)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO affectation (compte_id, structure_id, role) VALUES ($1, $2, 'responsable')")
+            .bind(pro)
+            .bind(structure_id)
+            .execute(&state.db)
+            .await
+            .unwrap();
+
+        // Administrateur avec session ; TOTP actif posé en SQL (le contenu
+        // n'est jamais déchiffré ici).
+        let adm = compte(identite("+22670190002", "adm.route@example.org").await, "administrateur_laaficare").await;
+        let paire = session::ouvrir(&state.db, adm, None).await.unwrap().en_paire(&state.jwt).unwrap();
+        let en_tete = format!("Bearer {}", paire.jeton_acces);
+        let extraire = || async {
+            let mut parts = Request::builder().header(AUTHORIZATION, en_tete.as_str()).body(()).unwrap().into_parts().0;
+            AdministrateurAuthentifie::from_request_parts(&mut parts, &state).await
+        };
+        assert!(extraire().await.is_err(), "sans TOTP actif : refusé (Y4)");
+        sqlx::query(
+            "INSERT INTO second_facteur_totp (compte_id, secret_chiffre, nonce, version_cle, statut, date_activation) \
+             VALUES ($1, decode(repeat('00', 36), 'hex'), decode(repeat('00', 12), 'hex'), 1, 'actif', now())",
+        )
+        .bind(adm)
+        .execute(&state.db)
+        .await
+        .unwrap();
+
+        let lire = |reponse: Response| async move {
+            serde_json::from_slice::<serde_json::Value>(&to_bytes(reponse.into_body(), usize::MAX).await.unwrap()).unwrap()
+        };
+        let filtre = FiltreStructures { statut: Some(StatutStructure::EnAttente), limite: None, apres: None };
+        let reponse = lister_structures(extraire().await.unwrap(), State(state.clone()), RequeteApi(filtre)).await;
+        assert_eq!(reponse.status(), StatusCode::OK);
+        assert_eq!(lire(reponse).await["structures"][0]["type"], "munaseb");
+
+        let reponse = detail_structure(extraire().await.unwrap(), State(state.clone()), CheminApi(structure_id)).await;
+        assert_eq!(reponse.status(), StatusCode::OK);
+        assert_eq!(lire(reponse).await["responsable_email_verifie"], true);
+
+        let valider = || async {
+            valider_structure(
+                extraire().await.unwrap(),
+                State(state.clone()),
+                CheminApi(structure_id),
+                JsonApi(ValiderRequete { licence_expire_le: None }),
+            )
+            .await
+        };
+        assert_eq!(valider().await.status(), StatusCode::NO_CONTENT);
+        let reponse = valider().await;
+        assert_eq!(reponse.status(), StatusCode::CONFLICT);
+        let json = lire(reponse).await;
+        assert_eq!((json["code"].as_str(), json["statut_actuel"].as_str()), (Some("transition_invalide"), Some("validee")));
+    }
 
     #[tokio::test]
     async fn erreurs_du_reenrolement() {

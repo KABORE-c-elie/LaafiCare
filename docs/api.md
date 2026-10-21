@@ -200,6 +200,10 @@ Résumé :
 | POST | `/api/structures` | jeton `laaficare:patient` | fonctionne (section 2.8) ; type `munaseb` seulement |
 | POST | `/api/structures/{id}/soumettre` | jeton `laaficare:patient` du créateur | fonctionne (section 2.8) |
 | GET | `/api/structures/mes-demandes` | jeton `laaficare:patient` | fonctionne (section 2.8) |
+| GET | `/api/administrateurs/structures` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
+| GET | `/api/administrateurs/structures/{id}` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
+| POST | `/api/administrateurs/structures/{id}/valider` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
+| POST | `/api/administrateurs/structures/{id}/refuser` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
 | POST | `/api/administrateurs/connexion` | tout le monde | fonctionne (section 2.5) ; testable après l'outil du premier administrateur |
 | POST | `/api/administrateurs/connexion/second-facteur` | jeton intermédiaire `laaficare:second_facteur_administrateur` | fonctionne (section 2.5) |
 | POST | `/api/administrateurs/reenrolement/commencer` | jeton `laaficare:reenrolement_administrateur` | fonctionne (section 2.5) |
@@ -902,6 +906,57 @@ Cycle : `brouillon` (création) → `en_attente` (soumission) → `validee` ou `
 
 - Toutes les structures créées par la personne, les plus récentes d'abord. `motif_refus` n'est rempli que pour une structure `refusee`. `email_a_verifier` vaut `true` si le compte professionnel existe et que son email n'est pas vérifié : l'application propose alors de renvoyer le lien.
 
+### 2.9 Administrateurs : décisions sur les demandes de structure
+
+Réservé à l'équipe LaafiCare : jeton d'accès `laaficare:administrateur` (session, email vérifié, **second facteur actif** ; sinon 401 `jeton_invalide`). Validation (licence) et refus (motif), depuis une demande `en_attente` seulement. Chaque décision est tracée (administrateur, date, motif, licence), sans jamais être modifiée.
+
+**Séparation des tâches** : un administrateur ne décide jamais sur une structure dont il est responsable, même avec un autre compte de la même personne. Il reçoit **403 `decision_sur_sa_propre_structure`**, et un autre membre de l'équipe doit décider. Source : NIST SP 800-53 rév. 5, contrôle AC-5 « Separation of Duties » (application : décision du porteur, 2026-10-21).
+
+#### `GET /api/administrateurs/structures?statut=&limite=&apres=`
+
+- `statut` facultatif : `brouillon`, `en_attente`, `validee`, `refusee`, `suspendue`, `abandonnee`. Pagination par curseur, comme la liste des remboursements : `limite` de 1 à 100 (50 par défaut), `apres` = `suivant` de la page précédente. Les plus anciennes d'abord.
+- **Réponse 200** : `{"structures": [{"id", "type", "nom", "statut", "date_creation", "commune", "responsable_nom", "responsable_prenom"}], "suivant": "…" | null}`. 400 `parametre_invalide` pour une limite hors bornes.
+
+#### `GET /api/administrateurs/structures/{id}`
+
+- **Réponse 200** :
+  - les champs de la liste ;
+  - les coordonnées de la structure (`telephone`, `telephone_urgence`, `email`, `region`, `province`, `parcelle`, `lot`, `section`, `latitude`, `longitude`) et `licence_expire_le` ;
+  - le responsable : `responsable_telephone`, `responsable_email`, `responsable_email_verifie` ;
+  - `decisions` : l'historique, avec `decision`, `motif`, `licence_expire_le`, `date_decision`, et le nom et le prénom de l'administrateur.
+- **Avertissements MUNASEB** (vides pour les autres types) :
+  - `autres_demandes_munaseb_en_attente` : les autres demandes MUNASEB en attente ;
+  - `munaseb_deja_validee` : la MUNASEB déjà validée ou suspendue, si elle existe.
+- 404 `structure_inconnue`.
+
+#### `POST /api/administrateurs/structures/{id}/valider`
+
+- **Corps** : `{"licence_expire_le": "2027-10-21"}`, ou `{}`.
+  - **`licence_expire_le` absent ou `null` : licence sans fin.**
+  - Présent : la licence est valable **jusqu'à cette date comprise** (heure du Burkina Faso), puis l'établissement n'est plus exerçable. Elle doit être **postérieure à aujourd'hui**.
+- **Réponses** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 204 | — | structure validée ; l'affectation `responsable` devient exerçable ; un email au texte minimal prévient le responsable (« Votre demande de structure a été traitée… ») |
+| 403 | `decision_sur_sa_propre_structure` | séparation des tâches (voir plus haut) |
+| 404 | `structure_inconnue` | identifiant inconnu |
+| 409 | `transition_invalide` | la demande n'est pas `en_attente` ; `statut_actuel` dans la réponse |
+| 409 | `email_responsable_non_verifie` | l'email professionnel du responsable n'est pas vérifié : la validation attend ; le refus reste possible |
+| 409 | `munaseb_deja_validee` | une MUNASEB est déjà validée ou suspendue : une seule est admise |
+| 409 | `autorisation_deja_validee` | un numéro d'autorisation de la demande est déjà validé pour une autre structure (pas pour la MUNASEB, sans pièce) |
+| 422 | `licence_invalide` | date de fin de licence passée ou égale à aujourd'hui |
+| 500 | `erreur_interne` | panne |
+
+#### `POST /api/administrateurs/structures/{id}/refuser`
+
+- **Corps** : `{"motif": "…"}`, obligatoire, 1 000 caractères au plus. Le motif est visible par le responsable dans `GET /api/structures/mes-demandes`, mais n'est jamais mis dans un email.
+- **Réponses** :
+  - 204 : demande refusée. Si l'email du responsable est vérifié, il reçoit le même email minimal ; sinon, aucun email ne part.
+  - 403, 404, 409 `transition_invalide` : comme pour la validation.
+  - 422 `motif_vide`, `motif_trop_long`.
+- Après un refus, le responsable abandonne sa demande et en crée une nouvelle. Corriger et soumettre à nouveau la même demande viendra plus tard.
+
 ---
 
 ## 3. Codes d'erreur : index
@@ -915,7 +970,7 @@ Cycle : `brouillon` (création) → `en_attente` (soumission) → `validee` ou `
 | `affectation_inconnue` | 404 | activation d'une affectation |
 | `json_invalide`, `donnees_invalides`, `content_type_invalide`, `corps_illisible` | 400, 422, 415 | routes avec corps |
 | `chemin_invalide` | 400 | routes avec `{id}` |
-| `parametre_invalide` | 400 | liste des remboursements |
+| `parametre_invalide` | 400 | liste des remboursements, liste des structures (administrateur) |
 | `telephone_invalide` | 422 | routes patient |
 | `telephone_service_invalide`, `telephone_urgence_invalide` | 422 | création de structure |
 | `code_invalide` | 401 | inscription, réinitialisation, second facteur (professionnel, administrateur), confirmation du réenrôlement |
@@ -928,13 +983,16 @@ Cycle : `brouillon` (création) → `en_attente` (soumission) → `validee` ou `
 | `lien_invalide` | 400 | vérification de l'email |
 | `type_non_disponible`, `localisation_hors_burkina` | 422 | création de structure |
 | `demande_deja_en_cours`, `email_different`, `email_deja_utilise`, `second_facteur_requis` | 409 | création de structure |
-| `structure_inconnue` | 404 | soumission d'une structure |
+| `structure_inconnue` | 404 | soumission d'une structure, routes administrateur des structures |
+| `decision_sur_sa_propre_structure` | 403 | validation, refus d'une structure |
+| `email_responsable_non_verifie`, `munaseb_deja_validee`, `autorisation_deja_validee` | 409 | validation d'une structure |
+| `licence_invalide` | 422 | validation d'une structure |
 | `montant_invalide`, `nip_invalide`, `partenaire_suspendu`, `non_couvert`, `en_carence` | 422 | simuler-acte |
 | `patient_inconnu`, `partenaire_inconnu` | 404 | simuler-acte |
 | `reference_acte_deja_utilisee` | 409 | simuler-acte |
 | `demande_inconnue` | 404 | détail, transitions |
-| `transition_invalide` | 409 | transitions, soumission d'une structure |
-| `motif_vide`, `motif_trop_long` | 422 | rejet |
+| `transition_invalide` | 409 | transitions, soumission, validation et refus d'une structure |
+| `motif_vide`, `motif_trop_long` | 422 | rejet d'une demande de remboursement, refus d'une structure |
 | `erreur_interne` | 500 | toutes |
 
 ---
@@ -962,7 +1020,8 @@ Le module existe déjà côté serveur ; les routes manquent.
 - ✅ Création, soumission et suivi, **type MUNASEB seulement** : **codés**, section 2.8 ; vérification de l'email, section 2.7.
 - Restent : modification du brouillon, abandon, autres types de structure.
 - Téléversement d'une pièce, **une requête par fichier** (réseau faible) : PDF, JPEG ou PNG, 5 Mo au plus.
-- Côté administrateur : liste des demandes en attente (avec avertissements de numéros d'autorisation en double, de plusieurs demandes MUNASEB), consultation et téléchargement des pièces, validation (licence), refus (motif), suspension, réactivation.
+- ✅ Côté administrateur : liste, détail (avertissements MUNASEB), validation (licence), refus (motif) : **codés**, section 2.9.
+- Restent côté administrateur : avertissement des numéros d'autorisation en double, consultation et téléchargement des pièces, suspension et réactivation (après le pilote).
 
 ### 4.4 Affectations et rôle actif (étape 3.9)
 

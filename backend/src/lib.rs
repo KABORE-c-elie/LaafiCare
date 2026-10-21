@@ -14,6 +14,7 @@ pub mod config;
 pub mod console;
 pub mod contrat_assurance_munaseb;
 pub mod db;
+pub mod decision_structure;
 pub mod demande_remboursement_munaseb;
 pub mod email;
 pub mod jeton_email;
