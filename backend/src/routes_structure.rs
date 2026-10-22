@@ -13,7 +13,9 @@ use sqlx::types::Uuid;
 use crate::AppState;
 use crate::erreur_api::{CheminApi, ErreurApi, JsonApi, reponse_erreur, reponse_erreur_interne};
 use crate::extracteur_jwt::PatientAuthentifie;
-use laaficare_backend::structure::{self, ErreurSoumission, ErreurStructure, NouvelleStructure, TypeStructure};
+use laaficare_backend::structure::{
+    self, ErreurAbandon, ErreurSoumission, ErreurStructure, NouvelleStructure, TypeStructure,
+};
 
 /// Corps de `POST /api/structures` (E1). Pas de `Debug` : le mot de passe
 /// est un secret.
@@ -150,6 +152,35 @@ pub async fn soumettre(
     }
 }
 
+fn reponse_erreur_abandon(erreur: ErreurAbandon) -> Response {
+    match &erreur {
+        ErreurAbandon::StructureInconnue => {
+            reponse_erreur(StatusCode::NOT_FOUND, "structure_inconnue", erreur.to_string()).into_response()
+        }
+        ErreurAbandon::TransitionInvalide { statut_actuel } => {
+            let mut corps = ErreurApi::simple("transition_invalide", erreur.to_string());
+            corps.statut_actuel = Some(statut_actuel.clone());
+            (StatusCode::CONFLICT, Json(corps)).into_response()
+        }
+        ErreurAbandon::Interne(etape) => reponse_erreur_interne("abandon de structure", etape).into_response(),
+    }
+}
+
+/// `POST /api/structures/{id}/abandonner` -- jeton patient du créateur,
+/// sans corps (AB1). 204 ; 404 `structure_inconnue` ; 409
+/// `transition_invalide` avec `statut_actuel`. L'application demande une
+/// confirmation avant l'appel (AB4) : l'abandon est définitif.
+pub async fn abandonner(
+    patient: PatientAuthentifie,
+    State(state): State<AppState>,
+    CheminApi(structure_id): CheminApi<Uuid>,
+) -> Response {
+    match structure::abandonner(&state.db, patient.compte_id, structure_id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(erreur) => reponse_erreur_abandon(erreur),
+    }
+}
+
 /// `GET /api/structures/mes-demandes` -- jeton patient. 200 avec
 /// `email_a_verifier` et les structures créées par la personne.
 pub async fn mes_demandes(patient: PatientAuthentifie, State(state): State<AppState>) -> Response {
@@ -206,6 +237,7 @@ mod tests {
             email: Arc::new(laaficare_backend::email::EmailSenderConsole),
             url_application_web: Arc::from("http://localhost:4200"),
             contact_securite: Arc::from("securite@example.org"),
+            taches_reinitialisation: Arc::new(Default::default()),
         };
         let utilisateur_id: Uuid = sqlx::query_scalar(
             "INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('OUEDRAOGO', 'Awa', '+22670160001') RETURNING id",

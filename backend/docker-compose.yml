@@ -21,6 +21,10 @@ services:
     volumes:
       # PostgreSQL 18+ : le volume se monte sur /var/lib/postgresql (plus /data).
       - laaficare_pgdata:/var/lib/postgresql
+      # Rôles du serveur et des outils (P1), créés à la PREMIÈRE création du
+      # volume seulement (doc de l'image postgres, « Initialization
+      # scripts »). Pour une base déjà créée : commande du README.
+      - ./sql/roles.sql:/docker-entrypoint-initdb.d/01_roles.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U laaficare -d laaficare"]
       interval: 5s

@@ -137,16 +137,18 @@ Le projet a commencé par une phase de cadrage : un cahier des charges et des di
 | **Serveur : MUNASEB** | contrats et périodes d'adhésion, demandes de remboursement de bout en bout (création, prise en charge, validation, rejet, paiement), notifications, historique. **Routes des agents rebranchées** (étape 3.9) : un agent se connecte comme professionnel, active son affectation d'agent MUNASEB, et chacune de ses décisions est enregistrée avec cette affectation. **Testables dans Postman après les étapes 3.7, 3.8 et 3.10 réduites à la MUNASEB** (création et validation de la structure MUNASEB, invitation d'un agent) ; d'ici là, seulement avec un agent posé à la main en SQL dans la base de développement. |
 | Serveur : affectations | **écrites** : liste des affectations d'un professionnel, activation (choisir l'établissement et le rôle dans lesquels il travaille), changement d'établissement sans redonner le mot de passe ; à chaque demande, le serveur vérifie que l'affectation est active et l'établissement validé, sous licence |
 | **Serveur : backoffice** | **création d'un établissement MUNASEB** (étape 3.7, réduite) : un patient crée la structure, devient son responsable, crée au passage son compte professionnel, fait vérifier son email par un lien, puis soumet sa demande ; suivi de ses demandes. **Décisions de l'équipe** (étape 3.8, réduite) : liste et détail des demandes, validation avec une licence (sans fin, ou jusqu'à une date), refus avec motif ; un administrateur ne décide jamais sur sa propre structure. **Invitations** (étape 3.10, réduite) : le responsable invite un agent par son numéro (SMS), la personne accepte ou refuse depuis son compte patient ; annulation, expiration après 7 jours |
-| Serveur : connexion professionnelle | **fonctionne** (`POST /api/professionnels/connexion`, puis `POST /api/professionnels/connexion/second-facteur` quand le second facteur est actif) : email et mot de passe, email obligatoirement vérifié, code TOTP ou code de secours, jeton intermédiaire à usage unique, session de 12 h au plus. Un compte professionnel naît quand un patient crée son établissement ; son email se vérifie par un lien (renvoyable une fois par minute). |
+| Serveur : connexion professionnelle | **fonctionne** (`POST /api/professionnels/connexion`, puis `POST /api/professionnels/connexion/second-facteur` quand le second facteur est actif) : email et mot de passe, email obligatoirement vérifié, code TOTP ou code de secours, jeton intermédiaire à usage unique, session de 12 h au plus. Un compte professionnel naît quand un patient crée son établissement ; son email se vérifie par un lien (renvoyable une fois par minute). **Mot de passe oublié** (étape 3.12) : un lien valable 30 minutes, envoyé à l'email vérifié, pour les professionnels et les administrateurs ; toutes les sessions sont fermées après le changement, et une alerte part par email. |
 | **Serveur : connexion administrateur** | **fonctionne** (`POST /api/administrateurs/connexion`, second temps, réenrôlement) : second facteur toujours exigé ; un administrateur sans second facteur ne peut en enregistrer un que pendant une fenêtre de 10 minutes ouverte par l'équipe. **Testable dans Postman** après l'outil du premier administrateur (voir « Créer le premier administrateur ») |
-| **Outils de l'équipe** | **fonctionnent**, sur l'ordinateur du serveur seulement (jamais par le réseau) : `creer_premier_administrateur`, `creer_administrateur` (un administrateur en crée un autre), `desactiver_totp` (téléphone perdu) ; chaque création, reprise ou désactivation est tracée |
+| **Outils de l'équipe** | **fonctionnent**, sur l'ordinateur du serveur seulement (jamais par le réseau) : `creer_premier_administrateur`, `creer_administrateur` (un administrateur en crée un autre), `desactiver_totp` (téléphone perdu), `intervenir_compte` (compte compromis : retirer un accès, bloquer, réactiver) ; chaque action est tracée |
 | Applications Angular et Flutter | en cours, chacune dans sa branche (voir « Organisation du dépôt ») |
 
 **Le backoffice** est la partie qui gère les comptes et les établissements : création d'un établissement par son responsable, validation par l'équipe LaafiCare (licence), invitation des employés, administrateurs.
 - **Ce qui existe déjà** : les tables dans la base (comptes séparés, établissements, pièces justificatives, décisions de l'équipe, affectations, invitations, profil administrateur) avec leurs règles, et la **double authentification** (second facteur TOTP : chiffrement du secret, activation, vérification des codes, codes de secours).
 - **Ce qui marche déjà** : la connexion des administrateurs et les outils de l'équipe (premier administrateur, administrateurs suivants, désactivation d'un second facteur) ; la création et la soumission d'un établissement MUNASEB, avec la vérification de l'email du responsable ; la validation ou le refus de la demande par l'équipe (routes administrateur, avec second facteur).
 - **Ce qui marche aussi** : le parcours complet de la MUNASEB, de la création à l'agent qui traite les remboursements (structure créée, validée, agent invité, invitation acceptée, email vérifié, connexion, affectation activée).
-- **Ce qui n'est pas encore utilisable** : la désactivation d'une affectation (étape 3.11), la réinitialisation du mot de passe professionnel par email (3.12), les routes du contrat MUNASEB (étape 5) et celles du patient (étape 6). Les autres types d'établissement attendent la liste de leurs pièces justificatives.
+- **Ce qui marche encore** : l'abandon d'une demande en brouillon ou refusée par son créateur ; la liste des membres d'un établissement et le retrait de l'accès d'un agent ou d'un autre responsable par un responsable (ses sessions sur cet établissement se ferment aussitôt, et un email le prévient).
+- **Espace patient MUNASEB** (étape 6) : le patient voit ses droits (couvert, en carence, expiré, suspendu, avec le solde de sa période), ses demandes de remboursement et leur détail (motif d'un rejet compris), et ses notifications, qu'il peut marquer comme lues. Il ne voit jamais que ses propres données.
+- **Ce qui n'est pas encore utilisable** : les routes du contrat MUNASEB (étape 5, en attente des réponses de la MUNASEB) ; un contrat se crée encore en SQL. Les autres types d'établissement attendent la liste de leurs pièces justificatives.
 - **Les détails** : les tables et leurs règles dans [`docs/modele-donnees.md`](docs/modele-donnees.md), la double authentification dans [`docs/securite.md`](docs/securite.md), les routes prévues dans [`docs/api.md`](docs/api.md) (section 4).
 
 Les modules médicaux (dossier, ordonnances, pharmacie, laboratoire, suivi de grossesse) viendront ensuite. La liste détaillée des décisions encore ouvertes est dans [`docs/points-ouverts.md`](docs/points-ouverts.md).
@@ -211,7 +213,9 @@ git checkout dev
 | Variable | Rôle | Exemple **fictif** |
 |---|---|---|
 | `POSTGRES_PASSWORD` | mot de passe de la base de développement, lu par Docker | une valeur choisie |
-| `DATABASE_URL` | adresse de la base, avec ce même mot de passe | `postgres://utilisateur:motdepasse@127.0.0.1:5433/laaficare` |
+| `DATABASE_URL` | adresse de la base avec le rôle **propriétaire** et ce même mot de passe ; sert seulement à la commande `migrer` et aux tests | `postgres://laaficare:motdepasse@127.0.0.1:5433/laaficare` |
+| `DATABASE_URL_SERVEUR` | adresse de la base pour le **serveur**, avec le rôle `laaficare_serveur` (voir « Rôles de la base » ci-dessous) | `postgres://laaficare_serveur:autremotdepasse@127.0.0.1:5433/laaficare` |
+| `DATABASE_URL_OUTILS` | adresse de la base pour les **outils** de l'équipe, avec le rôle `laaficare_outils` | `postgres://laaficare_outils:encoreunautre@127.0.0.1:5433/laaficare` |
 | `ENVIRONNEMENT` | `developpement` sur votre machine, `production` sur le vrai serveur ; obligatoire | `developpement` |
 | `URL_APPLICATION_WEB` | adresse de l'application web, sans `/` final : les liens envoyés par email y mènent ; obligatoire ; `https://` exigé en production | `http://localhost:4200` |
 | `CONTACT_SECURITE` | adresse email de l'équipe, donnée dans les alertes de sécurité (second facteur enregistré ou désactivé) ; obligatoire ; en production, une vraie adresse (les adresses d'exemple sont refusées) | `securite@example.org` |
@@ -221,9 +225,31 @@ git checkout dev
 
 Le fichier `.env` contient des secrets : il n'est jamais envoyé dans Git.
 
-**Vous aviez déjà un `.env` ?** Ajoutez-y les lignes `ENVIRONNEMENT=developpement`, `URL_APPLICATION_WEB=http://localhost:4200` et `CONTACT_SECURITE=securite@example.org` (variables obligatoires) : sans elles, le serveur et les outils refusent de démarrer. En `production`, ils refusent aussi tant que les SMS et les emails sont seulement simulés, ce qui est le cas aujourd'hui.
+**Vous aviez déjà un `.env` ?** Ajoutez-y les lignes `ENVIRONNEMENT=developpement`, `URL_APPLICATION_WEB=http://localhost:4200` et `CONTACT_SECURITE=securite@example.org` (variables obligatoires), ainsi que `DATABASE_URL_SERVEUR` et `DATABASE_URL_OUTILS` (voir « Rôles de la base ») : sans elles, le serveur et les outils refusent de démarrer. En `production`, ils refusent aussi tant que les SMS et les emails sont seulement simulés, ce qui est le cas aujourd'hui.
 
-**Votre base de développement contient déjà une structure ?** La migration 0022 rend obligatoires le numéro d'urgence, la région et l'email d'une structure : elle refuse de s'appliquer sur une base qui contient déjà une structure, et le serveur ne démarre pas. Repartez alors d'une base vide (`docker compose down -v`, qui **efface toute la base de développement**), puis relancez le serveur.
+**Votre base de développement contient déjà une structure ?** La migration 0022 rend obligatoires le numéro d'urgence, la région et l'email d'une structure : elle refuse de s'appliquer sur une base qui contient déjà une structure, et le serveur ne démarre pas. Repartez alors d'une base vide (`docker compose down -v`, qui **efface toute la base de développement**), puis relancez `docker compose up -d` et `cargo run --bin migrer`.
+
+### Rôles de la base
+
+Le serveur ne se connecte pas à la base avec tous les droits. Il utilise un **rôle limité**, `laaficare_serveur` : il peut lire et écrire les données, mais il ne peut ni créer ou modifier des tables, ni effacer les traces (historique des demandes, décisions de l'équipe…), ni désactiver les protections de la base. Les outils de l'équipe utilisent un second rôle, `laaficare_outils`. Seule la commande `migrer` (voir « Lancer ») utilise le rôle propriétaire, qui a tous les droits.
+
+**Créer les rôles, une seule fois.** Sur une base toute neuve, Docker les crée tout seul au premier démarrage. Sur une base qui existait déjà, lancer depuis `backend/`, Docker démarré :
+```
+docker exec -i laaficare-db psql -U laaficare -d laaficare -f - < sql/roles.sql
+```
+Relancer cette commande ne casse rien : un rôle qui existe déjà est laissé tel quel.
+
+**Donner un mot de passe à chaque rôle.** Ouvrir la console de la base :
+```
+docker exec -it laaficare-db psql -U laaficare -d laaficare
+```
+puis taper, une ligne après l'autre :
+```
+\password laaficare_serveur
+\password laaficare_outils
+\q
+```
+Chaque `\password` demande le mot de passe deux fois, **sans l'afficher**. Choisissez deux mots de passe différents, puis reportez-les dans `DATABASE_URL_SERVEUR` et `DATABASE_URL_OUTILS` du fichier `.env`.
 
 ### Lancer
 
@@ -232,12 +258,15 @@ Le fichier `.env` contient des secrets : il n'est jamais envoyé dans Git.
    ```
    docker compose up -d     # démarre PostgreSQL en arrière-plan
    docker compose ps        # vérifie : la base doit apparaître « running »
+   cargo run --bin migrer   # met la base à jour
    cargo run                # compile et lance le serveur (les outils : cargo run --bin <nom>)
    ```
 
+**`cargo run --bin migrer`** applique à la base les changements de structure du projet (les « migrations », dans `backend/migrations/`). Elle se connecte avec le rôle propriétaire (`DATABASE_URL`), le seul qui en a le droit. Lancez-la **après chaque récupération du code** (`git pull`) qui apporte une nouvelle migration, puis démarrez le serveur. La relancer quand tout est déjà à jour ne fait rien de plus. Le serveur, lui, **refuse de démarrer sur une base en retard** et l'écrit dans le terminal (« base pas à jour : lancer `cargo run --bin migrer` »).
+
 **La première compilation prend plusieurs minutes** : Rust fabrique d'abord toutes les bibliothèques utilisées. Les suivantes sont bien plus rapides. Ce n'est pas un blocage.
 
-Au démarrage, le serveur applique les migrations manquantes. Pour vérifier qu'il répond, ouvrir `http://127.0.0.1:8080/health` dans un navigateur (avec le port choisi) : la page affiche `"status":"ok"`.
+Au démarrage, le serveur vérifie que la base est à jour. Pour vérifier qu'il répond, ouvrir `http://127.0.0.1:8080/health` dans un navigateur (avec le port choisi) : la page affiche `"status":"ok"`.
 
 Le serveur s'arrête avec `Ctrl+C` dans le terminal où il tourne. PostgreSQL s'arrête avec `docker compose down` ; les données sont gardées pour la prochaine fois.
 
@@ -277,6 +306,21 @@ Toutes les routes, leurs réponses et leurs erreurs sont décrites dans [`docs/a
 | 7. Faire valider | avec un **autre** compte que celui du responsable : un administrateur (voir « Créer le premier administrateur »), connecté avec son second facteur, envoie `POST …/api/administrateurs/structures/<structure_id>/valider` | `{}` (licence sans fin) ou `{"licence_expire_le": "AAAA-MM-JJ"}` | 204 ; un email simulé « demande traitée » s'affiche dans le terminal ; l'affectation `responsable` devient exerçable |
 | 8. Inviter un agent | le responsable se connecte, active son affectation `responsable` (`POST …/api/professionnels/affectations/<id>/activer`), puis `POST …/api/professionnels/invitations` | `{"telephone": "<numéro fictif d'un autre compte patient>", "role": "agent_assurance_munaseb"}` | 201 ; le SMS d'invitation s'affiche dans le terminal du serveur |
 | 9. Accepter | connecté avec le compte patient de l'invité : `GET …/api/patients/invitations`, puis `POST …/api/patients/invitations/<id>/accepter` | `{"email_professionnel": "<email fictif>", "mot_de_passe_professionnel": "…"}` | 200 ; un lien de vérification s'affiche dans le terminal (le vérifier comme à l'étape 3) ; l'agent peut ensuite se connecter et activer son affectation |
+| 10. Retirer un accès | le responsable, son affectation `responsable` active : `GET …/api/professionnels/membres`, puis `POST …/api/professionnels/membres/<affectation_id>/desactiver` | aucun | 200 avec la liste (sans téléphone ni email), puis 204 ; un email simulé « accès retiré » s'affiche dans le terminal ; le jeton d'accès de l'agent reçoit ensuite 401 `jeton_invalide`. Retirer le dernier responsable donne 409 `dernier_responsable` |
+
+Abandonner une demande en brouillon ou refusée : `POST …/api/structures/<structure_id>/abandonner` avec le jeton patient du créateur (204) ; la personne peut ensuite en créer une nouvelle.
+
+### Voir ses droits et ses demandes (espace patient MUNASEB)
+
+Avec le `jeton_acces` d'un compte patient (en-tête `Authorization: Bearer <jeton_acces>`) :
+
+| Demande | Réponse attendue |
+|---|---|
+| `GET …/api/patients/munaseb/droits` | 200, `"etat": "aucun_contrat"` tant que le patient n'a pas de contrat (un contrat ne se crée encore qu'en SQL dans la base de développement, avec une période d'adhésion qui contient la date du jour) ; ensuite `"etat": "couvert"` avec le plafond, la somme consommée et le solde |
+| `GET …/api/patients/munaseb/demandes` | 200, les demandes du patient, les plus récentes d'abord (après une demande créée par un agent avec `simuler-acte` et le NIP du patient) |
+| `GET …/api/patients/munaseb/demandes/<id>` | 200 avec le détail ; 404 `demande_inconnue` pour la demande d'un autre patient |
+| `GET …/api/patients/notifications` | 200, avec `non_lues` |
+| `POST …/api/patients/notifications/<id>/lue` | 204 ; `non_lues` diminue de 1 |
 
 Lien perdu ou expiré (24 h) : `POST …/api/professionnels/email/renvoyer` avec `{"email": "…", "mot_de_passe": "…"}` (mot de passe professionnel), une fois par minute au plus.
 
@@ -306,7 +350,13 @@ Si l'outil s'arrête en cours, ou si les 10 minutes passent : relancer `cargo ru
 
 **Les autres outils de l'équipe**, lancés par un administrateur qui donne son email, son mot de passe et un code de son application :
 - `cargo run --bin creer_administrateur` : créer un autre administrateur (la personne est présente, a un compte patient, et tape elle-même son mot de passe), ou reprendre un administrateur qui n'a jamais enregistré de second facteur ;
-- `cargo run --bin desactiver_totp` : retirer le second facteur d'une personne qui a perdu son téléphone et ses codes de secours, après avoir vérifié sa CNIB. Ses sessions sont fermées ; pour un administrateur, une nouvelle fenêtre de 10 minutes est ouverte.
+- `cargo run --bin desactiver_totp` : retirer le second facteur d'une personne qui a perdu son téléphone et ses codes de secours, après avoir vérifié sa CNIB. Ses sessions sont fermées ; pour un administrateur, une nouvelle fenêtre de 10 minutes est ouverte ;
+- `cargo run --bin intervenir_compte` : agir sur un compte **compromis** (mot de passe volé, accès qui ne devrait plus exister). L'outil propose trois actions :
+  1. **retirer une affectation** d'un professionnel : il perd aussitôt l'accès à cette structure. Le dernier responsable d'une structure peut être retiré, après un avertissement et une confirmation ;
+  2. **bloquer un compte** (patient, professionnel ou administrateur) : toutes ses sessions sont fermées, son mot de passe ne marche plus, il ne reçoit plus aucun code SMS ni lien par email ;
+  3. **réactiver un compte bloqué**, après avoir vérifié la CNIB de la personne devant soi : elle choisit ensuite un nouveau mot de passe avec « Mot de passe oublié ? ».
+
+  Chaque fois, l'outil affiche la personne trouvée et demande de confirmer, puis un motif. Chaque action est tracée, sans pouvoir être modifiée ; la personne est prévenue par email si elle en a un vérifié. Un administrateur ne peut agir sur aucun de ses propres comptes.
 
 **Gardez toujours au moins deux administrateurs avec un second facteur actif** : `desactiver_totp` exige un autre administrateur que la personne visée.
 
@@ -340,11 +390,12 @@ Les tests qui utilisent la base créent chacun une base temporaire, supprimée e
 |---|---|---|
 | Les tests en base échouent tous avec `PoolTimedOut` | PostgreSQL ne répond pas : Docker Desktop n'est pas démarré | démarrer Docker Desktop, puis `docker compose up -d` et `docker compose ps` |
 | Le serveur s'arrête aussitôt avec « configuration invalide » | il reste un `A_GENERER` dans `backend/.env`, une valeur mal formée (secret trop court, clé qui n'est pas en hexadécimal), ou `ENVIRONNEMENT`, `URL_APPLICATION_WEB` ou `CONTACT_SECURITE` manque | compléter `.env` (voir « Préparer la configuration ») |
-| Le serveur s'arrête sur « échec des migrations » après la mise à jour | la base de développement contient déjà une structure (migration 0022) | repartir d'une base vide, `docker compose down -v` (voir « Préparer la configuration ») |
+| `cargo run --bin migrer` s'arrête sur « échec des migrations » | la base de développement contient déjà une structure (migration 0022) ; ou, avec « role "laaficare_serveur" does not exist », les rôles n'ont pas été créés | repartir d'une base vide, `docker compose down -v` (voir « Préparer la configuration ») ; ou créer les rôles (voir « Rôles de la base ») |
+| Le serveur ou un outil répond « base pas à jour » | les dernières migrations ne sont pas appliquées | lancer `cargo run --bin migrer`, puis relancer |
+| Les tests `droits_des_roles` échouent avec « role … does not exist » | les rôles n'existent pas sur le PostgreSQL de développement | les créer (voir « Rôles de la base ») |
 | « envoi de SMS simulé : refusé en production » | `ENVIRONNEMENT=production` sur une machine de développement | mettre `ENVIRONNEMENT=developpement` |
-| Un outil répond « base pas à jour » | le serveur n'a pas encore appliqué les dernières migrations | lancer `cargo run` une fois, puis relancer l'outil |
 | Un outil s'arrête quand il demande un mot de passe | il est lancé depuis le terminal de Git Bash | le relancer depuis PowerShell |
-| Le serveur s'arrête car la base est injoignable | Docker n'est pas démarré, ou le mot de passe de `DATABASE_URL` n'est pas celui de `POSTGRES_PASSWORD` | démarrer Docker ; mettre le même mot de passe dans les deux variables |
+| Le serveur s'arrête car la base est injoignable | Docker n'est pas démarré, ou le mot de passe de `DATABASE_URL_SERVEUR` n'est pas celui donné au rôle `laaficare_serveur` (`DATABASE_URL_OUTILS` pour un outil ; `DATABASE_URL` et `POSTGRES_PASSWORD` pour `migrer`) | démarrer Docker ; remettre le bon mot de passe (`\password`, voir « Rôles de la base ») |
 | Réponse 429 `trop_de_demandes` | trop de codes demandés, ou trop d'essais de code | attendre le nombre de secondes indiqué par l'en-tête `Retry-After`, ou demander un nouveau code |
 | Réponse 401 `jeton_invalide` sur une route ordinaire | jeton d'accès expiré (15 min), d'une autre sorte, émis avant un changement de mot de passe, ou session fermée | renouveler (`POST /api/sessions/renouveler`) ; si le renouvellement répond aussi 401, se reconnecter |
 

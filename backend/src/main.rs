@@ -1,7 +1,10 @@
 mod erreur_api;
 mod extracteur_jwt;
 mod routes_administrateur;
+mod routes_espace_patient;
 mod routes_invitation;
+mod routes_membres;
+mod routes_mot_de_passe;
 mod routes_patient;
 mod routes_remboursement_munaseb;
 mod routes_professionnel;
@@ -15,7 +18,7 @@ use axum::{Json, Router, extract::State, http::StatusCode, routing::get, routing
 use serde::Serialize;
 use sqlx::PgPool;
 
-use laaficare_backend::config::{self, CleTotp, Config};
+use laaficare_backend::config::{self, CleTotp, Config, Programme};
 use laaficare_backend::db;
 use laaficare_backend::email::{EmailSender, EmailSenderConsole};
 use laaficare_backend::jwt::JwtService;
@@ -47,6 +50,8 @@ pub(crate) struct AppState {
     pub(crate) url_application_web: Arc<str>,
     /// `CONTACT_SECURITE` (D3), donné dans les alertes de sécurité.
     pub(crate) contact_securite: Arc<str>,
+    /// Tâches de fond du mot de passe oublié, bornées (R11).
+    pub(crate) taches_reinitialisation: Arc<laaficare_backend::reinitialisation::LimiteTaches>,
 }
 
 // Struct typée plutôt qu'un `json!` en ligne : le compilateur fixe le format
@@ -110,7 +115,7 @@ async fn main() {
         }
     }
 
-    let config = Config::from_env().unwrap_or_else(|erreur| {
+    let config = Config::from_env(Programme::Serveur).unwrap_or_else(|erreur| {
         tracing::error!(%erreur, "configuration invalide");
         std::process::exit(1)
     });
@@ -128,16 +133,21 @@ async fn main() {
             std::process::exit(1)
         });
 
-    // `sqlx::migrate!()` intègre le SQL de `./migrations` à la compilation
-    // (doc sqlx 0.9, macro.migrate.html) : aucun fichier requis au runtime,
-    // le binaire compilé suffit. Un échec de migration est une erreur de
-    // configuration au même titre qu'une base injoignable : même traitement
-    // (log clair, sortie en code 1), jamais de panic.
-    if let Err(erreur) = sqlx::migrate!().run(&pool).await {
-        tracing::error!(%erreur, "échec des migrations de base de données");
-        std::process::exit(1);
+    // Le serveur n'applique plus les migrations (P1, décision 5 du porteur,
+    // 2026-10-22) : son rôle PostgreSQL n'en a pas le droit. Il refuse de
+    // démarrer sur une base en retard, plutôt que d'échouer plus tard au
+    // milieu d'une requête. Même traitement qu'une base injoignable.
+    match db::migrations_manquantes(&pool).await {
+        Ok(0) => tracing::info!("base à jour"),
+        Ok(manquantes) => {
+            tracing::error!(manquantes, "base pas à jour : lancer `cargo run --bin migrer`");
+            std::process::exit(1);
+        }
+        Err(erreur) => {
+            tracing::error!(%erreur, "lecture du journal des migrations impossible");
+            std::process::exit(1);
+        }
     }
-    tracing::info!("migrations appliquées");
 
     let jwt = JwtService::new(&config.jwt_secret);
     let sms: Arc<dyn SmsSender> = Arc::new(sms::SmsSenderConsole);
@@ -218,9 +228,21 @@ async fn main() {
         .route("/api/patients/invitations", get(routes_invitation::lister_recues))
         .route("/api/patients/invitations/{id}/accepter", post(routes_invitation::accepter))
         .route("/api/patients/invitations/{id}/refuser", post(routes_invitation::refuser))
+        .route("/api/professionnels/mot-de-passe/oubli", post(routes_mot_de_passe::oubli_professionnel))
+        .route("/api/administrateurs/mot-de-passe/oubli", post(routes_mot_de_passe::oubli_administrateur))
+        .route("/api/mot-de-passe/reinitialiser", post(routes_mot_de_passe::reinitialiser))
         .route("/api/structures", post(routes_structure::creer))
         .route("/api/structures/mes-demandes", get(routes_structure::mes_demandes))
         .route("/api/structures/{id}/soumettre", post(routes_structure::soumettre))
+        .route("/api/structures/{id}/abandonner", post(routes_structure::abandonner))
+        .route("/api/professionnels/membres", get(routes_membres::lister))
+        .route("/api/professionnels/membres/{id}/desactiver", post(routes_membres::desactiver))
+        .route("/api/patients/munaseb/droits", get(routes_espace_patient::droits))
+        .route("/api/patients/munaseb/demandes", get(routes_espace_patient::lister_demandes))
+        .route("/api/patients/munaseb/demandes/{id}", get(routes_espace_patient::detail_demande))
+        .route("/api/patients/notifications", get(routes_espace_patient::lister_notifications))
+        .route("/api/patients/notifications/lues", post(routes_espace_patient::marquer_toutes_lues))
+        .route("/api/patients/notifications/{id}/lue", post(routes_espace_patient::marquer_lue))
         .with_state(AppState {
             db: pool,
             jwt,
@@ -229,6 +251,7 @@ async fn main() {
             email,
             url_application_web: Arc::from(config.url_application_web),
             contact_securite: Arc::from(config.contact_securite),
+            taches_reinitialisation: Arc::new(laaficare_backend::reinitialisation::LimiteTaches::default()),
         });
 
     // 127.0.0.1 : cohérent avec PostgreSQL exposé en local seulement. À

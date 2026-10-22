@@ -14,7 +14,7 @@ use sqlx::PgPool;
 use zeroize::Zeroizing;
 
 use crate::auth_administrateur::FENETRE_REENROLEMENT_MINUTES;
-use crate::config::{self, Config, Environnement};
+use crate::config::{self, Config, Environnement, Programme};
 use crate::sms::{SmsSender, SmsSenderConsole};
 use crate::db;
 use crate::email::{EmailSender, EmailSenderConsole};
@@ -151,10 +151,11 @@ pub struct Contexte {
 }
 
 /// Démarrage commun des outils : même `.env` que le serveur (B10), refus en
-/// production tant que l'email est simulé (B2), connexion à la base, et
-/// contrôle que la base a reçu la migration 0020 (les outils n'appliquent
-/// pas de migration : c'est le rôle du serveur). Le message d'erreur ne
-/// contient jamais de valeur de la configuration.
+/// production tant que l'email est simulé (B2), connexion à la base avec le
+/// rôle des outils (`DATABASE_URL_OUTILS`, P1), et contrôle que toutes les
+/// migrations sont appliquées (les outils n'en appliquent pas : c'est le
+/// rôle de la commande `migrer`). Le message d'erreur ne contient jamais de
+/// valeur de la configuration.
 pub async fn demarrer() -> Result<Contexte, String> {
     match dotenvy::dotenv() {
         Ok(_) => {}
@@ -162,18 +163,16 @@ pub async fn demarrer() -> Result<Contexte, String> {
         Err(erreur) if erreur.not_found() => {}
         Err(_) => return Err("fichier .env illisible".into()),
     }
-    let config = Config::from_env().map_err(|e| format!("configuration invalide : {e}"))?;
+    let config = Config::from_env(Programme::Outils).map_err(|e| format!("configuration invalide : {e}"))?;
     let email = EmailSenderConsole;
     verifier_envois_des_outils(config.environnement, &email).map_err(|e| format!("configuration invalide : {e}"))?;
-    let pool = db::connecter(&config.database_url)
-        .await
-        .map_err(|_| "base injoignable : vérifier que PostgreSQL est démarré et que DATABASE_URL est correct".to_string())?;
-    let a_jour: bool = sqlx::query_scalar("SELECT to_regclass('public.creation_administrateur') IS NOT NULL")
-        .fetch_one(&pool)
-        .await
-        .map_err(|_| "lecture de la base impossible".to_string())?;
-    if !a_jour {
-        return Err("base pas à jour : lancer le serveur une fois, il applique les migrations".into());
+    let pool = db::connecter(&config.database_url).await.map_err(|_| {
+        "base injoignable : vérifier que PostgreSQL est démarré et que DATABASE_URL_OUTILS est correct".to_string()
+    })?;
+    let manquantes =
+        db::migrations_manquantes(&pool).await.map_err(|_| "lecture de la base impossible".to_string())?;
+    if manquantes > 0 {
+        return Err("base pas à jour : lancer `cargo run --bin migrer`".into());
     }
     Ok(Contexte { config, pool, email })
 }

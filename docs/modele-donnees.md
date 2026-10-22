@@ -177,8 +177,10 @@ Depuis la migration 0021, l'agent est désigné par son **affectation** (l'affec
 
 ### `notification` : les messages au patient
 
-Chaque changement de statut d'une demande crée une notification, que l'application patient affichera : titre, message, lue ou non. Le texte reste **volontairement vague** (ni type d'acte, ni nom de l'établissement), car il pourrait un jour s'afficher sur l'écran verrouillé du téléphone. Une notification qui échoue n'annule jamais la demande.
+Chaque changement de statut d'une demande crée une notification, que l'application patient affichera : titre, message, lue ou non. Le texte reste **volontairement vague** (ni type d'acte, ni nom de l'établissement), car il pourrait un jour s'afficher sur l'écran verrouillé du téléphone. Une notification qui échoue n'annule jamais la demande. Le patient lit ses notifications et les marque comme lues depuis son application ; il ne voit jamais celles d'une autre personne.
 Fichier : [`notification.rs`](../backend/src/notification.rs). Migration 0008.
+
+Le **solde d'une période** (plafond moins les montants validés et payés) se calcule à un seul endroit, pour l'agent comme pour le patient : [`contrat_assurance_munaseb.rs`](../backend/src/contrat_assurance_munaseb.rs). Ce que le patient voit de ses droits et de ses demandes : [`espace_patient_munaseb.rs`](../backend/src/espace_patient_munaseb.rs).
 
 ## 4. Établissements, pièces et affectations
 
@@ -229,7 +231,7 @@ Règles garanties par la base :
 - elle ne se modifie **qu'une fois**, pour sa clôture (avec la date et l'auteur) ; tout le reste est figé ;
 - **pas de réactivation** : une personne qui revient reçoit une nouvelle affectation, et l'historique garde toutes les périodes.
 
-C'est ce qui permettra, plus tard, de savoir pour chaque acte médical qui l'a fait et dans quel établissement. C'est déjà le cas des décisions des agents MUNASEB (migration 0021). Après sa connexion, un professionnel **active** l'une de ses affectations : sa session porte alors cette affectation, et une nouvelle activation ouvre une nouvelle session (fichier [`affectation.rs`](../backend/src/affectation.rs)).
+C'est ce qui permettra, plus tard, de savoir pour chaque acte médical qui l'a fait et dans quel établissement. C'est déjà le cas des décisions des agents MUNASEB (migration 0021). Après sa connexion, un professionnel **active** l'une de ses affectations : sa session porte alors cette affectation, et une nouvelle activation ouvre une nouvelle session (fichier [`affectation.rs`](../backend/src/affectation.rs)). Un responsable clôt l'affectation d'un membre (fichier [`membres.rs`](../backend/src/membres.rs)) : les sessions ouvertes sur elle se ferment aussitôt (migration 0025), et le dernier responsable actif d'un établissement ne peut pas être retiré. L'abandon d'une demande d'établissement clôt aussi l'affectation de son responsable.
 
 ### `invitation` : faire entrer quelqu'un dans un établissement
 
@@ -252,6 +254,10 @@ Les 10 codes de secours, sous forme d'empreinte Argon2id, avec leur date d'utili
 ### `desactivation_totp`
 
 La trace de chaque désactivation par l'équipe LaafiCare : compte concerné, administrateur, date, motif, et attestation que la pièce d'identité a été vérifiée (le numéro de la pièce n'est **pas** enregistré). **Jamais modifiée ni supprimée**, et un administrateur ne peut pas désactiver le second facteur de ses propres comptes.
+
+### `intervention_compte`
+
+La trace de chaque intervention de l'équipe LaafiCare sur un compte compromis (outil `intervenir_compte`) : compte concerné, affectation retirée le cas échéant, action (retrait d'une affectation, blocage ou réactivation du compte), administrateur, date, motif obligatoire, et attestation de la vérification de la pièce d'identité, **obligatoire pour une réactivation**. **Jamais modifiée ni supprimée**, jamais sur les propres comptes de l'administrateur, et écrite seulement par le rôle des outils (le serveur la lit). Fichier : [`intervention_compte.rs`](../backend/src/intervention_compte.rs). Migration 0027.
 
 ### `profil_administrateur`
 
@@ -292,5 +298,9 @@ Règles garanties par la base : **jamais modifiées ni supprimées** ; seulement
 | 0021 | Historique des demandes MUNASEB : l'agent désigné par son affectation (établissement et rôle) |
 | 0022 | Numéro d'urgence, région et email d'une structure, obligatoires ; email enregistré sans espaces autour (`utilisateur_email_sans_espaces_autour`) |
 | 0023 | Nom d'une structure : 100 caractères au plus, ni retour à la ligne ni caractère de contrôle (le nom est repris dans le SMS d'invitation) |
+| 0024 | Liens de réinitialisation du mot de passe (professionnels et administrateurs) dans la table des jetons d'email |
+| 0025 | Motif de fermeture de session `desactivation_affectation` : un accès retiré par un responsable ferme aussitôt les sessions ouvertes sur cette affectation |
+| 0026 | Droits des rôles du serveur et des outils : le serveur lit et écrit les données sans pouvoir changer les tables ni les traces ; seuls les outils ouvrent la fenêtre de réenrôlement (fonction `vider_fenetre_reenrolement` pour la refermer) |
+| 0027 | Trace des interventions de l'équipe sur un compte compromis (`intervention_compte` : retrait d'une affectation, blocage, réactivation), jamais modifiée ni supprimée, jamais sur ses propres comptes ; écrite par le seul rôle des outils |
 
 Une migration déjà appliquée ne change plus jamais : toute évolution passe par une nouvelle migration. Un test vérifie aussi qu'aucun caractère invisible ne s'y glisse ([`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs)).

@@ -83,6 +83,12 @@ pub enum ErreurDemandeOtp {
     /// passer (en-tête `Retry-After` de la réponse 429).
     #[error("trop de demandes de code, réessayer dans {reessayer_dans_secs} s")]
     TropDeDemandes { reessayer_dans_secs: u64 },
+    /// Compte patient bloqué par l'équipe (`intervenir_compte`, P2) : aucun
+    /// code n'est créé et aucun SMS ne doit partir. Pas une erreur pour la
+    /// route : elle répond exactement comme pour un numéro inconnu, pour ne
+    /// rien révéler (décision du porteur, 2026-10-22).
+    #[error("compte patient bloqué : aucun code")]
+    CompteBloque,
     #[error(transparent)]
     Base(#[from] sqlx::Error),
 }
@@ -138,6 +144,29 @@ pub async fn generer_et_enregistrer(pool: &PgPool, utilisateur_id: Uuid) -> Resu
         // La transaction est annulée à sa destruction : rien n'est écrit,
         // pas même le nettoyage, sans conséquence.
         return Err(ErreurDemandeOtp::TropDeDemandes { reessayer_dans_secs: attente as u64 });
+    }
+
+    // Compte patient bloqué (P2) : les limites ci-dessus s'appliquent et
+    // l'envoi est compté comme pour tout numéro (sinon un 429 qui ne vient
+    // jamais trahirait le blocage) ; mais tout code en cours est effacé,
+    // aucun nouveau n'est créé, et l'appelant n'envoie aucun SMS.
+    let bloque: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM compte WHERE utilisateur_id = $1 AND type_compte = 'patient' AND statut = 'desactive')",
+    )
+    .bind(utilisateur_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if bloque {
+        sqlx::query("UPDATE utilisateur SET otp_code_hash = NULL, otp_expire_a = NULL WHERE id = $1")
+            .bind(utilisateur_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("INSERT INTO envoi_otp (utilisateur_id) VALUES ($1)")
+            .bind(utilisateur_id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        return Err(ErreurDemandeOtp::CompteBloque);
     }
 
     let code = generer_code();

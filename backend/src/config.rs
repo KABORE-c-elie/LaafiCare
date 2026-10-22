@@ -110,11 +110,33 @@ pub enum ConfigError {
     EnvoiSimuleEnProduction(&'static str),
 }
 
+/// Le programme qui lit la configuration : chacun se connecte à la base avec
+/// son propre rôle PostgreSQL (P1, décision 6 du porteur, 2026-10-22).
+/// `DATABASE_URL`, celle du rôle propriétaire, ne sert qu'aux migrations
+/// (`migrer`) et aux tests (`#[sqlx::test]` la lit et crée des bases) : le
+/// serveur et les outils ne la lisent jamais.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Programme {
+    /// Rôle `laaficare_serveur`, variable `DATABASE_URL_SERVEUR`.
+    Serveur,
+    /// Rôle `laaficare_outils`, variable `DATABASE_URL_OUTILS`.
+    Outils,
+}
+
+impl Programme {
+    pub fn variable_base(self) -> &'static str {
+        match self {
+            Programme::Serveur => "DATABASE_URL_SERVEUR",
+            Programme::Outils => "DATABASE_URL_OUTILS",
+        }
+    }
+}
+
 impl Config {
     /// Aucune valeur par défaut : une variable manquante est une erreur
     /// explicite plutôt qu'un comportement caché.
-    pub fn from_env() -> Result<Config, ConfigError> {
-        let database_url = lire("DATABASE_URL")?;
+    pub fn from_env(programme: Programme) -> Result<Config, ConfigError> {
+        let database_url = lire(programme.variable_base())?;
         let server_port = parse_port(&lire("SERVER_PORT")?)?;
         let jwt_secret = valider_secret_jwt(lire("JWT_SECRET")?)?;
         let totp_cle_chiffrement = decoder_cle_totp(&lire("TOTP_CLE_CHIFFREMENT")?)?;

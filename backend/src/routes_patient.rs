@@ -40,6 +40,8 @@ fn mapper_erreur(erreur: ErreurAuthPatient) -> ReponseErreur {
         }
         // Une seule réponse pour tout échec de connexion (P1, L1).
         ErreurAuthPatient::IdentifiantsInvalides => (StatusCode::UNAUTHORIZED, "identifiants_invalides"),
+        // Jamais renvoyé : `demander_otp`, seule à le produire, répond 204.
+        ErreurAuthPatient::CompteBloque => return reponse_erreur_interne("AuthPatientService", "compte bloqué inattendu"),
         // Détail dans les logs seulement, jamais dans la réponse -- même
         // principe que `/health` pour la base injoignable.
         ErreurAuthPatient::Interne(detail) => return reponse_erreur_interne("AuthPatientService", detail),
@@ -79,9 +81,13 @@ pub async fn demander_otp(
     State(state): State<AppState>,
     JsonApi(corps): JsonApi<DemandeOtpRequete>,
 ) -> Result<StatusCode, Response> {
-    let (code, telephone) = auth_patient::demander_otp(&state.db, &corps.telephone)
-        .await
-        .map_err(reponse_erreur_patient)?;
+    let (code, telephone) = match auth_patient::demander_otp(&state.db, &corps.telephone).await {
+        Ok(envoi) => envoi,
+        // Compte bloqué par l'équipe (P2) : même réponse que pour tout
+        // numéro, aucun SMS (décision du porteur, 2026-10-22).
+        Err(ErreurAuthPatient::CompteBloque) => return Ok(StatusCode::NO_CONTENT),
+        Err(erreur) => return Err(reponse_erreur_patient(erreur)),
+    };
 
     let message = format!("Votre code LaafiCare : {code}. Valide 5 minutes.");
     // Envoi vers le numéro NORMALISÉ, jamais vers la saisie brute (décision
@@ -257,6 +263,7 @@ mod tests {
             email: Arc::new(laaficare_backend::email::EmailSenderConsole),
             url_application_web: Arc::from("http://localhost:4200"),
             contact_securite: Arc::from("securite@example.org"),
+            taches_reinitialisation: Arc::new(Default::default()),
         };
         let (code, _) = auth_patient::demander_otp(&state.db, "70 02 20 01").await.unwrap();
         let naissance = NaiveDate::from_ymd_opt(1995, 4, 12).unwrap();
@@ -282,5 +289,90 @@ mod tests {
         assert_eq!(profil.telephone, "+22670022001");
         assert_eq!((profil.date_naissance, profil.lieu_naissance.as_str()), (naissance, "Koudougou"));
         assert_eq!(profil.nip.len(), 16);
+    }
+
+    /// Garde les numéros vers lesquels un SMS est parti.
+    #[derive(Default)]
+    struct SmsEnvoyes(std::sync::Mutex<Vec<String>>);
+
+    impl laaficare_backend::sms::SmsSender for SmsEnvoyes {
+        fn envoyer(&self, telephone: &str, _message: &str) -> Result<(), laaficare_backend::sms::ErreurSms> {
+            self.0.lock().unwrap().push(telephone.to_owned());
+            Ok(())
+        }
+        fn simule(&self) -> bool {
+            true
+        }
+    }
+
+    /// P2 (décision du porteur, 2026-10-22) : un compte patient bloqué par
+    /// l'équipe ne reçoit plus aucun code SMS, et `POST /api/patients/otp`
+    /// répond exactement comme pour un numéro inconnu (même statut, même
+    /// corps vide) : rien n'est révélé.
+    #[sqlx::test]
+    #[ignore]
+    async fn compte_bloque_aucun_sms_et_meme_reponse(pool: sqlx::PgPool) {
+        use axum::body::to_bytes;
+        use laaficare_backend::jwt::JwtService;
+        use std::sync::Arc;
+
+        let sms = Arc::new(SmsEnvoyes::default());
+        let state = AppState {
+            db: pool,
+            jwt: JwtService::new(&"a".repeat(32)),
+            sms: sms.clone(),
+            cle_totp: Arc::new(laaficare_backend::config::CleTotp::depuis_octets([7; 32])),
+            email: Arc::new(laaficare_backend::email::EmailSenderConsole),
+            url_application_web: Arc::from("http://localhost:4200"),
+            contact_securite: Arc::from("securite@example.org"),
+            taches_reinitialisation: Arc::new(Default::default()),
+        };
+        // Un patient inscrit, puis bloqué (comme le fait `intervenir_compte`).
+        let (code, _) = auth_patient::demander_otp(&state.db, "70 02 30 01").await.unwrap();
+        auth_patient::creer_compte(
+            &state.db,
+            &state.jwt,
+            "70 02 30 01",
+            &code,
+            "OUEDRAOGO",
+            "Awa",
+            NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+            "Ouagadougou",
+            "Exemple#2026",
+        )
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE compte SET statut = 'desactive' WHERE type_compte = 'patient' \
+               AND utilisateur_id = (SELECT id FROM utilisateur WHERE telephone = '+22670023001')",
+        )
+        .execute(&state.db)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE envoi_otp SET envoye_le = envoye_le - interval '2 minutes'").execute(&state.db).await.unwrap();
+
+        let demander = |telephone: &'static str| {
+            let state = state.clone();
+            async move {
+                let corps = DemandeOtpRequete { telephone: telephone.into() };
+                let reponse = match demander_otp(State(state), JsonApi(corps)).await {
+                    Ok(statut) => statut.into_response(),
+                    Err(reponse) => reponse,
+                };
+                let statut = reponse.status();
+                (statut, to_bytes(reponse.into_body(), usize::MAX).await.unwrap())
+            }
+        };
+        let inconnu = demander("70 02 30 02").await;
+        let bloque = demander("70 02 30 01").await;
+        assert_eq!(bloque, inconnu, "même statut, même corps");
+        assert_eq!(bloque.0, StatusCode::NO_CONTENT);
+        assert_eq!(*sms.0.lock().unwrap(), ["+22670023002"], "un SMS pour le numéro inconnu, aucun pour le compte bloqué");
+        let code: Option<String> =
+            sqlx::query_scalar("SELECT otp_code_hash FROM utilisateur WHERE telephone = '+22670023001'")
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        assert!(code.is_none(), "aucun code en attente pour le compte bloqué");
     }
 }

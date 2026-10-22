@@ -59,7 +59,7 @@ fn reponse_erreur_invitation(erreur: ErreurInvitation) -> Response {
 }
 
 /// Seul un responsable invite et gère les invitations (I3).
-fn responsable(professionnel: &ProfessionnelEnExercice) -> Result<Responsable<'_>, Response> {
+pub(crate) fn responsable(professionnel: &ProfessionnelEnExercice) -> Result<Responsable<'_>, Response> {
     let exercice = &professionnel.0;
     if exercice.role != "responsable" {
         return Err(RefusAuthentification::Interdit.into_response());

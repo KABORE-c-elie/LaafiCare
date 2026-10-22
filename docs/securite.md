@@ -165,11 +165,12 @@ Fichiers : [`auth_administrateur.rs`](../backend/src/auth_administrateur.rs), [`
 
 Changer d'établissement ferme la session en cours et en ouvre une nouvelle, **qui finit à la même heure** : on ne prolonge jamais une session sans redonner son mot de passe. Chaque décision d'un agent MUNASEB est enregistrée avec son affectation (qui, et dans quel établissement). **Un agent ne touche que les demandes de sa mutuelle** : il doit exercer dans une structure MUNASEB validée, et la base n'en admet qu'une seule. Fichiers : [`affectation.rs`](../backend/src/affectation.rs), [`extracteur_jwt.rs`](../backend/src/extracteur_jwt.rs). Migration 0021.
 
-**Les outils de l'équipe LaafiCare** (`creer_premier_administrateur`, `creer_administrateur`, `desactiver_totp`) se lancent sur l'ordinateur du serveur, **jamais par le réseau** :
-- `creer_administrateur` et `desactiver_totp` exigent que l'administrateur qui les lance s'authentifie avec son email, son mot de passe et un code de son application ; chaque essai faux compte dans son verrouillage ;
+**Les outils de l'équipe LaafiCare** (`creer_premier_administrateur`, `creer_administrateur`, `desactiver_totp`, `intervenir_compte`) se lancent sur l'ordinateur du serveur, **jamais par le réseau** :
+- `creer_administrateur`, `desactiver_totp` et `intervenir_compte` exigent que l'administrateur qui les lance s'authentifie avec son email, son mot de passe et un code de son application ; chaque essai faux compte dans son verrouillage ;
 - les mots de passe, les codes et les jetons se tapent **sans s'afficher** (crate `rpassword`), puis sont effacés de la mémoire ;
 - un nouvel administrateur **choisit lui-même son mot de passe**, différent de celui de son compte patient ; il enregistre lui-même son second facteur pendant la fenêtre de 10 minutes : **aucun outil n'affiche de secret de second facteur** ;
 - `desactiver_totp` exige l'attestation que la CNIB de la personne a été vérifiée ; il supprime le second facteur et ses codes de secours, ferme toutes les sessions du compte, prévient la personne par email, et la base refuse qu'un administrateur l'utilise sur ses propres comptes ;
+- `intervenir_compte` agit sur un **compte compromis** (2026-10-22) : il retire une affectation, bloque un compte ou le réactive. **Bloquer** ferme toutes les sessions, annule les liens par email et le code SMS en cours, et **remplace le mot de passe par une valeur que personne ne connaît** : celui qui a volé l'ancien ne peut plus s'en servir. Un compte patient bloqué **ne reçoit plus aucun code SMS**, et la demande de code répond exactement comme pour un numéro inconnu, pour ne rien révéler. **Réactiver** exige l'attestation que la CNIB a été vérifiée, et remplace de nouveau le mot de passe : la personne en choisit un nouveau avec « Mot de passe oublié ? ». Chaque action est tracée sans pouvoir être modifiée, la base refuse qu'un administrateur agisse sur ses propres comptes, et la personne est prévenue par email si elle en a un vérifié (un patient sans email ne l'est pas : limite connue) ;
 - **séparation des tâches** : un administrateur ne valide ni ne refuse jamais la demande d'une structure dont il est responsable, même avec un autre compte de la même personne ; un autre membre de l'équipe doit décider. Source : NIST SP 800-53 rév. 5, contrôle AC-5 « Separation of Duties » ; application : décision du porteur, 2026-10-21 ;
 - **alertes de sécurité par email** : quand un second facteur est enregistré (réenrôlement d'un administrateur) ou désactivé par l'équipe, la personne reçoit un email, après l'enregistrement en base. Il donne la date et l'heure (heure du Burkina Faso) et l'adresse de l'équipe à contacter (`CONTACT_SECURITE`), sans aucun code ni lien. Un échec d'envoi n'annule rien. Sources : NIST SP 800-63B rév. 4, §4.1.2.1 et §4.6 ; OWASP ASVS 5.0, 6.3.7 ;
 - un seul « premier administrateur » peut jamais exister, garanti par la base, même si deux outils sont lancés en même temps ;
@@ -193,7 +194,9 @@ Beaucoup de règles sont vérifiées deux fois : par le code, et par la base Pos
 - **Un seul second facteur actif par compte**, un secret chiffré de la bonne taille, un code de secours rattaché à son second facteur (migration 0013).
 - **Un seul établissement validé par numéro d'autorisation**, et une seule MUNASEB validée (migration 0012).
 
-**Limite connue** : ces protections tiennent contre les erreurs, pas contre un administrateur de la base. En production, le serveur devra donc se connecter avec un compte PostgreSQL sans droits d'administration.
+**Le serveur n'a pas les droits pour défaire ces protections** (migration 0026, 2026-10-22). Il se connecte avec un rôle limité, `laaficare_serveur` : ni administrateur de la base, ni propriétaire des tables. Il ne peut donc ni désactiver un trigger, ni modifier ou effacer une trace, ni créer ou changer une table, ni écrire le journal des migrations. Les outils de l'équipe ont leur propre rôle, `laaficare_outils`, **seul autorisé à ouvrir la fenêtre de réenrôlement** d'un administrateur ; le serveur peut seulement la refermer, par une fonction prévue pour cela. Les migrations sont appliquées à part (`cargo run --bin migrer`), avec le rôle propriétaire. Un test vérifie ces refus et fait tourner un parcours complet du serveur avec son seul rôle ([`tests/droits_des_roles.rs`](../backend/tests/droits_des_roles.rs)).
+
+**Limite connue** : le rôle propriétaire, lui, peut tout faire. Il ne doit servir qu'aux migrations ; en production, son mot de passe reste sur le poste qui les applique, jamais sur le serveur.
 
 **Les migrations elles-mêmes sont protégées** : un test refuse tout caractère invisible ou trompeur (espace insécable, tiret qui ressemble au tiret simple) dans les fichiers de migration, et Git y impose des fins de ligne identiques sur toutes les machines. Sinon, une migration pourrait changer à l'insu de tous, et le serveur refuserait de démarrer en production.
 Fichiers : [`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs), [`.gitattributes`](../.gitattributes).
@@ -222,7 +225,7 @@ La clé de chiffrement du second facteur doit être **sauvegardée à part** en 
 - une **liste de mots de passe interdits** (les plus courants ou déjà divulgués), exigée par NIST ;
 - une **limite du nombre de demandes par adresse IP** sur les connexions et les réinitialisations ;
 - le choix du **stockage du jeton de renouvellement dans un navigateur** (applications web) ;
-- un compte PostgreSQL sans droits d'administration, le chiffrement du disque de la base, un antivirus et un nettoyage des fichiers déposés ;
+- le chiffrement du disque de la base, un antivirus et un nettoyage des fichiers déposés ;
 - un fournisseur de SMS réel ;
 - la vérification des requêtes SQL dès la compilation.
 

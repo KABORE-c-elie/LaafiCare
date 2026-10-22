@@ -138,6 +138,13 @@ impl Operateur {
     pub fn compte_id(&self) -> Uuid {
         self.compte_id
     }
+
+    /// Pour les tests en base des autres modules (`intervention_compte.rs`)
+    /// : jamais compilé dans le programme.
+    #[cfg(test)]
+    pub(crate) fn pour_test(compte_id: Uuid) -> Operateur {
+        Operateur { compte_id }
+    }
 }
 
 // ---------------------------------------------------------------------

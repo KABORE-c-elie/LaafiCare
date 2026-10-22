@@ -53,9 +53,146 @@ pub async fn creer(
     .await
 }
 
+// ---------------------------------------------------------------------
+// Lecture par le patient (étape 6, décisions E1, E2 et E6 du 2026-10-21)
+// ---------------------------------------------------------------------
+//
+// Le destinataire est l'identité ; le jeton porte le compte patient. Chaque
+// requête passe donc du compte à son identité, dans la requête elle-même :
+// une notification d'une autre personne est introuvable, exactement comme
+// une notification inexistante (OWASP API Security Top 10 2023, API1).
+
+/// Une notification telle que l'application l'affiche.
+#[derive(Debug, serde::Serialize, sqlx::FromRow)]
+pub struct NotificationPatient {
+    pub id: Uuid,
+    pub titre: String,
+    pub message: String,
+    pub lu: bool,
+    pub date_creation: chrono::DateTime<chrono::Utc>,
+    /// Demande concernée, pour ouvrir son détail.
+    pub demande_id: Option<Uuid>,
+}
+
+/// Page de notifications, les plus récentes d'abord (curseur `avant` sur
+/// l'identifiant `uuidv7`), et le nombre de notifications non lues pour le
+/// badge de l'application.
+pub async fn lister_pour_patient(
+    pool: &PgPool,
+    compte_id: Uuid,
+    avant: Option<Uuid>,
+    limite: i64,
+) -> Result<(Vec<NotificationPatient>, i64), sqlx::Error> {
+    let notifications = sqlx::query_as(
+        "SELECT n.id, n.titre, n.message, n.lu, n.date_creation, n.demande_remboursement_id AS demande_id \
+         FROM notification n JOIN compte c ON c.utilisateur_id = n.utilisateur_id \
+         WHERE c.id = $1 AND c.type_compte = 'patient' AND ($2::uuid IS NULL OR n.id < $2) \
+         ORDER BY n.id DESC LIMIT $3",
+    )
+    .bind(compte_id)
+    .bind(avant)
+    .bind(limite)
+    .fetch_all(pool)
+    .await?;
+    let non_lues: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM notification n JOIN compte c ON c.utilisateur_id = n.utilisateur_id \
+         WHERE c.id = $1 AND c.type_compte = 'patient' AND NOT n.lu",
+    )
+    .bind(compte_id)
+    .fetch_one(pool)
+    .await?;
+    Ok((notifications, non_lues))
+}
+
+/// Marque une notification comme lue. Faux si elle n'existe pas ou
+/// appartient à une autre personne (404). Une notification déjà lue reste
+/// trouvée : rejouer la requête n'a pas d'effet (réseau instable, E6).
+pub async fn marquer_lue(pool: &PgPool, compte_id: Uuid, notification_id: Uuid) -> Result<bool, sqlx::Error> {
+    let trouvee: Option<Uuid> = sqlx::query_scalar(
+        "UPDATE notification n SET lu = true FROM compte c \
+         WHERE n.id = $2 AND c.id = $1 AND c.type_compte = 'patient' AND c.utilisateur_id = n.utilisateur_id \
+         RETURNING n.id",
+    )
+    .bind(compte_id)
+    .bind(notification_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(trouvee.is_some())
+}
+
+/// Marque toutes les notifications de la personne comme lues.
+pub async fn marquer_toutes_lues(pool: &PgPool, compte_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE notification n SET lu = true FROM compte c \
+         WHERE c.id = $1 AND c.type_compte = 'patient' AND c.utilisateur_id = n.utilisateur_id AND NOT n.lu",
+    )
+    .bind(compte_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn compte_patient(pool: &PgPool, telephone: &str) -> (Uuid, Uuid) {
+        let u: Uuid = sqlx::query_scalar(
+            "INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('OUEDRAOGO', 'Awa', $1) RETURNING id",
+        )
+        .bind(telephone)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let c: Uuid = sqlx::query_scalar(
+            "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'patient', 'x') RETURNING id",
+        )
+        .bind(u)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        (c, u)
+    }
+
+    /// E2, E6 : liste paginée, non lues, marquer une ou toutes ; une
+    /// notification d'une autre personne est introuvable.
+    #[sqlx::test]
+    #[ignore]
+    async fn lecture_par_le_patient(pool: PgPool) {
+        let (a, ua) = compte_patient(&pool, "+22670020031").await;
+        let (b, ub) = compte_patient(&pool, "+22670020032").await;
+        let mut ids = Vec::new();
+        for i in 0..3 {
+            ids.push(
+                creer(&pool, ua, TypeNotification::RemboursementStatut, "Remboursement MUNASEB", &format!("Message {i}"), None)
+                    .await
+                    .unwrap(),
+            );
+        }
+        let de_b = creer(&pool, ub, TypeNotification::RemboursementStatut, "Remboursement MUNASEB", "Message B", None)
+            .await
+            .unwrap();
+
+        let (page1, non_lues) = lister_pour_patient(&pool, a, None, 2).await.unwrap();
+        assert_eq!(non_lues, 3);
+        assert_eq!(page1.iter().map(|n| n.id).collect::<Vec<_>>(), [ids[2], ids[1]]);
+        let (page2, _) = lister_pour_patient(&pool, a, Some(ids[1]), 2).await.unwrap();
+        assert_eq!(page2.iter().map(|n| n.id).collect::<Vec<_>>(), [ids[0]]);
+
+        // Celle de B n'existe pas pour A ; rien n'est modifié.
+        assert!(!marquer_lue(&pool, a, de_b).await.unwrap());
+        assert!(!marquer_lue(&pool, a, Uuid::nil()).await.unwrap());
+        assert_eq!(lister_pour_patient(&pool, b, None, 50).await.unwrap().1, 1);
+
+        // Idempotent.
+        assert!(marquer_lue(&pool, a, ids[0]).await.unwrap());
+        assert!(marquer_lue(&pool, a, ids[0]).await.unwrap());
+        assert_eq!(lister_pour_patient(&pool, a, None, 50).await.unwrap().1, 2);
+
+        marquer_toutes_lues(&pool, a).await.unwrap();
+        assert_eq!(lister_pour_patient(&pool, a, None, 50).await.unwrap().1, 0);
+        assert_eq!(lister_pour_patient(&pool, b, None, 50).await.unwrap().1, 1, "celles de B ne changent pas");
+    }
 
     #[test]
     fn le_type_correspond_a_la_valeur_du_check_sql() {

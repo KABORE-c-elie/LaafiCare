@@ -53,7 +53,7 @@ Réglé par l'option 3, décidée le 2026-10-12 : jetons d'accès de 15 minutes,
 
 ### Fenêtre de réenrôlement d'un administrateur : écriture réservée aux outils locaux
 
-**Noté le 2026-10-15 (étape 3.6.4, migration 0019).** Seul un outil local de l'équipe doit pouvoir ouvrir la fenêtre de 10 minutes pendant laquelle un administrateur sans second facteur en enregistre un nouveau (`compte.reenrolement_autorise_jusqu_au`). Aujourd'hui, c'est garanti **par le code seulement** : le serveur et les outils utilisent le même compte PostgreSQL. **En production**, un compte PostgreSQL séparé pour les outils locaux, **seul autorisé à écrire cette colonne** (droits par colonne de PostgreSQL), garantirait par la base qu'aucune route ne peut ouvrir une fenêtre. À traiter avec le compte PostgreSQL sans droits d'administration (section 3).
+**Fermé le 2026-10-22 (P1, migration 0026).** Le rôle des outils, `laaficare_outils`, est le seul à pouvoir écrire `compte.reenrolement_autorise_jusqu_au` (droits par colonne). Le serveur la referme seulement, par la fonction `vider_fenetre_reenrolement` ; aucune route ne peut ouvrir une fenêtre, et la base le garantit.
 
 ### Prévenir l'administrateur quand son second facteur change
 
@@ -108,11 +108,31 @@ Détail dans `web/docs/decisions.md` (branche `web`) :
 - **Styles en ligne de la CDK d'Angular** : une CSP stricte, qui interdit les styles en ligne, les refuse. L'affichage reste correct, mais la console signale ces blocages ; leur traitement est à décider.
 - **Faille de `vite`** : elle ne touche que le serveur de développement, jamais l'application déployée. En attente d'`@angular/build` 22.2.4.
 
+### À faire dans l'application web (étape 3.12)
+
+- **Écran « Mot de passe oublié ? »** (professionnels et administrateurs) : un champ email, et **toujours le même message**, « Si un compte correspond à cette adresse, un lien vient d'être envoyé. » ; la route dépend de la sorte de compte (`docs/api.md`, section 2.11).
+- **Page `/reinitialiser-mot-de-passe`** : jeton lu après `#`, jamais gardé ; deux champs mot de passe avec la liste des règles à cocher ; envoi par `POST` au clic, jamais par un GET ; en-tête `Referrer-Policy: no-referrer` ; puis retour à l'écran de connexion (aucune session ouverte). La même page sert aux administrateurs.
+
 ### À faire dans les applications web et mobile (étape 3.7)
 
 - **Page `/verifier-email`** (application web) : lecture du jeton après `#`, bouton de confirmation, envoi par `POST`, jamais par un GET ; contrat dans `docs/api.md`, sections 2.7 et 2.8.
 - **Avertissement sous le mot de passe professionnel** du formulaire de création de structure : « Choisissez un mot de passe différent de celui de votre compte patient ». C'est un conseil, pas une obligation : le serveur accepte un mot de passe identique (décision du porteur, 2026-10-21).
 - **Aide sous les champs email** (email de la structure, email professionnel) : « Sans accent ni espace » (adresses en ASCII seulement, décision du porteur, 2026-10-21).
+
+### À faire dans les applications (abandon et désactivation, 2026-10-21)
+
+- **Confirmation avant d'abandonner une demande de structure** (AB4) : l'abandon est définitif ; contrat dans `docs/api.md`, section 2.8.
+- **Confirmation avant de retirer l'accès d'un membre** : contrat dans `docs/api.md`, section 2.12.
+
+### À faire dans l'application mobile (espace patient MUNASEB, étape 6, 2026-10-21)
+
+Contrat dans `docs/api.md`, section 2.13.
+- **Écran « Mes droits »** selon `etat`, avec les textes conseillés. En carence, « Couverture à partir du JJ/MM/AAAA », jamais « expiré ». Le solde est présenté comme indicatif.
+- **Écrans « Mes demandes » et « Détail »** : le motif de rejet n'apparaît que dans le détail ; la « part MUNASEB demandée » est distincte du « montant remboursé » ; `plafond_atteint` explique l'écart.
+- **Couleurs** : une demande rejetée, un contrat expiré ou suspendu ne s'affichent ni en rouge ni en orange (réservés aux alertes de santé, CLAUDE.md §6) ; couleur neutre, icône et texte.
+- **Notifications** : badge avec `non_lues` ; ouvrir une notification la marque comme lue, puis ouvre la demande liée (`demande_id`). Sans push, les notifications sont rechargées à l'ouverture de l'application et quand on tire l'écran vers le bas.
+- **Hors connexion (règle du porteur, 2026-10-21)** : si l'application garde les droits et les demandes pour les afficher hors connexion, **ces données sont chiffrées sur le téléphone**, comme les rappels (base locale chiffrée, clé dans `flutter_secure_storage`) ; sinon, **rien n'est gardé**. L'écran affiche alors « mis à jour le … ».
+- **Jeton** : renouvelé avant l'appel quand il expire dans moins d'une minute, comme ailleurs.
 
 ---
 
@@ -155,7 +175,7 @@ En production, le serveur n'accepte que des connexions chiffrées (HTTPS) : jeto
 
 ### Infrastructure
 
-- Rôle PostgreSQL sans droits d'administration pour le serveur : sinon, les protections des historiques peuvent être désactivées.
+- Rôle PostgreSQL sans droits d'administration pour le serveur : **fait le 2026-10-22** (P1, migration 0026). Reste pour la production : créer chez l'hébergeur un rôle propriétaire sans droits de superuser pour appliquer les migrations, lancer `sql/roles.sql`, et ne garder sur le serveur que `DATABASE_URL_SERVEUR` (et `DATABASE_URL_OUTILS` si les outils y tournent). **Le rôle propriétaire de production ne doit pas être superuser**, et c'est lui qui doit appliquer les migrations : la fonction `vider_fenetre_reenrolement` (migration 0026) est `SECURITY DEFINER`, elle s'exécute avec les droits de son propriétaire (doc PostgreSQL 18, CREATE FUNCTION). Créée par un superuser, elle tournerait avec tous les droits ; créée par le rôle propriétaire sans droits d'administration, elle ne peut que ce que ce rôle peut (en développement, l'utilisateur `laaficare` de Docker est superuser : écart accepté par le porteur le 2026-10-22).
 - Chiffrement du disque de la base.
 - Fournisseurs réels : SMS (codes, invitations) et email (réinitialisation, vérification de l'email). Crate et fournisseur à présenter.
 - Fichiers déposés par les structures : réécriture des images, antivirus, désactivation du contenu actif des PDF (OWASP).
@@ -167,12 +187,18 @@ En production, le serveur n'accepte que des connexions chiffrées (HTTPS) : jeto
 - **règles de suspension d'un contrat MUNASEB** : à demander à la MUNASEB (étape 5) ;
 - **valeurs des types d'actes manquants** : dentaire et prothèses, accouchement et consultations prénatales, chirurgie, frais funéraires, radiologie (étape 7, mémoire MUNASEB).
 
+**Outil local de l'équipe pour un compte compromis** (DS10, J11) : **fait le 2026-10-22** (P2, outil `intervenir_compte`, migration 0027) : retrait d'une affectation, blocage et réactivation d'un compte, avec trace.
+
+**Outil « désigner un nouveau responsable »** (noté le 2026-10-22, P2, à faire avant le pilote) : l'équipe peut retirer le dernier responsable d'une structure (compte compromis). La structure reste validée, mais plus personne ne peut y inviter. Il faut un outil de l'équipe pour désigner un nouveau responsable (identité vérifiée, trace), qui se substitue alors à l'invitation.
+
+**Limite connue : un patient sans email n'est pas prévenu** (noté le 2026-10-22, P2, IC5) quand l'équipe bloque ou réactive son compte : les alertes partent par email seulement, et le SMS reste réservé au code de connexion (OTP).
+
 ### Éléments à découper en étapes
 
 **Noté le 2026-10-15.** La mise en production n'est pas encore découpée en étapes, comme le sont celles du backoffice (CLAUDE.md, section 12). Voici les éléments déjà connus, repris de ce document, à découper plus tard en étapes ordonnées, chacune présentée et validée avant d'être faite :
 
 - **Cadre légal** : formalité auprès de la CIL (déclaration ou autorisation), hébergement des données de santé dans le pays, aucun transfert vers l'étranger sans autorisation (section 3, « Cadre légal »).
-- **Comptes PostgreSQL** : un compte sans droits d'administration pour le serveur ; un compte séparé pour les outils locaux, seul autorisé à écrire la fenêtre de réenrôlement (section 2).
+- **Comptes PostgreSQL** : faits le 2026-10-22 (P1) ; reste leur mise en place chez l'hébergeur (section 3, « Infrastructure »).
 - **HTTPS** obligatoire.
 - **Sauvegardes** chiffrées, dans le pays, avec essais de restauration ; sauvegarde à part de la clé `TOTP_CLE_CHIFFREMENT`.
 - **Chiffrement du disque** de la base.
@@ -215,7 +241,9 @@ Un soignant a besoin du NIP pour ouvrir le dossier. Le patient peut être trop m
 - **Position GPS d'une structure** : contrôlée dans le rectangle donné par l'Institut géographique du Burkina (rapport d'août 2014 aux Nations unies, UN-GGIM : 8° à 16° de latitude nord, 6° ouest à 3° est). Ce rectangle déborde sur les pays voisins ; un contrôle par le contour du territoire demanderait une source officielle de ce contour.
 - **Adresses email en ASCII seulement** (décision du porteur, 2026-10-21) : les domaines internationaux (`exemplé.bf`, `例え.jp`) et les parties locales accentuées sont refusés, par le code (`adresse_email.rs`) et par la base (migration 0022). À revoir si un utilisateur en a besoin : il faudra alors une migration, et une règle de comparaison des majuscules qui ne dépende pas des réglages de langue de la base (OWASP : convertir les domaines internationaux en punycode pour les comparer).
 - **Validation d'une seconde MUNASEB** : fait à l'étape 3.8 réduite (2026-10-21), 409 `munaseb_deja_validee`, contrôlé avant l'écriture, puis l'erreur de l'index `structure_une_seule_munaseb_validee` traduite en ce même code.
+- **Impasse : mot de passe oublié sans email vérifié** (noté le 2026-10-21, étape 3.12, R12). Un lien de réinitialisation ne part que vers un email vérifié (NIST SP 800-63B rév. 4, §4.2 : une adresse de récupération « SHALL be verified »). Un professionnel qui a oublié son mot de passe **et** n'a jamais vérifié son email ne peut plus rien faire : le renvoi du lien de vérification demande lui aussi le mot de passe. **Outil de l'équipe à prévoir** : vérification de l'identité (CNIB), puis, au choix, nouveau lien de vérification envoyé sans mot de passe, ou changement d'email (l'outil « changer l'email » de la section 2), avec une trace.
 - **Corriger et soumettre à nouveau une demande refusée** (retour en brouillon, CLAUDE.md §14) : hors de la 3.8 réduite (V10). En attendant, le responsable abandonne sa demande et en crée une nouvelle.
+- **Un agent qui quitte lui-même une structure** (DS4, 2026-10-21) : hors du MVP. Aujourd'hui, seul un responsable retire l'accès d'un agent ; un responsable peut retirer le sien s'il en reste un autre.
 - **Prévenir l'invitant** quand une invitation est acceptée ou refusée (I17, 2026-10-21) : rien pour l'instant, il le voit dans sa liste.
 - **Longueur du SMS d'invitation** : réglé le 2026-10-21 (options a et c du porteur). Le texte fixe est entièrement dans l'alphabet GSM 7 bits (3GPP TS 23.038), et le nom d'une structure est limité à 100 caractères (migration 0023). Avec un nom en GSM 7 bits, le SMS tient en 2 parties au plus (153 caractères par partie, TS 23.040 §9.2.3.24.1). **Reste, accepté** : un nom qui contient un caractère hors de cet alphabet (`ê`, `ç`, « », etc.) fait partir tout le SMS en UCS-2 (70 caractères seul, 67 par partie), donc en plus de parties.
 - **Avertissement des numéros d'autorisation en double** dans le détail administrateur (§14) : à faire avec les pièces justificatives (après le pilote, sauf pour la MUNASEB, qui n'en a pas).
@@ -227,9 +255,40 @@ Un soignant a besoin du NIP pour ouvrir le dossier. Le patient peut être trop m
 
 ### MUNASEB
 
-- Suspension d'un contrat : à concevoir.
+- Suspension d'un contrat : à concevoir (étape 5, après les réponses de la MUNASEB ; l'étape 6 passe avant, décision du porteur du 2026-10-21).
+- **Plafond en base plutôt qu'en constante** (`PLAFOND_ANNUEL_FCFA`, noté le 2026-10-21) : à décider à l'étape 5, avec la question à la MUNASEB sur un plafond qui change.
+- **Durée de conservation des notifications** (noté le 2026-10-21) : aujourd'hui, elles ne s'effacent jamais. À décider avec la purge de l'étape 7.
 - Types d'actes sans valeur dans les sources : dentaire et prothèses, accouchement et consultations prénatales, chirurgie, frais funéraires, radiologie.
 - Partenaires de la MUNASEB et structures : à rapprocher (un partenaire deviendra un lien entre la MUNASEB et une structure).
+- **Règles relevées sur des documents MUNASEB de 2024 (étape 5)** — source : « documents MUNASEB 2024 transmis par le porteur, 2026-10-22 » (une carte de membre et un bon de prise en charge vierge ; aucune donnée personnelle reprise ici). Plus fiables que les sources en ligne (mémoire de 2008, presse), mais à confirmer par la MUNASEB avant de changer le modèle :
+  - **cotisation** payée par l'étudiant en 2024 : 5 000 FCFA, plus 100 FCFA de fiche ;
+  - **numéro de carte** au format numéro/année (ex. `0552/2024`), repris comme « N° adhésion » sur le bon ; la carte indique aussi l'**antenne** (ex. Bobo), l'université, l'UFR **avec le niveau**, le matricule et le téléphone ;
+  - **date d'effet** = date d'adhésion + 1 mois ; **validité** = date d'adhésion + 1 an, et non date d'effet + 1 an : **couverture réelle de 11 mois**. Notre modèle couvre 12 mois à partir de la date d'effet (`calculer_periode`) : **écart** ;
+  - **trois circuits** : (1) dépôt pharmaceutique de la MUNASEB, sur ordonnance, l'étudiant paie 20 % ; (2) bon de prise en charge dans les structures conventionnées (SCHIPHRA, HOSCO, Ex-CMA du 30, CHU-YO, OST), l'étudiant paie 20 % ; (3) paiement direct, puis remboursement (hors périmètre aujourd'hui) ;
+  - **bon de prise en charge numéroté** : bénéficiaire (adhérent : nom, prénoms, N° adhésion, UFR, année) et **malade** (nom, prénoms, **lien de parenté**) ; date de la maladie ou de l'accident ; actes remplis par le praticien (date, nature « Cs » consultation ou « EX » examen, coût, ordonnance oui ou non, signature et cachet) ; récapitulatif : consultation et examen **80 % MUNASEB / 20 %** bénéficiaire, hospitalisation **100 % / 0 %**, autres, déductions, total net. Le lien de parenté laisse penser que des **ayants droit** sont couverts : notre modèle n'en a pas ;
+  - **forfaits de remboursement** : appareillage 10 000, prothèses 10 000, verres correcteurs et montures 15 000, consultation prénatale 15 000, accouchement normal 10 000, césarienne 25 000, chirurgie 50 000, hospitalisation 50 000, rééducation 15 000, scanner 15 000 FCFA ;
+  - **plafond** de 100 000 FCFA par période : **absent des deux documents** (il ne vient que du mémoire MUNASEB).
+  - **Décision provisoire du porteur (2026-10-22), à confirmer par la MUNASEB** : hospitalisation à **100 %** comme sur le bon, **dans la limite de 50 000 FCFA par hospitalisation** (le forfait du verso de la carte lu comme un plafond).
+  - **Observation (2026-10-22)** : le taux semble dépendre **du circuit** autant que du type d'acte. Consultation gratuite au service de santé de la MUNASEB (selon son offre de service), 80 % avec un bon chez un partenaire ; hospitalisation à 100 % avec un bon, forfait en paiement direct. Aujourd'hui, `tarif_acte_munaseb` n'a qu'une ligne par type d'acte : un taux par type d'acte **et par circuit** est à concevoir à l'étape 5.
+  - **Réponses du porteur d'après son expérience d'adhérent (2026-10-22), toutes à confirmer par la MUNASEB, à appliquer à l'étape 5** :
+    1. **Fin de couverture** : le jour anniversaire de l'adhésion, **compris** (adhésion le 09/04/2024 : effet le 09/05/2024, fin le 09/04/2025). Couverture réelle de 11 mois.
+    2. **Renouvellement** : payé avant l'échéance, continuité sans nouvelle carence ; payé après l'échéance mais dans un **délai de grâce de 10 jours** (valeur modifiable, en base), pas de nouvelle carence (ce que devient la couverture pendant l'interruption reste à trancher, voir la proposition de l'étape 5) ; au-delà, nouvelle carence d'un mois. **Le numéro de carte change chaque année** : il doit être porté par la période, pas par le contrat.
+    3. **Suspension** : inconnue, à demander à la MUNASEB.
+    4. **Plafond** : par adhérent seul, ou partagé avec les ayants droit : à trancher (voir la proposition de l'étape 5).
+    5. **Ayants droit** : inconnus, à demander à la MUNASEB.
+    6. **Antenne** (lieu d'inscription) : information seulement, **aucun effet** sur la prise en charge ; champ facultatif.
+    7. **Paiement de la cotisation** : en espèces aujourd'hui ; LaafiCare doit aussi accepter le mobile money. **Pour le MVP**, l'agent enregistre le mode de paiement (`especes` ou `mobile_money`), la date, le montant et, pour le mobile money, la référence de la transaction. **Aucune intégration d'API d'opérateur avant le pilote.**
+    - **Montants de la cotisation et de la fiche** (5 000 et 100 FCFA en 2024) : **en base, modifiables**, jamais en constante.
+  - **Après le pilote** : intégration des API Orange Money et Moov Money pour le paiement de la cotisation.
+  - **Modèle retenu pour l'étape 5 (accord du porteur, 2026-10-22 ; rien à coder avant les réponses de la MUNASEB)** :
+    - **Tarifs par type d'acte et par circuit** : une ligne de `tarif_acte_munaseb` par couple (type d'acte, circuit), les circuits étant `structure_munaseb` (dépôt et service de santé de la MUNASEB), `partenaire_bon` (structure conventionnée, avec un bon) et `paiement_direct`. Chaque ligne porte un **taux** (0 à 100) et un **plafond par acte** facultatif ; remboursement = min(coût × taux, arrondi ; plafond). Un forfait devient « 100 % dans la limite de N » (lunetterie : 15 000 ; hospitalisation avec un bon : 50 000). Aucune ligne pour un couple : acte non couvert dans ce circuit. La demande garde le circuit, le taux et le plafond appliqués, figés à sa création ; chaque modification de tarif est tracée (auteur, date, ancienne et nouvelle valeur). Le circuit d'un acte se déduit du partenaire. Une réponse de la MUNASEB ne demande alors qu'une mise à jour de valeurs.
+    - **Paramètres MUNASEB en base**, modifiables et historisés : cotisation (5 000), fiche (100), délai de grâce (10 jours), plafond par période (100 000), durée de la carence (1 mois). La constante `PLAFOND_ANNUEL_FCFA` disparaît.
+    - **Périodes** : date d'adhésion (paiement), date d'effet, date de fin (jour anniversaire de l'adhésion compris) ; **numéro de carte porté par la période** (unique), plus par le contrat ; antenne facultative ; niveau d'études (affiché avec l'UFR sur la carte, il change chaque année).
+    - **Renouvellement dans le délai de grâce : option (A)** : pas de nouvelle carence, la couverture reprend **le jour du paiement**, les jours d'interruption **ne sont pas couverts**, et la fin reste à la date anniversaire suivante. Même raison que la règle sans effet rétroactif de CLAUDE.md §12 : sinon, un adhérent paierait le jour où il tombe malade.
+    - **Plafond : option (a)** : 100 000 FCFA par période et par adhérent, jusqu'à la réponse de la MUNASEB sur les ayants droit.
+    - **Paiement de la cotisation** : table `paiement_cotisation_munaseb` (période, mode `especes` ou `mobile_money`, montants de la cotisation et de la fiche, référence de transaction obligatoire pour le mobile money, affectation de l'agent qui enregistre). **Date du paiement** : la date qui sert au calcul (carence, délai de grâce) reste **la date du jour fixée par le système** (§12) ; la date déclarée par l'agent (par exemple celle de la transaction mobile money) est gardée **pour information seulement**, et ne peut jamais être postérieure à aujourd'hui.
+    - **En attente de la MUNASEB** : suspension, ayants droit (malade et lien de parenté sur la demande), forfaits du paiement direct.
+  Écarts avec notre modèle et questions à poser : voir la comparaison du 2026-10-22 (consultation à 100 % chez nous, 80 % sur le bon ; hospitalisation à 100 % sur le bon mais forfait de 50 000 dans la liste ; types d'actes absents ; un bon regroupe plusieurs actes, une demande n'en porte qu'un).
 - **Rattacher les contrats et les demandes à une structure, avant d'admettre un second assureur** (noté le 2026-10-18, étape 3.9). Aujourd'hui, un contrat et une demande de remboursement ne disent pas à quelle mutuelle ils appartiennent : MUNASEB est câblée en dur. Un agent ne touche que les demandes de sa mutuelle parce qu'il doit exercer dans une structure MUNASEB validée et que la base n'en admet qu'une (index `structure_une_seule_munaseb_validee`, migration 0012). Avec le futur module « Assurance » générique, plusieurs assureurs existeront : il faudra alors rattacher chaque contrat (et donc ses demandes) à la structure de son assureur, et ne permettre une transition qu'à un agent de cette structure.
 
 ---
@@ -238,7 +297,7 @@ Un soignant a besoin du NIP pour ouvrir le dossier. Le patient peut être trop m
 
 - Requêtes SQLx vérifiées à la compilation : après la stabilisation du module MUNASEB.
 - Synchronisation de l'application mobile hors ligne avec le serveur : protocole à concevoir.
-- Calcul du solde d'une période MUNASEB, présent en double (demandes et contrat) : à regrouper.
+- Calcul du solde d'une période MUNASEB : regroupé le 2026-10-21 (étape 6), une seule fonction `solde_periode` pour la validation, l'agent et le patient.
 
 ### Après le pilote (décision du porteur, 2026-10-21)
 
@@ -256,7 +315,8 @@ Hors du MVP MUNASEB (CLAUDE.md §12, « Périmètre du MVP MUNASEB ») :
 - **technique** : requêtes SQLx vérifiées à la compilation (ci-dessus) ;
 - **MUNASEB** :
   - rapprochement des partenaires avec les structures (section 4, « MUNASEB ») ;
-  - paiement direct par le mutualiste.
+  - paiement direct par le mutualiste ;
+  - intégration des API Orange Money et Moov Money pour la cotisation (décision du porteur, 2026-10-22).
 
 ---
 

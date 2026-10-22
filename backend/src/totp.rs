@@ -294,14 +294,15 @@ async fn confirmer_activation_a(
     // Ordre des verrous : le compte d'abord, puis la demande de TOTP, comme
     // pour les sessions (le compte avant le reste) ; l'outil
     // `desactiver_totp` (étape 3.6.5) suivra le même ordre.
+    // Par la fonction `vider_fenetre_reenrolement` (migration 0026) : le
+    // rôle du serveur ne peut pas écrire cette colonne, pour qu'aucune route
+    // ne puisse jamais OUVRIR une fenêtre (P1).
     if autorisation == Autorisation::ReenrolementAdministrateur {
-        let ouverte: Option<Uuid> = sqlx::query_scalar(
-            "UPDATE compte SET reenrolement_autorise_jusqu_au = NULL \
-             WHERE id = $1 AND reenrolement_autorise_jusqu_au > now() RETURNING id",
-        )
-        .bind(compte_id)
-        .fetch_optional(&mut *transaction)
-        .await?;
+        // Une ligne toujours, NULL quand la fenêtre était fermée.
+        let ouverte: Option<Uuid> = sqlx::query_scalar("SELECT vider_fenetre_reenrolement($1)")
+            .bind(compte_id)
+            .fetch_one(&mut *transaction)
+            .await?;
         if ouverte.is_none() {
             return Err(ErreurTotp::Refuse);
         }

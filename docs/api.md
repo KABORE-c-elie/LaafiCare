@@ -199,6 +199,7 @@ Résumé :
 | POST | `/api/professionnels/email/renvoyer` | tout le monde, avec email et mot de passe professionnels | fonctionne (section 2.7) |
 | POST | `/api/structures` | jeton `laaficare:patient` | fonctionne (section 2.8) ; type `munaseb` seulement |
 | POST | `/api/structures/{id}/soumettre` | jeton `laaficare:patient` du créateur | fonctionne (section 2.8) |
+| POST | `/api/structures/{id}/abandonner` | jeton `laaficare:patient` du créateur | fonctionne (section 2.8) |
 | GET | `/api/structures/mes-demandes` | jeton `laaficare:patient` | fonctionne (section 2.8) |
 | GET | `/api/administrateurs/structures` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
 | GET | `/api/administrateurs/structures/{id}` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
@@ -206,9 +207,20 @@ Résumé :
 | POST | `/api/administrateurs/structures/{id}/refuser` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
 | POST, GET | `/api/professionnels/invitations` | jeton en exercice, responsable | fonctionne (section 2.10) |
 | POST | `/api/professionnels/invitations/{id}/annuler` | jeton en exercice, responsable | fonctionne (section 2.10) |
+| GET | `/api/professionnels/membres` | jeton en exercice, responsable | fonctionne (section 2.12) |
+| POST | `/api/professionnels/membres/{id}/desactiver` | jeton en exercice, responsable | fonctionne (section 2.12) |
 | GET | `/api/patients/invitations` | jeton `laaficare:patient` | fonctionne (section 2.10) |
+| GET | `/api/patients/munaseb/droits` | jeton `laaficare:patient` | fonctionne (section 2.13) |
+| GET | `/api/patients/munaseb/demandes` | jeton `laaficare:patient` | fonctionne (section 2.13) |
+| GET | `/api/patients/munaseb/demandes/{id}` | jeton `laaficare:patient` | fonctionne (section 2.13) |
+| GET | `/api/patients/notifications` | jeton `laaficare:patient` | fonctionne (section 2.13) |
+| POST | `/api/patients/notifications/{id}/lue` | jeton `laaficare:patient` | fonctionne (section 2.13) |
+| POST | `/api/patients/notifications/lues` | jeton `laaficare:patient` | fonctionne (section 2.13) |
 | POST | `/api/patients/invitations/{id}/accepter` | jeton `laaficare:patient` | fonctionne (section 2.10) |
 | POST | `/api/patients/invitations/{id}/refuser` | jeton `laaficare:patient` | fonctionne (section 2.10) |
+| POST | `/api/professionnels/mot-de-passe/oubli` | tout le monde | fonctionne (section 2.11) |
+| POST | `/api/administrateurs/mot-de-passe/oubli` | tout le monde | fonctionne (section 2.11) |
+| POST | `/api/mot-de-passe/reinitialiser` | tout le monde, avec le jeton du lien | fonctionne (section 2.11) |
 | POST | `/api/administrateurs/connexion` | tout le monde | fonctionne (section 2.5) ; testable après l'outil du premier administrateur |
 | POST | `/api/administrateurs/connexion/second-facteur` | jeton intermédiaire `laaficare:second_facteur_administrateur` | fonctionne (section 2.5) |
 | POST | `/api/administrateurs/reenrolement/commencer` | jeton `laaficare:reenrolement_administrateur` | fonctionne (section 2.5) |
@@ -272,6 +284,7 @@ Envoie un code à 6 chiffres par SMS. Sert à l'inscription et au mot de passe o
 
 - Le code est valable **5 minutes**. Une nouvelle demande remplace le code précédent.
 - La réponse est la même que le numéro ait un compte ou non, limites comprises.
+- **Compte patient bloqué par l'équipe LaafiCare** (outil `intervenir_compte`) : aucun code n'est créé et **aucun SMS ne part**, mais la réponse est exactement la même (204, limites comprises) : rien ne révèle le blocage.
 - En développement, aucun SMS ne part : le code s'affiche dans les journaux du serveur.
 
 #### 2.2.2 `POST /api/patients/inscription`
@@ -891,6 +904,20 @@ Cycle : `brouillon` (création) → `en_attente` (soumission) → `validee` ou `
 | 409 | `transition_invalide` | la structure n'est pas en brouillon ; `statut_actuel` dans la réponse |
 | 500 | `erreur_interne` | panne |
 
+#### `POST /api/structures/{id}/abandonner`
+
+- **Appelant** : jeton patient du **créateur**. Pas de corps. **L'application demande une confirmation avant l'appel** : l'abandon est définitif.
+- Possible depuis `brouillon` ou `refusee` seulement. Une demande `en_attente` ne s'abandonne pas : l'équipe LaafiCare l'examine peut-être déjà.
+- **Effets** : statut `abandonnee` (état final) ; rien n'est effacé ; l'affectation `responsable` est désactivée ; la personne peut créer une nouvelle demande, avec son compte professionnel existant.
+- **Réponses** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 204 | — | demande abandonnée |
+| 404 | `structure_inconnue` | structure inexistante, ou créée par une autre personne (jamais distingués) |
+| 409 | `transition_invalide` | la structure n'est ni en brouillon ni refusée ; `statut_actuel` dans la réponse |
+| 500 | `erreur_interne` | panne |
+
 #### `GET /api/structures/mes-demandes`
 
 - **Appelant** : jeton patient. **Réponse 200** :
@@ -963,7 +990,7 @@ Réservé à l'équipe LaafiCare : jeton d'accès `laaficare:administrateur` (se
   - 204 : demande refusée. Si l'email du responsable est vérifié, il reçoit le même email minimal ; sinon, aucun email ne part.
   - 403, 404, 409 `transition_invalide` : comme pour la validation.
   - 422 `motif_vide`, `motif_trop_long`.
-- Après un refus, le responsable abandonne sa demande et en crée une nouvelle. Corriger et soumettre à nouveau la même demande viendra plus tard.
+- Après un refus, le responsable abandonne sa demande (section 2.8) et en crée une nouvelle. Corriger et soumettre à nouveau la même demande viendra plus tard.
 
 ### 2.10 Invitations (MUNASEB pour l'instant)
 
@@ -1034,6 +1061,129 @@ Seules les invitations adressées au **numéro du compte patient** existent pour
 - 409 `invitation_expiree` ;
 - 409 `transition_invalide`.
 
+### 2.11 Mot de passe oublié : professionnels et administrateurs
+
+Les patients gardent la réinitialisation par SMS (section 2.2.4). Pour un compte professionnel ou administrateur, un **lien** est envoyé à l'email du compte.
+
+#### `POST /api/professionnels/mot-de-passe/oubli` et `POST /api/administrateurs/mot-de-passe/oubli`
+
+- **Corps** : `{"email": "…"}`. Une route par sorte de compte : une même personne peut avoir un compte professionnel et un compte administrateur avec le même email.
+- **Réponse** : **toujours 204, tout de suite**, que l'email soit connu, inconnu, non vérifié, d'un compte désactivé, ou mal formé. Le travail se fait ensuite, en tâche de fond. Seul un champ manquant donne 422 `donnees_invalides`.
+- **Un lien ne part que vers un compte actif dont l'email est vérifié.** Un compte verrouillé le reçoit, puisque la réinitialisation lève le verrouillage.
+- **Limites par compte** : une minute au moins entre deux liens ; au plus 3 liens valables en attente. Au-delà, rien ne part, avec la même réponse.
+- **Le lien** : `<URL_APPLICATION_WEB>/reinitialiser-mot-de-passe#jeton=<64 caractères hexadécimaux>`, valable **30 minutes**, **une seule fois**. Une nouvelle demande n'annule pas les liens précédents.
+- L'application affiche toujours le même message : « Si un compte correspond à cette adresse, un lien vient d'être envoyé. »
+
+#### `POST /api/mot-de-passe/reinitialiser`
+
+- **Appelant** : la page `/reinitialiser-mot-de-passe` de l'application web. Elle lit le jeton **après `#`**, sans jamais le garder, et l'envoie **par POST au clic, jamais par un GET**. Elle porte l'en-tête `Referrer-Policy: no-referrer`. La même page sert aux administrateurs.
+- **Corps** : `{"jeton": "…", "nouveau_mot_de_passe": "…"}`.
+- **Réponses** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 204 | — | mot de passe changé ; l'application renvoie à l'écran de connexion |
+| 400 | `lien_invalide` | lien inconnu, déjà utilisé, annulé, expiré, ou email changé depuis l'envoi (jamais distingués) |
+| 422 | `mot_de_passe_non_conforme` | avec `regles_non_respectees` (section 1.5) ; le lien reste valable |
+| 422 | `mot_de_passe_identique_patient` | administrateur seulement : le même mot de passe que son compte patient ; le lien reste valable |
+| 500 | `erreur_interne` | panne |
+
+**Après une réinitialisation réussie** :
+- toutes les sessions sont fermées : les anciens jetons, d'accès et de renouvellement, sont refusés ;
+- le verrouillage est levé ;
+- les autres liens en attente sont annulés ;
+- **le second facteur (TOTP) ne change pas** : il reste exigé à la connexion ;
+- **aucune session n'est ouverte** : la personne se reconnecte ;
+- un email d'alerte « mot de passe modifié » part, avec la date (heure du Burkina Faso) et l'adresse de l'équipe à contacter.
+
+### 2.12 Membres d'une structure et désactivation d'un accès (MUNASEB pour l'instant)
+
+Jeton `laaficare:professionnel_en_exercice` sur une affectation **`responsable`** ; la structure est celle de l'affectation active, jamais un identifiant passé dans l'adresse. Avec une autre affectation : **403 `acces_refuse`**. Les routes `/api/professionnels/affectations` restent réservées aux affectations de la personne connectée.
+
+**`GET /api/professionnels/membres`** : réponse 200 `{"membres": [{"affectation_id", "nom", "prenom", "role", "date_creation"}]}`, les affectations **actives** de la structure, les plus anciennes d'abord. **Ni téléphone ni email.**
+
+**`POST /api/professionnels/membres/{id}/desactiver`** (`id` = `affectation_id` de la liste), sans corps :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 204 | — | accès retiré |
+| 403 | `acces_refuse` | l'affectation active n'est pas `responsable` |
+| 404 | `affectation_inconnue` | inexistante, ou d'une autre structure (jamais distingués) |
+| 409 | `transition_invalide` | déjà désactivée ; `statut_actuel` dans la réponse |
+| 409 | `dernier_responsable` | c'est le dernier responsable actif de la structure |
+| 500 | `erreur_interne` | panne |
+
+- Pour la MUNASEB : rôles `agent_assurance_munaseb` et `responsable`. Un responsable peut retirer **son propre accès** s'il reste un autre responsable actif.
+- **Effets** : l'affectation est désactivée (datée, avec l'auteur), **jamais supprimée** ; les sessions ouvertes **sur cette affectation** sont fermées tout de suite : le jeton d'accès de la personne est refusé (401 `jeton_invalide`), son renouvellement aussi. Son compte, ses autres affectations et ses autres sessions ne changent pas. Pour revenir, la personne reçoit une nouvelle invitation.
+- **Email** à la personne, après l'enregistrement, si son email est vérifié : « Votre accès à une structure LaafiCare a été retiré le JJ/MM/AAAA à HH:MM (heure du Burkina Faso). Si vous pensez que c'est une erreur, contactez le responsable de la structure ou l'équipe LaafiCare à {adresse}. » Un échec d'envoi n'annule rien.
+- L'application demande une confirmation avant l'appel.
+
+### 2.13 Espace patient : droits MUNASEB, demandes, notifications
+
+Jeton `laaficare:patient` seulement. **Le patient est toujours celui du jeton** : aucune route ne prend un NIP ni un identifiant de patient ou de contrat. Une demande ou une notification d'une autre personne répond exactement comme une qui n'existe pas (404). Un compte patient sans dossier patient donne 500 `erreur_interne`, comme `GET /api/patients/moi`.
+
+#### `GET /api/patients/munaseb/droits`
+
+**Toujours 200**, avec un champ `etat`. Les champs sans objet valent `null`. Le patient ne reçoit jamais l'université, l'UFR, le matricule ni la personne à prévenir.
+
+```json
+{
+  "etat": "couvert",
+  "numero_carte": "…",
+  "periode_en_cours": {"debut": "2026-04-15", "fin": "2027-04-14"},
+  "periode_suivante": null,
+  "plafond_fcfa": 100000,
+  "consomme_fcfa": 96000,
+  "solde_fcfa": 4000,
+  "debut_couverture": null,
+  "fin_derniere_periode": null
+}
+```
+
+| `etat` | Champs remplis | Texte conseillé |
+|---|---|---|
+| `aucun_contrat` | aucun | « Vous n'avez pas de contrat MUNASEB. » |
+| `couvert` | `numero_carte`, `periode_en_cours`, `plafond_fcfa`, `consomme_fcfa`, `solde_fcfa` ; `periode_suivante` si un renouvellement est déjà payé | « Couvert jusqu'au JJ/MM/AAAA. Reste : N FCFA. » |
+| `en_carence` | `numero_carte`, `periode_suivante`, `debut_couverture` | « Couverture à partir du JJ/MM/AAAA. » (jamais « expiré ») |
+| `expire` | `numero_carte`, `fin_derniere_periode` | « Votre contrat a pris fin le JJ/MM/AAAA. » |
+| `suspendu` | `numero_carte` | « Votre contrat est suspendu. Contactez la MUNASEB. » |
+
+- Le solde est **indicatif** : c'est celui qu'utilise l'agent, recalculé au moment de chaque validation. Seuls les montants validés et payés le consomment.
+- La date du jour est celle du Burkina Faso.
+
+#### `GET /api/patients/munaseb/demandes?statut=&limite=&avant=`
+
+- Les demandes du patient, **les plus récentes d'abord**. `statut` facultatif : `en_attente`, `en_cours`, `valide`, `rejete`, `paye`. `limite` de 1 à 100 (50 par défaut) ; `avant` = `suivant` de la page précédente. Sans contrat : liste vide.
+- **Réponse 200** : `{"demandes": [{"id", "statut", "type_acte", "date_acte", "partenaire", "montant_acte_fcfa", "montant_demande_fcfa", "montant_rembourse_fcfa", "date_demande", "date_dernier_changement"}], "suivant": "…" | null}`.
+  - `montant_demande_fcfa` : la **part MUNASEB demandée** (taux ou forfait du type d'acte) ;
+  - `montant_rembourse_fcfa` : fixé à la validation, `null` avant ; il peut être plus petit que la part demandée si le plafond est atteint.
+- 400 `parametre_invalide` : limite hors bornes, statut inconnu, curseur qui n'est pas un UUID.
+
+#### `GET /api/patients/munaseb/demandes/{id}`
+
+- **Réponse 200** : les champs de la liste, plus :
+  - `motif_rejet` : rempli pour une demande rejetée. Il n'est **jamais** dans la liste ni dans une notification ;
+  - `periode` : `{"debut", "fin"}`, la période d'adhésion de la demande ;
+  - `plafond_atteint` : `true` quand la demande a été validée pour moins que la part demandée ;
+  - `historique` : `[{"statut", "date"}]`, du plus ancien au plus récent, **sans l'agent**.
+- 404 `demande_inconnue` : demande inexistante ou d'un autre patient. 400 `chemin_invalide`.
+- Jamais renvoyés : le nom ou l'affectation d'un agent, le NIP, la référence de l'acte chez le partenaire.
+
+Libellés conseillés : `en_attente` « Reçue », `en_cours` « En cours de traitement », `valide` « Validée », `rejete` « Rejetée », `paye` « Payée ». **Une demande rejetée, un contrat expiré ou suspendu ne s'affichent ni en rouge ni en orange** (couleurs réservées aux alertes de santé) : couleur neutre, avec une icône et un texte.
+
+#### `GET /api/patients/notifications?limite=&avant=`
+
+- **Réponse 200** : `{"notifications": [{"id", "titre", "message", "lu", "date_creation", "demande_id"}], "non_lues": 3, "suivant": "…" | null}`.
+  - Les plus récentes d'abord ; `limite` de 1 à 100 (50 par défaut) ; `avant` = `suivant`.
+  - `non_lues` : le nombre total de notifications non lues, pour le badge.
+  - `demande_id` : la demande concernée, à ouvrir avec la route de détail.
+- Les textes restent minimaux : ni montant, ni type d'acte, ni motif.
+
+#### `POST /api/patients/notifications/{id}/lue` et `POST /api/patients/notifications/lues`
+
+- Sans corps. **204** : la notification est lue, même si elle l'était déjà (la requête peut être rejouée sans effet). La seconde route marque toutes les notifications de la personne.
+- 404 `notification_inconnue` : notification inexistante ou d'une autre personne.
+
 ---
 
 ## 3. Codes d'erreur : index
@@ -1042,25 +1192,27 @@ Seules les invitations adressées au **numéro du compte patient** existent pour
 |---|---|---|
 | `authentification_requise` | 401 | routes protégées |
 | `jeton_invalide` | 401 | routes protégées |
-| `acces_refuse` | 403 | routes protégées (routes MUNASEB : pas agent MUNASEB, affectation désactivée, établissement suspendu, licence expirée ; invitations : affectation qui n'est pas `responsable`) |
+| `acces_refuse` | 403 | routes protégées (routes MUNASEB : pas agent MUNASEB, affectation désactivée, établissement suspendu, licence expirée ; invitations et membres : affectation qui n'est pas `responsable`) |
 | `affectation_non_exercable` | 403 | activation d'une affectation |
-| `affectation_inconnue` | 404 | activation d'une affectation |
+| `affectation_inconnue` | 404 | activation et désactivation d'une affectation |
+| `dernier_responsable` | 409 | désactivation d'une affectation |
 | `json_invalide`, `donnees_invalides`, `content_type_invalide`, `corps_illisible` | 400, 422, 415 | routes avec corps |
 | `chemin_invalide` | 400 | routes avec `{id}` |
-| `parametre_invalide` | 400 | liste des remboursements, liste des structures (administrateur) |
+| `parametre_invalide` | 400 | listes paginées (remboursements, structures, invitations, demandes et notifications du patient) |
 | `telephone_invalide` | 422 | routes patient, création d'une invitation |
 | `telephone_service_invalide`, `telephone_urgence_invalide` | 422 | création de structure |
 | `code_invalide` | 401 | inscription, réinitialisation, second facteur (professionnel, administrateur), confirmation du réenrôlement |
 | `trop_de_demandes` | 429 | demande de code et renvoi du lien de vérification (avec `Retry-After`), inscription, réinitialisation et création d'une invitation (sans) |
 | `telephone_deja_utilise` | 409 | inscription |
 | `telephone_inconnu` | 404 | réinitialisation |
-| `mot_de_passe_non_conforme` | 422 | inscription, réinitialisation, création de structure |
+| `mot_de_passe_non_conforme` | 422 | inscription, réinitialisation (patient, professionnel, administrateur), création de structure, acceptation d'une invitation |
+| `mot_de_passe_identique_patient` | 422 | réinitialisation du mot de passe d'un administrateur |
 | `identifiants_invalides` | 401 | connexions, début du réenrôlement administrateur, renvoi du lien, création de structure (mot de passe professionnel) |
 | `email_non_verifie` | 403 | connexions professionnelle et administrateur, soumission d'une structure |
-| `lien_invalide` | 400 | vérification de l'email |
+| `lien_invalide` | 400 | vérification de l'email, réinitialisation du mot de passe |
 | `type_non_disponible`, `localisation_hors_burkina`, `nom_trop_long`, `nom_invalide` | 422 | création de structure |
 | `demande_deja_en_cours`, `email_different`, `email_deja_utilise`, `second_facteur_requis` | 409 | création de structure |
-| `structure_inconnue` | 404 | soumission d'une structure, routes administrateur des structures |
+| `structure_inconnue` | 404 | soumission et abandon d'une structure, routes administrateur des structures |
 | `decision_sur_sa_propre_structure` | 403 | validation, refus d'une structure |
 | `email_responsable_non_verifie`, `munaseb_deja_validee`, `autorisation_deja_validee` | 409 | validation d'une structure |
 | `licence_invalide` | 422 | validation d'une structure |
@@ -1071,8 +1223,9 @@ Seules les invitations adressées au **numéro du compte patient** existent pour
 | `montant_invalide`, `nip_invalide`, `partenaire_suspendu`, `non_couvert`, `en_carence` | 422 | simuler-acte |
 | `patient_inconnu`, `partenaire_inconnu` | 404 | simuler-acte |
 | `reference_acte_deja_utilisee` | 409 | simuler-acte |
-| `demande_inconnue` | 404 | détail, transitions |
-| `transition_invalide` | 409 | transitions, soumission, validation et refus d'une structure |
+| `demande_inconnue` | 404 | détail, transitions ; détail d'une demande du patient (inexistante ou d'un autre patient) |
+| `notification_inconnue` | 404 | notification lue (inexistante ou d'une autre personne) |
+| `transition_invalide` | 409 | transitions, soumission, abandon, validation et refus d'une structure, désactivation d'une affectation |
 | `motif_vide`, `motif_trop_long` | 422 | rejet d'une demande de remboursement, refus d'une structure |
 | `erreur_interne` | 500 | toutes |
 
@@ -1099,7 +1252,8 @@ Le module existe déjà côté serveur ; les routes manquent.
 ### 4.3 Structures et pièces justificatives (étapes 3.7 et 3.8)
 
 - ✅ Création, soumission et suivi, **type MUNASEB seulement** : **codés**, section 2.8 ; vérification de l'email, section 2.7.
-- Restent : modification du brouillon, abandon, autres types de structure.
+- ✅ Abandon : **codé**, section 2.8.
+- Restent : modification du brouillon, autres types de structure.
 - Téléversement d'une pièce, **une requête par fichier** (réseau faible) : PDF, JPEG ou PNG, 5 Mo au plus.
 - ✅ Côté administrateur : liste, détail (avertissements MUNASEB), validation (licence), refus (motif) : **codés**, section 2.9.
 - Restent côté administrateur : avertissement des numéros d'autorisation en double, consultation et téléchargement des pièces, suspension et réactivation (après le pilote).
@@ -1115,7 +1269,8 @@ Le module existe déjà côté serveur ; les routes manquent.
 
 ### 4.6 Désactivation d'une affectation et bascule (étape 3.11)
 
-- Désactivation d'une affectation (jamais d'un compte, jamais de suppression).
+- ✅ Désactivation d'une affectation par un responsable, **codée pour la MUNASEB**, section 2.12.
+- Restent : un agent qui quitte lui-même une structure ; les autres rôles (chef de service, major) ; la bascule.
 - Bascule professionnel → patient sans mot de passe ; patient → professionnel avec le mot de passe professionnel.
 
 ### 4.7 Contrat MUNASEB côté agent (étape 5)
@@ -1124,6 +1279,4 @@ Le module existe déjà côté serveur ; les routes manquent.
 
 ### 4.8 Côté patient (étape 6)
 
-- Ses droits MUNASEB (plafond restant, période, carence).
-- Ses demandes de remboursement et leur statut.
-- Ses notifications : liste, marquer comme lue.
+- ✅ **Codé**, section 2.13 : droits MUNASEB, demandes de remboursement, notifications.
