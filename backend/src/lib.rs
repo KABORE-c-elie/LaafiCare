@@ -19,6 +19,7 @@ pub mod decision_structure;
 pub mod demande_remboursement_munaseb;
 pub mod email;
 pub mod espace_patient_munaseb;
+pub mod intervention_compte;
 pub mod invitation;
 pub mod jeton_email;
 pub mod jwt;

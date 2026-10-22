@@ -52,6 +52,11 @@ pub enum Evenement {
     /// responsable (étape 3.11, DS8, texte du porteur du 2026-10-21) : la
     /// personne apprend que son accès est retiré, et à qui s'adresser.
     AccesRetire,
+    /// L'équipe a bloqué le compte (`intervenir_compte`, P2, IC5).
+    CompteBloque,
+    /// L'équipe a réactivé le compte ; la personne choisit un nouveau mot
+    /// de passe (P2, IC5).
+    CompteReactive,
 }
 
 /// Date et heure de l'événement, lues dans la ligne qui l'enregistre (une
@@ -81,6 +86,29 @@ fn requete(evenement: Evenement) -> &'static str {
              WHERE c.id = $1 AND a.desactivee_le IS NOT NULL AND u.email_verifie_le IS NOT NULL \
              GROUP BY u.email"
         }
+        // Date de la dernière intervention de ce type, enregistrée dans la
+        // même transaction que le blocage ou la réactivation. Seulement vers
+        // un email vérifié (IC5) : sinon l'email lu est NULL, et rien ne
+        // part, sans erreur (un patient sans email n'est pas prévenu,
+        // limite notée dans docs/points-ouverts.md).
+        Evenement::CompteBloque => {
+            "SELECT CASE WHEN u.email_verifie_le IS NOT NULL THEN u.email END, \
+                    to_char(i.date_intervention AT TIME ZONE 'Africa/Ouagadougou', 'DD/MM/YYYY \"à\" HH24:MI') \
+             FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
+             JOIN LATERAL (SELECT date_intervention FROM intervention_compte \
+                           WHERE compte_id = c.id AND action = 'blocage_compte' \
+                           ORDER BY date_intervention DESC LIMIT 1) i ON true \
+             WHERE c.id = $1"
+        }
+        Evenement::CompteReactive => {
+            "SELECT CASE WHEN u.email_verifie_le IS NOT NULL THEN u.email END, \
+                    to_char(i.date_intervention AT TIME ZONE 'Africa/Ouagadougou', 'DD/MM/YYYY \"à\" HH24:MI') \
+             FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
+             JOIN LATERAL (SELECT date_intervention FROM intervention_compte \
+                           WHERE compte_id = c.id AND action = 'reactivation_compte' \
+                           ORDER BY date_intervention DESC LIMIT 1) i ON true \
+             WHERE c.id = $1"
+        }
         // Date de l'utilisation du lien, enregistrée dans la même transaction
         // que le nouveau mot de passe.
         Evenement::MotDePasseReinitialise => {
@@ -108,6 +136,23 @@ async fn sorte_de_compte(pool: &PgPool, compte_id: Uuid) -> Result<&'static str,
 /// seulement).
 fn message(evenement: Evenement, quand: &str, contact: &str, sorte: &str) -> (&'static str, String) {
     match evenement {
+        Evenement::CompteBloque => (
+            "LaafiCare : compte bloqué",
+            format!(
+                "Bonjour,\n\n\
+                 Votre compte LaafiCare a été bloqué le {quand} (heure du Burkina Faso) par l'équipe LaafiCare.\n\n\
+                 Si vous n'en êtes pas à l'origine, contactez l'équipe LaafiCare à {contact}."
+            ),
+        ),
+        Evenement::CompteReactive => (
+            "LaafiCare : compte réactivé",
+            format!(
+                "Bonjour,\n\n\
+                 Votre compte LaafiCare a été réactivé le {quand} (heure du Burkina Faso). Choisissez un nouveau mot \
+                 de passe avec « Mot de passe oublié ? ».\n\n\
+                 En cas de doute, contactez l'équipe LaafiCare à {contact}."
+            ),
+        ),
         Evenement::AccesRetire => (
             "LaafiCare : accès retiré",
             format!(
@@ -207,6 +252,8 @@ mod tests {
             Evenement::SecondFacteurDesactive,
             Evenement::MotDePasseReinitialise,
             Evenement::AccesRetire,
+            Evenement::CompteBloque,
+            Evenement::CompteReactive,
         ] {
             let (sujet, corps) = message(evenement, "21/10/2026 à 10:42", "securite@example.org", "professionnel");
             // Pas de tiret cadratin (décision du porteur, 2026-10-21).

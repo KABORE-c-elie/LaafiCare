@@ -65,6 +65,15 @@ async fn ce_que_chaque_role_peut_faire(pool: PgPool) {
     refuse(&mut conn, "CREATE TABLE intrus (i INTEGER)").await;
     refuse(&mut conn, "TRUNCATE notification").await;
     refuse(&mut conn, "DELETE FROM _sqlx_migrations WHERE false").await;
+    // Trace des interventions de l'équipe (migration 0027) : le serveur la
+    // lit seulement.
+    refuse(
+        &mut conn,
+        "INSERT INTO intervention_compte (compte_id, action, administrateur_compte_id, motif) \
+         SELECT id, 'blocage_compte', id, 'x' FROM compte WHERE false",
+    )
+    .await;
+    permis(&mut conn, "SELECT count(*) FROM intervention_compte").await;
 
     permis(&mut conn, "SELECT count(*) FROM _sqlx_migrations").await;
     permis(&mut conn, "UPDATE compte SET statut = statut, version_jeton = version_jeton WHERE false").await;
@@ -74,6 +83,13 @@ async fn ce_que_chaque_role_peut_faire(pool: PgPool) {
     permis(&mut conn, "RESET ROLE").await;
     permis(&mut conn, "SET ROLE laaficare_outils").await;
     permis(&mut conn, "UPDATE compte SET reenrolement_autorise_jusqu_au = now() WHERE false").await;
+    permis(
+        &mut conn,
+        "INSERT INTO intervention_compte (compte_id, action, administrateur_compte_id, motif) \
+         SELECT id, 'blocage_compte', id, 'x' FROM compte WHERE false",
+    )
+    .await;
+    refuse(&mut conn, "DELETE FROM intervention_compte WHERE false").await;
     refuse(&mut conn, "DELETE FROM historique_statut_demande WHERE false").await;
     refuse(&mut conn, "ALTER TABLE historique_statut_demande DISABLE TRIGGER ALL").await;
 }

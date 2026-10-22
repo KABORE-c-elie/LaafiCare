@@ -284,6 +284,7 @@ Envoie un code à 6 chiffres par SMS. Sert à l'inscription et au mot de passe o
 
 - Le code est valable **5 minutes**. Une nouvelle demande remplace le code précédent.
 - La réponse est la même que le numéro ait un compte ou non, limites comprises.
+- **Compte patient bloqué par l'équipe LaafiCare** (outil `intervenir_compte`) : aucun code n'est créé et **aucun SMS ne part**, mais la réponse est exactement la même (204, limites comprises) : rien ne révèle le blocage.
 - En développement, aucun SMS ne part : le code s'affiche dans les journaux du serveur.
 
 #### 2.2.2 `POST /api/patients/inscription`

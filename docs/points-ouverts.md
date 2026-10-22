@@ -187,7 +187,11 @@ En production, le serveur n'accepte que des connexions chiffrées (HTTPS) : jeto
 - **règles de suspension d'un contrat MUNASEB** : à demander à la MUNASEB (étape 5) ;
 - **valeurs des types d'actes manquants** : dentaire et prothèses, accouchement et consultations prénatales, chirurgie, frais funéraires, radiologie (étape 7, mémoire MUNASEB).
 
-**Outil local de l'équipe pour un compte compromis** (DS10, noté le 2026-10-21, à faire avant le pilote) : désactiver une affectation et forcer la déconnexion d'un compte (`version_jeton` augmentée, sessions fermées, liens de réinitialisation annulés), avec trace (opérateur authentifié, date, motif obligatoire), sur le modèle de `desactiver_totp` (J11). Aujourd'hui, seul un responsable de la structure peut retirer un accès (`docs/api.md`, section 2.12) ; si le responsable lui-même est compromis, l'équipe n'a pas d'outil.
+**Outil local de l'équipe pour un compte compromis** (DS10, J11) : **fait le 2026-10-22** (P2, outil `intervenir_compte`, migration 0027) : retrait d'une affectation, blocage et réactivation d'un compte, avec trace.
+
+**Outil « désigner un nouveau responsable »** (noté le 2026-10-22, P2, à faire avant le pilote) : l'équipe peut retirer le dernier responsable d'une structure (compte compromis). La structure reste validée, mais plus personne ne peut y inviter. Il faut un outil de l'équipe pour désigner un nouveau responsable (identité vérifiée, trace), qui se substitue alors à l'invitation.
+
+**Limite connue : un patient sans email n'est pas prévenu** (noté le 2026-10-22, P2, IC5) quand l'équipe bloque ou réactive son compte : les alertes partent par email seulement, et le SMS reste réservé au code de connexion (OTP).
 
 ### Éléments à découper en étapes
 

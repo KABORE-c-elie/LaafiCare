@@ -66,6 +66,12 @@ pub enum ErreurAuthPatient {
     #[error("Numéro ou mot de passe incorrect.")]
     IdentifiantsInvalides,
 
+    /// `demander_otp` uniquement : compte patient bloqué par l'équipe (P2).
+    /// La route répond comme pour tout numéro, sans envoyer de SMS : ce
+    /// n'est jamais une réponse d'erreur.
+    #[error("compte patient bloqué")]
+    CompteBloque,
+
     #[error("erreur interne : {0}")]
     Interne(String),
 }
@@ -82,6 +88,7 @@ impl From<otp::ErreurDemandeOtp> for ErreurAuthPatient {
             otp::ErreurDemandeOtp::TropDeDemandes { reessayer_dans_secs } => {
                 ErreurAuthPatient::TropDeDemandes { reessayer_dans_secs: Some(reessayer_dans_secs) }
             }
+            otp::ErreurDemandeOtp::CompteBloque => ErreurAuthPatient::CompteBloque,
             otp::ErreurDemandeOtp::Base(erreur) => ErreurAuthPatient::Interne(erreur.to_string()),
         }
     }

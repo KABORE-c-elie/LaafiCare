@@ -255,6 +255,10 @@ Les 10 codes de secours, sous forme d'empreinte Argon2id, avec leur date d'utili
 
 La trace de chaque désactivation par l'équipe LaafiCare : compte concerné, administrateur, date, motif, et attestation que la pièce d'identité a été vérifiée (le numéro de la pièce n'est **pas** enregistré). **Jamais modifiée ni supprimée**, et un administrateur ne peut pas désactiver le second facteur de ses propres comptes.
 
+### `intervention_compte`
+
+La trace de chaque intervention de l'équipe LaafiCare sur un compte compromis (outil `intervenir_compte`) : compte concerné, affectation retirée le cas échéant, action (retrait d'une affectation, blocage ou réactivation du compte), administrateur, date, motif obligatoire, et attestation de la vérification de la pièce d'identité, **obligatoire pour une réactivation**. **Jamais modifiée ni supprimée**, jamais sur les propres comptes de l'administrateur, et écrite seulement par le rôle des outils (le serveur la lit). Fichier : [`intervention_compte.rs`](../backend/src/intervention_compte.rs). Migration 0027.
+
 ### `profil_administrateur`
 
 Le numéro de CNIB d'un administrateur LaafiCare, **unique**, au format de la carte actuelle (la lettre B suivie de 8 chiffres, règle décidée par le porteur d'après la CNIB burkinabè, sans source officielle). Il est rangé à part, pour ne jamais apparaître dans une connexion. **Facultatif pour l'instant** (2026-10-18) : un administrateur créé sans CNIB n'a pas de ligne dans cette table.
@@ -297,5 +301,6 @@ Règles garanties par la base : **jamais modifiées ni supprimées** ; seulement
 | 0024 | Liens de réinitialisation du mot de passe (professionnels et administrateurs) dans la table des jetons d'email |
 | 0025 | Motif de fermeture de session `desactivation_affectation` : un accès retiré par un responsable ferme aussitôt les sessions ouvertes sur cette affectation |
 | 0026 | Droits des rôles du serveur et des outils : le serveur lit et écrit les données sans pouvoir changer les tables ni les traces ; seuls les outils ouvrent la fenêtre de réenrôlement (fonction `vider_fenetre_reenrolement` pour la refermer) |
+| 0027 | Trace des interventions de l'équipe sur un compte compromis (`intervention_compte` : retrait d'une affectation, blocage, réactivation), jamais modifiée ni supprimée, jamais sur ses propres comptes ; écrite par le seul rôle des outils |
 
 Une migration déjà appliquée ne change plus jamais : toute évolution passe par une nouvelle migration. Un test vérifie aussi qu'aucun caractère invisible ne s'y glisse ([`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs)).
