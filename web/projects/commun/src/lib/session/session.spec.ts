@@ -34,6 +34,27 @@ describe('SessionService', () => {
     expect(session.connecte()).toBe(false);
   });
 
+  it('réenrôlement (§2.5) : seul le jeton de réenrôlement, aucune session ; effacé ensuite', () => {
+    session.ouvrirReenrolement('reenrolement');
+    expect(session.etat()).toBe('reenrolement');
+    expect(session.jetonReenrolement()).toBe('reenrolement');
+    expect(session.jetonAcces()).toBeNull();
+    expect(session.connecte()).toBe(false);
+    session.effacer();
+    expect(session.jetonReenrolement()).toBeNull();
+  });
+
+  it('session administrateur : paire gardée, jetons intermédiaire et de réenrôlement effacés', () => {
+    session.ouvrirReenrolement('reenrolement');
+    session.ouvrirSecondFacteur('intermediaire');
+    session.ouvrirAdministrateur(PAIRE);
+    expect(session.etat()).toBe('administrateur');
+    expect(session.jetonAcces()).toBe('acces-1');
+    expect(session.jetonIntermediaire()).toBeNull();
+    expect(session.jetonReenrolement()).toBeNull();
+    expect(session.affectation()).toBeNull();
+  });
+
   it('la connexion complète efface le jeton intermédiaire', () => {
     session.ouvrirSecondFacteur('intermediaire');
     session.ouvrirSansAffectation(PAIRE);

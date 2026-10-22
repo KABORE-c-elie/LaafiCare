@@ -83,6 +83,8 @@ export class FormulaireConnexionComponent {
 
   /** Codes après lesquels le mot de passe reste dans son champ (sinon il est effacé). */
   readonly garderMotDePasse = input<readonly string[]>([]);
+  /** Textes propres à l'application pour certains codes (sinon, ceux de `messagePourErreur`). */
+  readonly messagesParCode = input<Readonly<Record<string, string>>>({});
   /** Une connexion part (saisie valide). */
   readonly envoi = output<void>();
   /** La connexion est refusée : le `code` de l'erreur, ou `null` sans réponse de l'API. */
@@ -114,15 +116,14 @@ export class FormulaireConnexionComponent {
     try {
       // Le mot de passe est envoyé tel que saisi (CLAUDE.md §14 : aucune espace retirée).
       const etape = await this.acces.connecter(saisie.email, saisie.motDePasse);
-      await this.router.navigate([
-        etape === 'second_facteur' ? this.parcours.pageSecondFacteur : this.parcours.pageApresConnexion,
-      ]);
+      await this.router.navigate([this.pageSuivante(etape)]);
     } catch (erreur) {
       const code = codeErreur(erreur);
       if (code === null || !this.garderMotDePasse().includes(code)) {
         this.effacerMotDePasse();
       }
-      this.message.set({ genre: 'erreur', texte: messagePourErreur(decoderErreur(erreur)) });
+      const propre = code === null ? undefined : this.messagesParCode()[code];
+      this.message.set({ genre: 'erreur', texte: propre ?? messagePourErreur(decoderErreur(erreur)) });
       this.refus.emit(code);
     } finally {
       this.envoiEnCours.set(false);
@@ -142,5 +143,17 @@ export class FormulaireConnexionComponent {
 
   effacerMotDePasse(): void {
     this.formulaire.controls.motDePasse.reset();
+  }
+
+  private pageSuivante(etape: 'complete' | 'second_facteur' | 'reenrolement'): string {
+    switch (etape) {
+      case 'second_facteur':
+        return this.parcours.pageSecondFacteur;
+      case 'reenrolement':
+        // `connecter` ne renvoie `reenrolement` que pour un parcours administrateur, qui a cette page.
+        return this.parcours.pageReenrolement ?? this.parcours.pageConnexion;
+      case 'complete':
+        return this.parcours.pageApresConnexion;
+    }
   }
 }

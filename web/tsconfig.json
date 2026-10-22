@@ -38,6 +38,12 @@
     },
     {
       "path": "./projects/munaseb/tsconfig.spec.json"
+    },
+    {
+      "path": "./projects/administration/tsconfig.app.json"
+    },
+    {
+      "path": "./projects/administration/tsconfig.spec.json"
     }
   ]
 }

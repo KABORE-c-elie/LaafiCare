@@ -188,3 +188,47 @@ Décision B2 du porteur : ce qui sert aux deux applications est dans la biblioth
 **Même affichage, vérifié** : 9 captures de Chrome (connexion, vérification de l'email, second facteur, choix de l'espace, demandes, détail, fenêtre de rejet, invitations, invitation envoyée), avant et après le lot, sur la construction de production avec un faux backend. Les 9 sont identiques au pixel près, avec la même empreinte SHA-256.
 
 **Défaut corrigé (2026-10-22, commit séparé)** : sur l'écran du second facteur, « Valider » rechargeait la page au lieu d'envoyer le code, et la session (en mémoire) était perdue. Le `<form>` avait `(ngSubmit)` sans `[formGroup]`. Avec les formulaires réactifs, seule `FormGroupDirective` (sélecteur `[formGroup]`) émet `ngSubmit` ; `NgForm` est dans `FormsModule`. Le navigateur faisait donc sa soumission native. Corrigé par un `FormGroup`. Un test vérifie que l'évènement `submit` est annulé et que le code part : sans le correctif, ses 4 cas échouent.
+
+## 13. Application d'administration : connexion et réenrôlement (2026-10-22)
+
+Décisions B1, B3, B4, B5, B10 et B11 du porteur (2026-10-22). Contrat : `docs/api.md` §2.5.
+
+**Projet `administration`** (`projects/administration`) :
+- en développement, `npm run start:administration`, sur `localhost:4201` seulement ;
+- construction dans `dist/administration` ;
+- essai de production avec `npm run serve:prod:administration`, sur le port 8083 : même CSP stricte que munaseb, et le serveur prend maintenant le nom de l'application ;
+- **pas de service worker** (B11) : aucun besoin hors connexion, et l'application vient toujours du serveur ;
+- le logo est pris dans `projects/munaseb/public` (option `assets` d'`angular.json`), sans copie du fichier.
+
+**Ce que `commun` gagne pour ce parcours :**
+- `PARCOURS_ADMINISTRATEUR`, que `app.config.ts` fournit à la place du parcours professionnel ;
+- la session : états `reenrolement` (jeton de réenrôlement, 10 min, jamais renouvelé) et `administrateur` (jeton d'accès renouvelé comme les autres, §1.7) ;
+- le contexte de requête `reenrolement`, présenté par l'intercepteur.
+
+**Connexion (§2.5) :**
+- **Le second temps est toujours demandé.** La réponse `reenrolement` mène à la page `/reenrolement`. Une réponse `complete` n'ouvre rien : §2.5 dit « Jamais d'`etape: "complete"` pour un administrateur », et l'écran affiche alors l'erreur interne.
+- **403 `email_non_verifie`** : « Votre email n'est pas encore vérifié. Contactez l'équipe LaafiCare. » (validé, B3). Aucune route ne permet à un administrateur de renvoyer le lien.
+
+**Réenrôlement (`pages/reenrolement.ts`), en trois étapes :**
+1. le mot de passe est redemandé (`commencer`). Refusé : « Mot de passe incorrect. » (§2.5) ;
+2. le QR code, puis la clé à la demande, par groupes de 4, puis le premier code (`confirmer`). Refusé : « Code incorrect. », et le champ est vidé. « Obtenir un nouveau QR code » revient à la première étape, puisque `commencer` peut être relancé tant que la fenêtre est ouverte ;
+3. les **10 codes de secours, montrés une seule fois**. La case « J'ai noté mes 10 codes de secours en lieu sûr » est obligatoire avant « Revenir à la connexion ». Il n'y a ni copie, ni téléchargement, ni impression (B3). Aucune session n'est ouverte (§2.5).
+
+Si le jeton est refusé (`jeton_invalide` : fenêtre expirée…), la page revient à la connexion avec « Le délai est dépassé. Reconnectez-vous. ».
+
+**Le secret ne quitte jamais le navigateur (B5) :**
+- le QR code est dessiné par `qrcode-generator` 2.0.4 (MIT, épinglée sans `^`, B4). Seule sa matrice sert (`addData`, `make`, `getModuleCount`, `isDark`), et elle devient un seul chemin SVG dans le gabarit : ni `innerHTML`, ni style en ligne, ni image `data:` ;
+- niveau de correction M, marge de 4 modules (ISO/IEC 18004) ;
+- la bibliothèque n'est chargée qu'avec la page de réenrôlement (morceau de 30,4 kB, 9,9 kB compressés) ;
+- l'adresse `otpauth://`, la clé et les codes restent dans la page, en mémoire, et sont effacés dès qu'ils ne servent plus, puis quand on quitte la page ;
+- des tests vérifient qu'aucun stockage du navigateur n'est écrit et que rien de tout cela n'apparaît dans la console, journal de développement compris.
+
+**Palette dorée (B10)** : voir l'en-tête de `projects/administration/src/styles.css`.
+- **Contrastes**, calculés avec la formule de WCAG 2.2, critère 1.4.3 : blanc sur `#7A5C00`, 6,25:1 ; blanc sur `#5E4700` (survol), 8,83:1 ; `#13201B` sur `#F7F0D9`, 14,74:1.
+- **Focus** : il reste bleu `#2A5F94` (5,82:1 sur `#F7F0D9`).
+- **Or vif `#D4AF37`** : décoratif seulement (trait sous l'en-tête, bord du panneau d'accueil). Jamais du texte, jamais le seul contour d'un élément d'interface (critère 1.4.11), jamais porteur d'une information.
+
+**Essai du 2026-10-22** dans Chrome sans interface, sur la construction de production (CSP stricte) avec un faux backend. Parcours complet : réenrôlement, codes de secours, reconnexion avec second facteur, page des structures.
+- **Résultat** : aucune violation de la CSP, rien dans le stockage du navigateur, et la clé n'est plus dans la page à la fin.
+- **Console** : une recommandation de Chrome, pas un blocage. Sur l'étape du mot de passe redemandé, « Password forms should have (optionally hidden) username fields for accessibility ». L'écran ne connaît pas l'email : la session ne le garde pas.
+- **QR code** : Chrome ne fournit pas `BarcodeDetector` sous Windows. Le décodage du QR se vérifie avec un téléphone, à l'essai manuel.

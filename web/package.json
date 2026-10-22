@@ -4,11 +4,13 @@
   "scripts": {
     "ng": "ng",
     "start": "ng build commun && ng serve munaseb",
-    "build": "ng build commun && ng build munaseb",
+    "start:administration": "ng build commun && ng serve administration",
+    "build": "ng build commun && ng build munaseb && ng build administration",
     "watch": "ng build commun --watch",
-    "test": "ng test commun --watch=false && ng build commun && ng test munaseb --watch=false",
+    "test": "ng test commun --watch=false && ng build commun && ng test munaseb --watch=false && ng test administration --watch=false",
     "lint": "ng lint",
-    "serve:prod": "node outils/serveur-production.mjs"
+    "serve:prod": "node outils/serveur-production.mjs munaseb",
+    "serve:prod:administration": "node outils/serveur-production.mjs administration"
   },
   "private": true,
   "packageManager": "npm@11.19.0",
@@ -21,6 +23,7 @@
     "@angular/platform-browser": "^22.2.0",
     "@angular/router": "^22.2.0",
     "@angular/service-worker": "22.2.3",
+    "qrcode-generator": "2.0.4",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0"
   },

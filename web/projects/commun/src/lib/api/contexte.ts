@@ -4,9 +4,10 @@ import { HttpContext, HttpContextToken } from '@angular/common/http';
  * Jeton à présenter dans `Authorization` pour une requête (lu par l'intercepteur).
  * - `acces` : le jeton d'accès de la session ; un 401 `jeton_invalide` déclenche le renouvellement ;
  * - `intermediaire` : le jeton du second facteur (§2.4), jamais renouvelé ;
+ * - `reenrolement` : le jeton de réenrôlement d'un administrateur (§2.5), jamais renouvelé ;
  * - `aucun` : routes sans jeton (connexion, renouvellement, déconnexion).
  */
-export type JetonRequete = 'acces' | 'intermediaire' | 'aucun';
+export type JetonRequete = 'acces' | 'intermediaire' | 'reenrolement' | 'aucun';
 
 export const JETON_REQUETE = new HttpContextToken<JetonRequete>(() => 'acces');
 

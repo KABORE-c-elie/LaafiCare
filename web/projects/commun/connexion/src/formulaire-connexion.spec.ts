@@ -2,11 +2,19 @@ import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import { PARCOURS_CONNEXION, ParcoursConnexion, SessionService, intercepteurAcces } from 'commun';
+import {
+  PARCOURS_ADMINISTRATEUR,
+  PARCOURS_CONNEXION,
+  ParcoursConnexion,
+  SessionService,
+  intercepteurAcces,
+} from 'commun';
 import { FormulaireConnexionComponent } from './formulaire-connexion';
 
 // Parcours d'une autre application (ex. l'administration) : les routes et pages viennent du jeton.
 const PARCOURS: ParcoursConnexion = {
+  sorte: 'professionnel',
+  pageReenrolement: null,
   routeConnexion: '/api/essai/connexion',
   routeSecondFacteur: '/api/essai/second-facteur',
   pageConnexion: '/entree',
@@ -110,6 +118,64 @@ describe('FormulaireConnexionComponent', () => {
     await connecterAvecRefus('email_non_verifie', 403);
     expect(refus).toEqual(['identifiants_invalides', 'email_non_verifie']);
     expect(element().querySelector<HTMLInputElement>('#mot-de-passe')?.value).toBe('Exemple#2026');
+  });
+
+  describe('parcours administrateur (§2.5)', () => {
+    async function configurerAdministrateur(messagesParCode: Record<string, string> = {}): Promise<SessionService> {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({
+        imports: [FormulaireConnexionComponent],
+        providers: [
+          provideRouter([]),
+          provideHttpClient(withInterceptors([intercepteurAcces])),
+          provideHttpClientTesting(),
+          { provide: PARCOURS_CONNEXION, useValue: PARCOURS_ADMINISTRATEUR },
+        ],
+      });
+      fixture = TestBed.createComponent(FormulaireConnexionComponent);
+      fixture.componentRef.setInput('messagesParCode', messagesParCode);
+      controleur = TestBed.inject(HttpTestingController);
+      router = TestBed.inject(Router);
+      vi.spyOn(router, 'navigate').mockResolvedValue(true);
+      await fixture.whenStable();
+      saisir('email', 'admin@example.org');
+      saisir('mot-de-passe', 'Exemple#2026');
+      await soumettre();
+      return TestBed.inject(SessionService);
+    }
+
+    it('etape reenrolement : jeton de réenrôlement gardé, page de réenrôlement', async () => {
+      const session = await configurerAdministrateur();
+      controleur
+        .expectOne(PARCOURS_ADMINISTRATEUR.routeConnexion)
+        .flush({ etape: 'reenrolement', jeton_reenrolement: 'jeton-reenrolement' });
+      await attendre();
+      expect(session.etat()).toBe('reenrolement');
+      expect(session.jetonReenrolement()).toBe('jeton-reenrolement');
+      expect(router.navigate).toHaveBeenCalledWith(['/reenrolement']);
+    });
+
+    it('etape complete : jamais pour un administrateur, aucune session, erreur interne', async () => {
+      const session = await configurerAdministrateur();
+      controleur
+        .expectOne(PARCOURS_ADMINISTRATEUR.routeConnexion)
+        .flush({ etape: 'complete', jeton_acces: 'a', expire_dans: 900, jeton_renouvellement: 'r' });
+      await attendre();
+      await fixture.whenStable();
+      expect(session.etat()).toBe('deconnecte');
+      expect(router.navigate).not.toHaveBeenCalled();
+      expect(element().querySelector('[role="alert"]')?.textContent).toContain('Une erreur est survenue.');
+    });
+
+    it('messagesParCode : texte propre à l’application pour un code', async () => {
+      await configurerAdministrateur({ email_non_verifie: 'Texte de l’administration.' });
+      controleur
+        .expectOne(PARCOURS_ADMINISTRATEUR.routeConnexion)
+        .flush({ erreur: 'x', code: 'email_non_verifie' }, { status: 403, statusText: 'x' });
+      await attendre();
+      await fixture.whenStable();
+      expect(element().querySelector('[role="alert"]')?.textContent).toContain('Texte de l’administration.');
+    });
   });
 
   it('champs vides : rien n’est envoyé, aucun envoi émis', async () => {

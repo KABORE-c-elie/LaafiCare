@@ -129,6 +129,95 @@
           }
         }
       }
+    },
+    "administration": {
+      "projectType": "application",
+      "schematics": {},
+      "root": "projects/administration",
+      "sourceRoot": "projects/administration/src",
+      "prefix": "lc",
+      "architect": {
+        "build": {
+          "builder": "@angular/build:application",
+          "options": {
+            "browser": "projects/administration/src/main.ts",
+            "deployUrl": "/",
+            "tsConfig": "projects/administration/tsconfig.app.json",
+            "assets": [
+              {
+                "glob": "logo-laaficare.svg",
+                "input": "projects/munaseb/public",
+                "output": "/"
+              }
+            ],
+            "styles": ["projects/commun/styles/base.css", "projects/administration/src/styles.css"]
+          },
+          "configurations": {
+            "production": {
+              "budgets": [
+                {
+                  "type": "initial",
+                  "maximumWarning": "320kB",
+                  "maximumError": "400kB"
+                },
+                {
+                  "type": "anyComponentStyle",
+                  "maximumWarning": "1B",
+                  "maximumError": "1kB"
+                }
+              ],
+              "outputHashing": "all",
+              "optimization": {
+                "scripts": true,
+                "styles": {
+                  "minify": true,
+                  "inlineCritical": false
+                },
+                "fonts": true
+              }
+            },
+            "development": {
+              "fileReplacements": [
+                {
+                  "replace": "projects/administration/src/environments/environment.ts",
+                  "with": "projects/administration/src/environments/environment.development.ts"
+                }
+              ],
+              "optimization": false,
+              "extractLicenses": false,
+              "sourceMap": true
+            }
+          },
+          "defaultConfiguration": "production"
+        },
+        "serve": {
+          "builder": "@angular/build:dev-server",
+          "options": {
+            "host": "localhost",
+            "port": 4201,
+            "proxyConfig": "proxy.conf.json"
+          },
+          "configurations": {
+            "production": {
+              "buildTarget": "administration:build:production"
+            },
+            "development": {
+              "buildTarget": "administration:build:development"
+            }
+          },
+          "defaultConfiguration": "development"
+        },
+        "test": {
+          "builder": "@angular/build:unit-test"
+        },
+        "lint": {
+          "builder": "@angular-eslint/builder:lint",
+          "options": {
+            "lintFilePatterns": ["projects/administration/**/*.ts", "projects/administration/**/*.html"],
+            "eslintConfig": "projects/administration/eslint.config.js"
+          }
+        }
+      }
     }
   }
 }

@@ -30,6 +30,10 @@ export const intercepteurAcces: HttpInterceptorFn = (req, next) => {
     // traite lui-même son 401 `jeton_invalide` (retour à la connexion).
     return next(avecJeton(req, session.jetonIntermediaire()));
   }
+  if (sorte === 'reenrolement') {
+    // Même règle : l'écran du réenrôlement traite son 401 `jeton_invalide` (§2.5).
+    return next(avecJeton(req, session.jetonReenrolement()));
+  }
 
   const jetonUtilise = session.jetonAcces();
   return next(avecJeton(req, jetonUtilise)).pipe(

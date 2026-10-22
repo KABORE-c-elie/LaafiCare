@@ -8,6 +8,7 @@ import {
   CorpsSecondFacteur,
   ListeAffectations,
   PaireJetons,
+  ReponseConnexionAdministrateur,
   ReponseConnexionProfessionnelle,
   ReponseSecondFacteur,
 } from '../api/types';
@@ -33,25 +34,41 @@ export class AccesService {
 
   private renouvellementEnCours: Promise<boolean> | null = null;
 
-  /** Ouvre la session, ou le second temps si un second facteur est actif. Les erreurs remontent à l'écran. */
-  async connecter(email: string, motDePasse: string): Promise<'complete' | 'second_facteur'> {
+  /**
+   * Ouvre la session, ou le second temps si un second facteur est actif, ou le
+   * réenrôlement d'un administrateur (§2.5). Les erreurs remontent à l'écran.
+   */
+  async connecter(email: string, motDePasse: string): Promise<'complete' | 'second_facteur' | 'reenrolement'> {
     const reponse = await firstValueFrom(
-      this.http.post<ReponseConnexionProfessionnelle>(
+      this.http.post<ReponseConnexionProfessionnelle | ReponseConnexionAdministrateur>(
         this.parcours.routeConnexion,
         { email, mot_de_passe: motDePasse },
         { context: contexteJeton('aucun'), timeout: DELAI_REQUETE_MS },
       ),
     );
     // docs/api.md §2.4 : « L'application teste toujours `etape` ».
-    if (reponse.etape === 'second_facteur') {
-      this.session.ouvrirSecondFacteur(reponse.jeton_intermediaire);
-      return 'second_facteur';
+    switch (reponse.etape) {
+      case 'second_facteur':
+        this.session.ouvrirSecondFacteur(reponse.jeton_intermediaire);
+        return 'second_facteur';
+      case 'reenrolement':
+        if (this.parcours.sorte !== 'administrateur') {
+          throw new Error('Réponse de connexion inattendue');
+        }
+        this.session.ouvrirReenrolement(reponse.jeton_reenrolement);
+        return 'reenrolement';
+      case 'complete':
+        // §2.5 : « Jamais d'`etape: "complete"` pour un administrateur. » Une
+        // telle réponse n'ouvre rien : l'écran affiche l'erreur interne.
+        if (this.parcours.sorte === 'administrateur') {
+          throw new Error('Réponse de connexion inattendue');
+        }
+        this.session.ouvrirSansAffectation(reponse);
+        return 'complete';
     }
-    this.session.ouvrirSansAffectation(reponse);
-    return 'complete';
   }
 
-  /** Second temps (§2.4) : un seul des deux champs est envoyé. */
+  /** Second temps (§2.4, §2.5) : un seul des deux champs est envoyé. */
   async validerSecondFacteur(corps: CorpsSecondFacteur): Promise<void> {
     const reponse = await firstValueFrom(
       this.http.post<ReponseSecondFacteur>(this.parcours.routeSecondFacteur, corps, {
@@ -59,7 +76,11 @@ export class AccesService {
         timeout: DELAI_REQUETE_MS,
       }),
     );
-    this.session.ouvrirSansAffectation(reponse);
+    if (this.parcours.sorte === 'administrateur') {
+      this.session.ouvrirAdministrateur(reponse);
+    } else {
+      this.session.ouvrirSansAffectation(reponse);
+    }
   }
 
   /**

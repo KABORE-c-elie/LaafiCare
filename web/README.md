@@ -1,9 +1,15 @@
 # LaafiCare : applications web
 
-Ce dossier contient les applications web de LaafiCare, écrites avec Angular 22. Pour l'instant, une seule application : **Assurance MUNASEB**, pour les agents et les responsables de la mutuelle.
+Ce dossier contient les applications web de LaafiCare, écrites avec Angular 22. Deux applications, déployées chacune à part :
 
-- `projects/commun` : ce que toutes les applications partagent (connexion, session, messages, boutons, champs…).
+- **Assurance MUNASEB**, pour les agents et les responsables de la mutuelle ;
+- **Administration LaafiCare**, pour l'équipe LaafiCare : connexion avec second facteur obligatoire, et décisions sur les demandes de structure.
+
+Organisation :
+
+- `projects/commun` : ce que toutes les applications partagent (connexion, second facteur, session, messages, boutons, champs, fenêtres, styles…).
 - `projects/munaseb` : l'application MUNASEB. Après la connexion, chaque espace s'ouvre selon le rôle : un **agent** traite les demandes de remboursement ; un **responsable** invite des personnes (agents ou autres responsables) et suit ses invitations.
+- `projects/administration` : l'application de l'équipe LaafiCare (couleur dorée).
 - `docs/decisions.md` : les choix faits, et pourquoi.
 
 ## Ce qu'il faut installer
@@ -28,6 +34,8 @@ npm start
 ```
 
 Puis ouvrir `http://localhost:4200` dans le navigateur.
+
+Pour l'**administration**, dans un autre terminal : `npm run start:administration`, puis `http://localhost:4201`. Les deux applications peuvent tourner en même temps.
 
 - La commande construit d'abord la bibliothèque `commun`, puis lance l'application.
 - Les appels à `/api/...` sont transmis au backend sur `127.0.0.1:8080` (`proxy.conf.json`). Le backend n'a pas besoin d'autoriser une autre origine.
@@ -63,13 +71,26 @@ Il faut une structure MUNASEB **validée** par l'équipe LaafiCare, et un compte
 
 Un agent n'ouvre que les demandes, un responsable que les invitations. Une adresse tapée à la main vers l'autre page ramène au choix de l'espace.
 
+### Administration : premier second facteur (réenrôlement)
+
+Il faut un compte administrateur créé par l'outil `creer_premier_administrateur` (README à la racine, « Créer le premier administrateur »). L'outil ouvre une **fenêtre de 10 minutes** : c'est pendant ce temps que la personne enregistre son second facteur.
+
+1. `npm run start:administration`, puis ouvrir `http://localhost:4201`.
+2. Se connecter avec l'email et le mot de passe administrateur : l'écran « Enregistrer votre second facteur » s'ouvre.
+3. Redonner le mot de passe, puis **scanner le QR code** avec une application d'authentification (Google Authenticator, par exemple). « Afficher la clé » montre la clé à recopier à la main, par groupes de 4. Le QR code est dessiné dans le navigateur : la clé ne part vers aucun service en ligne.
+4. Taper le code à 6 chiffres affiché par l'application, puis « Valider ».
+5. Les **10 codes de secours** s'affichent une seule fois. Les noter, cocher « J'ai noté mes 10 codes de secours en lieu sûr », puis « Revenir à la connexion ».
+6. Se reconnecter : mot de passe, puis un code de l'application. Ce qu'on doit voir : la page « Demandes de structure ».
+
+Si les 10 minutes sont passées, l'écran revient à la connexion avec « Le délai est dépassé. Reconnectez-vous. » : relancer l'outil, qui rouvre une fenêtre.
+
 ## Lancer les tests automatiques
 
 ```powershell
 npm test
 ```
 
-Lance les tests de `commun`, puis ceux de `munaseb` (Vitest). Ce qu'on doit voir : `Test Files … passed` pour chacun, aucun échec.
+Lance les tests de `commun`, puis ceux de `munaseb`, puis ceux de l'administration (Vitest). Ce qu'on doit voir : `Test Files … passed` pour chacun, aucun échec.
 
 ```powershell
 npm run lint
@@ -83,7 +104,7 @@ Vérifie le code, y compris les règles d'accessibilité des gabarits (`angular-
 npm run build
 ```
 
-Le résultat est dans `dist/munaseb/browser`. La taille de chaque fichier s'affiche à la fin.
+Le résultat est dans `dist/munaseb/browser` et `dist/administration/browser`. La taille de chaque fichier s'affiche à la fin.
 
 ## Essayer la version de production sur son ordinateur
 
@@ -92,7 +113,7 @@ npm run build
 npm run serve:prod
 ```
 
-Puis ouvrir `http://127.0.0.1:8082`. Ce petit serveur (`outils/serveur-production.mjs`) envoie la politique de sécurité (CSP) prévue pour la production, compresse les fichiers et transmet `/api` au backend. Ce n'est **pas** un serveur de production.
+Puis ouvrir `http://127.0.0.1:8082`. Pour l'administration : `npm run serve:prod:administration`, puis `http://127.0.0.1:8083` (sans service worker). Ce petit serveur (`outils/serveur-production.mjs`) envoie la politique de sécurité (CSP) prévue pour la production, compresse les fichiers et transmet `/api` au backend. Ce n'est **pas** un serveur de production.
 
 - Le **service worker** ne fonctionne que dans cette version, pas avec `npm start`. Il ne sert jamais la page `/verifier-email` depuis son cache : elle vient toujours du serveur, dans sa dernière version.
 - **Hors connexion** : après une première visite, couper le réseau (DevTools, onglet Réseau, « Hors connexion »), puis recharger. L'application s'ouvre et affiche « Pas de connexion. Vos demandes s'afficheront dès le retour du réseau. »

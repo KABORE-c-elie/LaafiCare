@@ -27,6 +27,25 @@ export type ReponseConnexionProfessionnelle =
   | ({ etape: 'complete' } & PaireJetons)
   | { etape: 'second_facteur'; jeton_intermediaire: string };
 
+/**
+ * Réponse 200 de `POST /api/administrateurs/connexion` (§2.5) : jamais
+ * `complete` pour un administrateur (« Jamais d'`etape: "complete"` »).
+ */
+export type ReponseConnexionAdministrateur =
+  | { etape: 'second_facteur'; jeton_intermediaire: string }
+  | { etape: 'reenrolement'; jeton_reenrolement: string };
+
+/** Réponse 200 de `POST /api/administrateurs/reenrolement/commencer` (§2.5). */
+export interface ReponseReenrolementCommencer {
+  url_otpauth: string;
+  cle_base32: string;
+}
+
+/** Réponse 200 de `POST /api/administrateurs/reenrolement/confirmer` (§2.5) : montrés une seule fois. */
+export interface ReponseReenrolementConfirmer {
+  codes_secours: string[];
+}
+
 /** Corps de `POST /api/professionnels/connexion/second-facteur` : un seul des deux champs (§2.4). */
 export type CorpsSecondFacteur = { code: string } | { code_secours: string };
 

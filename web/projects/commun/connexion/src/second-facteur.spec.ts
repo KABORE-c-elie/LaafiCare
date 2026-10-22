@@ -2,10 +2,19 @@ import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import { ESPACE_APPLICATION, PARCOURS_CONNEXION, ParcoursConnexion, SessionService, intercepteurAcces } from 'commun';
+import {
+  ESPACE_APPLICATION,
+  PARCOURS_ADMINISTRATEUR,
+  PARCOURS_CONNEXION,
+  ParcoursConnexion,
+  SessionService,
+  intercepteurAcces,
+} from 'commun';
 import { SecondFacteurPage } from './second-facteur';
 
 const PARCOURS: ParcoursConnexion = {
+  sorte: 'professionnel',
+  pageReenrolement: null,
   routeConnexion: '/api/essai/connexion',
   routeSecondFacteur: '/api/essai/second-facteur',
   pageConnexion: '/entree',
@@ -73,6 +82,34 @@ describe('SecondFacteurPage (commun)', () => {
     requete.flush({ etape: 'complete', jeton_acces: 'a', expire_dans: 900, jeton_renouvellement: 'r' });
     await attendre();
     expect(router.navigate).toHaveBeenCalledWith([PARCOURS.pageApresConnexion]);
+  });
+
+  it('parcours administrateur : la session ouverte est une session administrateur', async () => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      imports: [SecondFacteurPage],
+      providers: [
+        provideRouter([]),
+        provideHttpClient(withInterceptors([intercepteurAcces])),
+        provideHttpClientTesting(),
+        { provide: PARCOURS_CONNEXION, useValue: PARCOURS_ADMINISTRATEUR },
+        { provide: ESPACE_APPLICATION, useValue: { logo: '/logo.svg', titre: 'Administration', phrase: '' } },
+      ],
+    });
+    const session = TestBed.inject(SessionService);
+    session.ouvrirSecondFacteur('jeton-intermediaire');
+    fixture = TestBed.createComponent(SecondFacteurPage);
+    controleur = TestBed.inject(HttpTestingController);
+    router = TestBed.inject(Router);
+    vi.spyOn(router, 'navigate').mockResolvedValue(true);
+    await fixture.whenStable();
+    await envoyerCode();
+    controleur
+      .expectOne(PARCOURS_ADMINISTRATEUR.routeSecondFacteur)
+      .flush({ etape: 'complete', jeton_acces: 'a', expire_dans: 900, jeton_renouvellement: 'r' });
+    await attendre();
+    expect(session.etat()).toBe('administrateur');
+    expect(router.navigate).toHaveBeenCalledWith(['/structures']);
   });
 
   it('jeton_invalide : retour à la page de connexion du parcours', async () => {

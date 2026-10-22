@@ -2,6 +2,7 @@ import { HttpClient, HttpErrorResponse, provideHttpClient, withInterceptors } fr
 import { HttpTestingController, TestRequest, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { firstValueFrom } from 'rxjs';
+import { contexteJeton } from '../api/contexte';
 import { Affectation } from '../api/types';
 import { AccesService } from './acces';
 import { GESTION_SESSION, GestionSession } from './gestion-session';
@@ -180,6 +181,33 @@ describe('intercepteurAcces', () => {
     await expect(resultat).rejects.toBeInstanceOf(HttpErrorResponse);
     expect(gestion.accesRetire).toHaveBeenCalledTimes(1);
     expect(renouvellements().length).toBe(0);
+  });
+
+  it('jeton de réenrôlement (§2.5) : présenté tel quel, jamais renouvelé sur 401', async () => {
+    session.ouvrirReenrolement('reenrolement-1');
+    const resultat = firstValueFrom(
+      http.post('/api/administrateurs/reenrolement/commencer', {}, { context: contexteJeton('reenrolement') }),
+    );
+    const requete = controleur.expectOne('/api/administrateurs/reenrolement/commencer');
+    expect(requete.request.headers.get('Authorization')).toBe('Bearer reenrolement-1');
+    repondreJetonInvalide(requete);
+    await expect(resultat).rejects.toBeInstanceOf(HttpErrorResponse);
+    expect(renouvellements().length).toBe(0);
+  });
+
+  it('session administrateur : jeton d’accès, renouvelée comme les autres (§1.7)', async () => {
+    session.ouvrirAdministrateur({ jeton_acces: 'admin-1', expire_dans: 900, jeton_renouvellement: 'renouv-a' });
+    const resultat = firstValueFrom(http.get('/api/administrateurs/structures'));
+    repondreJetonInvalide(controleur.expectOne('/api/administrateurs/structures'));
+    const renouvellement = controleur.expectOne('/api/sessions/renouveler');
+    expect(renouvellement.request.body).toEqual({ jeton_renouvellement: 'renouv-a' });
+    renouvellement.flush({ jeton_acces: 'admin-2', expire_dans: 900, jeton_renouvellement: 'renouv-b' });
+    await attendre();
+    const rejouee = controleur.expectOne('/api/administrateurs/structures');
+    expect(rejouee.request.headers.get('Authorization')).toBe('Bearer admin-2');
+    rejouee.flush({ structures: [], suivant: null });
+    await expect(resultat).resolves.toEqual({ structures: [], suivant: null });
+    expect(session.etat()).toBe('administrateur');
   });
 
   it('un 401 d’un autre code ne déclenche pas de renouvellement', async () => {

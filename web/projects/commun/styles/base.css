@@ -300,7 +300,7 @@ textarea.champ__saisie {
 
 .entete {
   align-items: center;
-  background: var(--surface);
+  background: var(--entete-fond);
   border-bottom: 1px solid var(--separateur);
   display: flex;
   flex-wrap: wrap;

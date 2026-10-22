@@ -3,16 +3,25 @@
 // et transmission de /api au backend. Modules de Node seulement (http, fs,
 // path, zlib) : aucune dépendance. Ce n'est PAS un serveur de production.
 //
-// Lancement, depuis web/ : npm run build, puis node outils/serveur-production.mjs
-// Adresse : http://127.0.0.1:8082 (8080 : backend ; 8081 : Adminer).
+// Lancement, depuis web/ : npm run build, puis
+//   node outils/serveur-production.mjs munaseb          → http://127.0.0.1:8082
+//   node outils/serveur-production.mjs administration   → http://127.0.0.1:8083
+// (8080 : backend ; 8081 : Adminer.)
 
 import { createServer, request } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { brotliCompressSync, constants } from 'node:zlib';
 
-const PORT = 8082;
-const RACINE = resolve(import.meta.dirname, '..', 'dist', 'munaseb', 'browser');
+// Une application par port : chacune sera déployée à part, à sa propre adresse.
+const APPLICATIONS = { munaseb: 8082, administration: 8083 };
+const APPLICATION = process.argv[2] ?? 'munaseb';
+if (!Object.hasOwn(APPLICATIONS, APPLICATION)) {
+  console.error(`Application inconnue : ${APPLICATION}. Choix : ${Object.keys(APPLICATIONS).join(', ')}.`);
+  process.exit(1);
+}
+const PORT = APPLICATIONS[APPLICATION];
+const RACINE = resolve(import.meta.dirname, '..', 'dist', APPLICATION, 'browser');
 const BACKEND = { hote: '127.0.0.1', port: 8080 };
 
 // CSP demandée par le porteur, sans assouplissement. Les Trusted Types
@@ -136,5 +145,5 @@ const serveur = createServer(async (req, res) => {
 // 127.0.0.1 seulement : jamais exposé au réseau local. C'est une origine
 // « potentially trustworthy » (W3C Secure Contexts, §3.1), où le service worker s'enregistre.
 serveur.listen(PORT, '127.0.0.1', () => {
-  console.log(`Application de production servie sur http://127.0.0.1:${PORT}`);
+  console.log(`Application ${APPLICATION} (production) servie sur http://127.0.0.1:${PORT}`);
 });

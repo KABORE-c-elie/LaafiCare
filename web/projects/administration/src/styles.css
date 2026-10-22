@@ -1,0 +1,130 @@
+/*
+ * Feuille de l'application d'administration : sa palette et ses pages. Les
+ * styles communs sont dans projects/commun/styles/base.css, chargé avant ce
+ * fichier (angular.json).
+ *
+ * Palette dorée (décision B10 du porteur, 2026-10-22), distincte du rose
+ * MUNASEB. Contrastes calculés avec la formule de WCAG 2.2, critère 1.4.3
+ * (texte : 4,5:1 au moins) :
+ * - blanc sur #7A5C00 : 6,25:1 ; blanc sur #5E4700 (survol) : 8,83:1 ;
+ * - #13201B sur #F7F0D9 : 14,74:1 ; #7A5C00 sur #F7F0D9 : 5,49:1 ;
+ * - focus #2A5F94 sur #F7F0D9 : 5,82:1 (critère 1.4.11 : 3:1 au moins).
+ * L'or vif #D4AF37 (2,00:1 sur le fond) est seulement décoratif : jamais du
+ * texte, jamais le seul contour d'un champ ou d'un bouton, jamais porteur
+ * d'une information.
+ *
+ * Couleurs réservées (CLAUDE.md §6) : jamais de rouge ni d'orange, et aucun
+ * or tirant sur l'orange.
+ */
+
+:root {
+  /* Couleur principale : doré */
+  --principal: #7a5c00;
+  --principal-survol: #5e4700;
+  --accent-fond: #f7f0d9;
+  --sur-principal: #ffffff;
+  --entete-fond: #f7f0d9;
+  /* Décoration seulement (2,0:1) */
+  --or-vif: #d4af37;
+
+  /* Vert LaafiCare (statut Validée) */
+  --vert: #0a6650;
+  --vert-fond: #e3faf1;
+
+  /* Neutres (les mêmes que l'application MUNASEB) */
+  --fond: #f7faf8;
+  --surface: #ffffff;
+  --texte: #13201b;
+  --texte-secondaire: #45524c;
+  --bord-champ: #828d87;
+  --separateur: #c5cec9;
+  --bouton-secondaire: #e1ebe6;
+
+  /* Statuts : neutres */
+  --attente-texte: #13201b;
+  --attente-fond: #e1ebe6;
+  --en-cours-texte: #2a5f94;
+  --en-cours-fond: #e6eef6;
+  --rejete-texte: #2f3e4c;
+  --rejete-fond: #edf1f4;
+
+  /* Erreurs de saisie : neutres */
+  --erreur-texte: #2f3e4c;
+  --erreur-fond: #edf1f4;
+
+  /* Information (encadré bleu) et focus : le focus visible reste bleu (porteur, B10) */
+  --info-texte: #2a5f94;
+  --info-fond: #e6eef6;
+  --focus: #2a5f94;
+
+  --arrondi-bouton: 12px;
+  --arrondi-carte: 16px;
+  --hauteur-bouton: 44px;
+  --police: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* Trait décoratif d'or vif sous l'en-tête et le panneau d'accueil. Le bord
+   gris de l'en-tête reste l'élément de séparation : l'or n'en est que l'ornement. */
+.entete {
+  box-shadow: inset 0 -3px 0 var(--or-vif);
+}
+
+.accueil__panneau {
+  border-right: 4px solid var(--or-vif);
+}
+
+@media (max-width: 760px) {
+  .accueil__panneau {
+    border-bottom: 4px solid var(--or-vif);
+    border-right: 0;
+  }
+}
+
+/* ---------- Réenrôlement : QR code et codes de secours ---------- */
+
+/* Le QR code est dessiné sur fond blanc, modules noirs, avec une marge de
+   4 modules incluse dans le dessin (ISO/IEC 18004, « quiet zone »). */
+.qr {
+  background: #ffffff;
+  display: block;
+  height: auto;
+  max-width: 16rem;
+  width: 100%;
+}
+
+.qr__modules {
+  fill: #000000;
+}
+
+.cle {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 1.125rem;
+  letter-spacing: 0.05em;
+  overflow-wrap: anywhere;
+}
+
+/* Numéros dans la case de chaque code (`inside`) : sur deux colonnes, un
+   numéro placé à l'extérieur déborderait sur la colonne voisine. */
+.codes-secours {
+  display: grid;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 1.125rem;
+  gap: 0.5rem 2rem;
+  grid-template-columns: repeat(2, max-content);
+  list-style-position: inside;
+  margin: 0;
+  padding: 0;
+}
+
+.case {
+  align-items: flex-start;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.case input {
+  flex: none;
+  height: 20px;
+  margin: 0.15rem 0 0;
+  width: 20px;
+}

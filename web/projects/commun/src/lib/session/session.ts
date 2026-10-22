@@ -7,9 +7,18 @@ import { Affectation, PaireJetons } from '../api/types';
  * route qui le lui a donné.
  * - `second_facteur` : jeton intermédiaire de §2.4, valable 5 min ;
  * - `sans_affectation` : jeton `laaficare:professionnel_sans_affectation` (§2.4) ;
- * - `en_exercice` : jeton `laaficare:professionnel_en_exercice` (§2.6).
+ * - `en_exercice` : jeton `laaficare:professionnel_en_exercice` (§2.6) ;
+ * - `reenrolement` : jeton `laaficare:reenrolement_administrateur` (§2.5), 10 min,
+ *   qui ne sert qu'à enregistrer un nouveau second facteur ;
+ * - `administrateur` : jeton `laaficare:administrateur` (§2.5).
  */
-export type EtatSession = 'deconnecte' | 'second_facteur' | 'sans_affectation' | 'en_exercice';
+export type EtatSession =
+  | 'deconnecte'
+  | 'second_facteur'
+  | 'sans_affectation'
+  | 'en_exercice'
+  | 'reenrolement'
+  | 'administrateur';
 
 /**
  * Jetons de la session, en mémoire seulement (décision « option A », voir
@@ -24,12 +33,14 @@ export class SessionService {
   private readonly _jetonAcces = signal<string | null>(null);
   private readonly _jetonRenouvellement = signal<string | null>(null);
   private readonly _jetonIntermediaire = signal<string | null>(null);
+  private readonly _jetonReenrolement = signal<string | null>(null);
   private readonly _affectation = signal<Affectation | null>(null);
 
   readonly etat = this._etat.asReadonly();
   readonly jetonAcces = this._jetonAcces.asReadonly();
   readonly jetonRenouvellement = this._jetonRenouvellement.asReadonly();
   readonly jetonIntermediaire = this._jetonIntermediaire.asReadonly();
+  readonly jetonReenrolement = this._jetonReenrolement.asReadonly();
   /** Affectation choisie, pour l'en-tête ; `null` hors exercice. */
   readonly affectation = this._affectation.asReadonly();
   readonly connecte = computed(() => this._etat() === 'sans_affectation' || this._etat() === 'en_exercice');
@@ -38,6 +49,20 @@ export class SessionService {
     this.effacer();
     this._jetonIntermediaire.set(jetonIntermediaire);
     this._etat.set('second_facteur');
+  }
+
+  /** Administrateur sans second facteur, fenêtre ouverte par l'équipe (§2.5) : aucune session encore. */
+  ouvrirReenrolement(jetonReenrolement: string): void {
+    this.effacer();
+    this._jetonReenrolement.set(jetonReenrolement);
+    this._etat.set('reenrolement');
+  }
+
+  /** Session administrateur, après le second facteur (§2.5). */
+  ouvrirAdministrateur(paire: PaireJetons): void {
+    this.effacer();
+    this.poserPaire(paire);
+    this._etat.set('administrateur');
   }
 
   ouvrirSansAffectation(paire: PaireJetons): void {
@@ -66,6 +91,7 @@ export class SessionService {
     this._jetonAcces.set(null);
     this._jetonRenouvellement.set(null);
     this._jetonIntermediaire.set(null);
+    this._jetonReenrolement.set(null);
     this._affectation.set(null);
     this._etat.set('deconnecte');
   }
