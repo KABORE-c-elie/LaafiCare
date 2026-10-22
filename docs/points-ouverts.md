@@ -264,6 +264,18 @@ Un soignant a besoin du NIP pour ouvrir le dossier. Le patient peut être trop m
   - **bon de prise en charge numéroté** : bénéficiaire (adhérent : nom, prénoms, N° adhésion, UFR, année) et **malade** (nom, prénoms, **lien de parenté**) ; date de la maladie ou de l'accident ; actes remplis par le praticien (date, nature « Cs » consultation ou « EX » examen, coût, ordonnance oui ou non, signature et cachet) ; récapitulatif : consultation et examen **80 % MUNASEB / 20 %** bénéficiaire, hospitalisation **100 % / 0 %**, autres, déductions, total net. Le lien de parenté laisse penser que des **ayants droit** sont couverts : notre modèle n'en a pas ;
   - **forfaits de remboursement** : appareillage 10 000, prothèses 10 000, verres correcteurs et montures 15 000, consultation prénatale 15 000, accouchement normal 10 000, césarienne 25 000, chirurgie 50 000, hospitalisation 50 000, rééducation 15 000, scanner 15 000 FCFA ;
   - **plafond** de 100 000 FCFA par période : **absent des deux documents** (il ne vient que du mémoire MUNASEB).
+  - **Décision provisoire du porteur (2026-10-22), à confirmer par la MUNASEB** : hospitalisation à **100 %** comme sur le bon, **dans la limite de 50 000 FCFA par hospitalisation** (le forfait du verso de la carte lu comme un plafond).
+  - **Observation (2026-10-22)** : le taux semble dépendre **du circuit** autant que du type d'acte. Consultation gratuite au service de santé de la MUNASEB (selon son offre de service), 80 % avec un bon chez un partenaire ; hospitalisation à 100 % avec un bon, forfait en paiement direct. Aujourd'hui, `tarif_acte_munaseb` n'a qu'une ligne par type d'acte : un taux par type d'acte **et par circuit** est à concevoir à l'étape 5.
+  - **Réponses du porteur d'après son expérience d'adhérent (2026-10-22), toutes à confirmer par la MUNASEB, à appliquer à l'étape 5** :
+    1. **Fin de couverture** : le jour anniversaire de l'adhésion, **compris** (adhésion le 09/04/2024 : effet le 09/05/2024, fin le 09/04/2025). Couverture réelle de 11 mois.
+    2. **Renouvellement** : payé avant l'échéance, continuité sans nouvelle carence ; payé après l'échéance mais dans un **délai de grâce de 10 jours** (valeur modifiable, en base), pas de nouvelle carence (ce que devient la couverture pendant l'interruption reste à trancher, voir la proposition de l'étape 5) ; au-delà, nouvelle carence d'un mois. **Le numéro de carte change chaque année** : il doit être porté par la période, pas par le contrat.
+    3. **Suspension** : inconnue, à demander à la MUNASEB.
+    4. **Plafond** : par adhérent seul, ou partagé avec les ayants droit : à trancher (voir la proposition de l'étape 5).
+    5. **Ayants droit** : inconnus, à demander à la MUNASEB.
+    6. **Antenne** (lieu d'inscription) : information seulement, **aucun effet** sur la prise en charge ; champ facultatif.
+    7. **Paiement de la cotisation** : en espèces aujourd'hui ; LaafiCare doit aussi accepter le mobile money. **Pour le MVP**, l'agent enregistre le mode de paiement (`especes` ou `mobile_money`), la date, le montant et, pour le mobile money, la référence de la transaction. **Aucune intégration d'API d'opérateur avant le pilote.**
+    - **Montants de la cotisation et de la fiche** (5 000 et 100 FCFA en 2024) : **en base, modifiables**, jamais en constante.
+  - **Après le pilote** : intégration des API Orange Money et Moov Money pour le paiement de la cotisation.
   Écarts avec notre modèle et questions à poser : voir la comparaison du 2026-10-22 (consultation à 100 % chez nous, 80 % sur le bon ; hospitalisation à 100 % sur le bon mais forfait de 50 000 dans la liste ; types d'actes absents ; un bon regroupe plusieurs actes, une demande n'en porte qu'un).
 - **Rattacher les contrats et les demandes à une structure, avant d'admettre un second assureur** (noté le 2026-10-18, étape 3.9). Aujourd'hui, un contrat et une demande de remboursement ne disent pas à quelle mutuelle ils appartiennent : MUNASEB est câblée en dur. Un agent ne touche que les demandes de sa mutuelle parce qu'il doit exercer dans une structure MUNASEB validée et que la base n'en admet qu'une (index `structure_une_seule_munaseb_validee`, migration 0012). Avec le futur module « Assurance » générique, plusieurs assureurs existeront : il faudra alors rattacher chaque contrat (et donc ses demandes) à la structure de son assureur, et ne permettre une transition qu'à un agent de cette structure.
 
@@ -291,7 +303,8 @@ Hors du MVP MUNASEB (CLAUDE.md §12, « Périmètre du MVP MUNASEB ») :
 - **technique** : requêtes SQLx vérifiées à la compilation (ci-dessus) ;
 - **MUNASEB** :
   - rapprochement des partenaires avec les structures (section 4, « MUNASEB ») ;
-  - paiement direct par le mutualiste.
+  - paiement direct par le mutualiste ;
+  - intégration des API Orange Money et Moov Money pour la cotisation (décision du porteur, 2026-10-22).
 
 ---
 
