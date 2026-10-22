@@ -4,7 +4,21 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "outDir": "../../out-tsc/spec",
-    "types": ["vitest/globals"]
+    "types": ["vitest/globals"],
+    /*
+     * Tests de la bibliothèque seulement : `commun` et `commun/*` pointent vers
+     * ses sources, pas vers la version construite (`dist/commun`, chemins du
+     * tsconfig.json racine, que gardent la construction et les applications).
+     * Les points d'entrée secondaires (commun/connexion, commun/fenetre), qui
+     * importent `commun`, se testent ainsi sans construction préalable.
+     * TSConfig Reference, « paths » : sans `baseUrl`, les chemins sont lus
+     * depuis le fichier qui les déclare ; une option de `compilerOptions`
+     * redéfinie ici remplace celle du fichier étendu (« extends »).
+     */
+    "paths": {
+      "commun": ["./src/public-api.ts"],
+      "commun/*": ["./*/src/public-api.ts"]
+    }
   },
-  "include": ["src/**/*.d.ts", "src/**/*.spec.ts"]
+  "include": ["src/**/*.d.ts", "src/**/*.spec.ts", "connexion/**/*.spec.ts", "fenetre/**/*.spec.ts"]
 }

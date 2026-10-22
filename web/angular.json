@@ -28,7 +28,8 @@
         "test": {
           "builder": "@angular/build:unit-test",
           "options": {
-            "tsConfig": "projects/commun/tsconfig.spec.json"
+            "tsConfig": "projects/commun/tsconfig.spec.json",
+            "include": ["**/*.spec.ts", "../connexion/**/*.spec.ts", "../fenetre/**/*.spec.ts"]
           }
         },
         "lint": {
