@@ -5,6 +5,7 @@ import { FormControl, FormGroup, ReactiveFormsModule } from '@angular/forms';
 import { NavigationEnd, Router, RouterLink } from '@angular/router';
 import { filter } from 'rxjs';
 import { AccesService, ChampComponent, MESSAGES, MessageEtatComponent, decoderErreur, messagePourErreur } from 'commun';
+import { EcranAccueilComponent } from 'commun/connexion';
 import { RenvoiLien } from '../renvoi-lien';
 
 /**
@@ -38,17 +39,11 @@ type Etat = 'confirmation' | 'verifie' | 'invalide';
  */
 @Component({
   selector: 'lc-verifier-email',
-  imports: [ReactiveFormsModule, RouterLink, ChampComponent, MessageEtatComponent],
+  imports: [ReactiveFormsModule, RouterLink, ChampComponent, MessageEtatComponent, EcranAccueilComponent],
   providers: [RenvoiLien],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="accueil">
-      <section class="accueil__panneau" aria-labelledby="titre-espace">
-        <img class="accueil__logo" src="/logo-laaficare.svg" alt="LaafiCare" width="192" height="40" />
-        <h1 class="accueil__titre" id="titre-espace">Espace Assurance MUNASEB</h1>
-      </section>
-
-      <main class="accueil__formulaire">
+    <lc-accueil>
         <div class="carte formulaire">
           <h2 #titre class="formulaire__titre" tabindex="-1">Vérification de votre email</h2>
 
@@ -110,8 +105,7 @@ type Etat = 'confirmation' | 'verifie' | 'invalide';
             }
           }
         </div>
-      </main>
-    </div>
+    </lc-accueil>
   `,
 })
 export class VerifierEmailPage {

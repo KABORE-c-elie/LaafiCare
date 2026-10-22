@@ -4,7 +4,8 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
-import { MESSAGES, intercepteurAcces, intercepteurJournalDev } from 'commun';
+import { ESPACE_APPLICATION, MESSAGES, intercepteurAcces, intercepteurJournalDev } from 'commun';
+import { ESPACE_MUNASEB } from '../espace';
 import { VerifierEmailPage } from './verifier-email';
 
 // Valeurs fictives (64 caractères hexadécimaux, docs/api.md §2.7).
@@ -32,6 +33,7 @@ describe('VerifierEmailPage', () => {
         // Le journal de développement est branché, comme avec `ng serve`.
         provideHttpClient(withInterceptors([intercepteurAcces, intercepteurJournalDev])),
         provideHttpClientTesting(),
+        { provide: ESPACE_APPLICATION, useValue: ESPACE_MUNASEB },
       ],
     });
     fixture = TestBed.createComponent(VerifierEmailPage);
@@ -223,6 +225,7 @@ describe('VerifierEmailPage', () => {
         { provide: PlatformLocation, useClass: BrowserPlatformLocation },
         provideHttpClient(withInterceptors([intercepteurAcces])),
         provideHttpClientTesting(),
+        { provide: ESPACE_APPLICATION, useValue: ESPACE_MUNASEB },
       ],
     });
     controleur = TestBed.inject(HttpTestingController);

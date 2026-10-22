@@ -20,7 +20,8 @@ export const routes: Routes = [
     path: 'second-facteur',
     title: 'Code de vérification · Assurance MUNASEB',
     canActivate: [exigerSecondFacteur],
-    loadComponent: () => import('./pages/second-facteur').then((m) => m.SecondFacteurPage),
+    // Écran commun (commun/connexion), parcours professionnel (PARCOURS_CONNEXION par défaut).
+    loadComponent: () => import('commun/connexion').then((m) => m.SecondFacteurPage),
   },
   {
     path: 'espaces',

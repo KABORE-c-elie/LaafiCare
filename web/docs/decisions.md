@@ -168,3 +168,20 @@ Décisions A1 à A6 du porteur (2026-10-22). Contrat : `docs/api.md` §2.6 et §
 **Numéro jamais dans la console** : le journal de développement n'écrit que la méthode et le chemin. Un test vérifie que le numéro (saisi, normalisé, chiffres seuls) n'apparaît dans aucune ligne de la console.
 
 **Reporté (A6)** : liste des membres et retrait d'un accès (§2.12).
+
+## 12. Mise en commun pour l'application d'administration (2026-10-22)
+
+Décision B2 du porteur : ce qui sert aux deux applications est dans la bibliothèque `commun`, et rien n'est recopié. Ce lot ne change ni le comportement ni l'affichage de munaseb.
+
+| Où | Quoi |
+|---|---|
+| `commun` (point d'entrée principal) | `PARCOURS_CONNEXION` : routes de l'API (§2.4 ou §2.5) et pages du parcours ; parcours professionnel par défaut, que l'administration remplacera. `AccesService` le lit. `ESPACE_APPLICATION` : logo, titre et phrase du panneau d'accueil, fourni par chaque application. Il est dans le point d'entrée principal parce que la configuration de l'application le fournit au démarrage, et qu'il ne doit pas tirer les écrans de connexion dans le paquet initial. |
+| `commun/connexion` (nouveau point d'entrée secondaire) | `lc-accueil` (panneau et zone centrée), `lc-formulaire-connexion` (email, mot de passe, navigation selon `etape`), `SecondFacteurPage`. La page de connexion de munaseb n'y ajoute que « Renvoyer le lien ». Point d'entrée secondaire, comme `commun/fenetre`, pour rester dans les pages chargées à la demande. |
+| `commun/fenetre` | `IssueFenetre`, la fenêtre de confirmation, et la **fenêtre de motif** générique (textes, longueur maximale, `envoyer`), utilisée pour le rejet d'une demande et, au lot D, pour le refus d'une structure. |
+| `projects/commun/styles/base.css` | Tous les styles communs. La feuille de chaque application ne garde que sa palette et ses pages, et `angular.json` charge `base.css` avant elle. Les couleurs de marque ont des noms neutres : `--principal`, `--principal-survol`, `--accent-fond`, `--sur-principal`. |
+
+**Tests des écrans communs** : les tests de `commun` ne couvrent que `projects/commun/src`, et `commun` s'y résout vers la bibliothèque construite (`dist/commun`). Les écrans des points d'entrée secondaires sont donc testés depuis l'application qui les utilise, après `ng build commun` (ordre de `npm test`). Il en allait déjà ainsi pour `commun/fenetre`.
+
+**Même affichage, vérifié** : 9 captures de Chrome (connexion, vérification de l'email, second facteur, choix de l'espace, demandes, détail, fenêtre de rejet, invitations, invitation envoyée), avant et après le lot, sur la construction de production avec un faux backend. Les 9 sont identiques au pixel près, avec la même empreinte SHA-256.
+
+**Défaut corrigé (2026-10-22, commit séparé)** : sur l'écran du second facteur, « Valider » rechargeait la page au lieu d'envoyer le code, et la session (en mémoire) était perdue. Le `<form>` avait `(ngSubmit)` sans `[formGroup]`. Avec les formulaires réactifs, seule `FormGroupDirective` (sélecteur `[formGroup]`) émet `ngSubmit` ; `NgForm` est dans `FormsModule`. Le navigateur faisait donc sa soumission native. Corrigé par un `FormGroup`. Un test vérifie que l'évènement `submit` est annulé et que le code part : sans le correctif, ses 4 cas échouent.

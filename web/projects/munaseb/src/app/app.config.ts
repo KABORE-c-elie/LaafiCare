@@ -3,8 +3,9 @@ import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { ApplicationConfig, LOCALE_ID, isDevMode, provideBrowserGlobalErrorListeners } from '@angular/core';
 import { provideServiceWorker } from '@angular/service-worker';
 import { provideRouter, withComponentInputBinding } from '@angular/router';
-import { GESTION_SESSION, intercepteurAcces } from 'commun';
+import { ESPACE_APPLICATION, GESTION_SESSION, intercepteurAcces } from 'commun';
 import { routes } from './app.routes';
+import { ESPACE_MUNASEB } from './espace';
 import { intercepteursDeveloppement } from '../environments/environment';
 import { GestionSessionMunaseb } from './gestion-session-munaseb';
 
@@ -24,6 +25,9 @@ export const appConfig: ApplicationConfig = {
     // reçoit la base des adresses par APP_BASE_HREF (angular.dev/api/common/APP_BASE_HREF).
     { provide: APP_BASE_HREF, useValue: '/' },
     { provide: GESTION_SESSION, useClass: GestionSessionMunaseb },
+    // Panneau d'accueil des écrans communs (commun/connexion). Le parcours de
+    // connexion reste le parcours professionnel, valeur par défaut de PARCOURS_CONNEXION.
+    { provide: ESPACE_APPLICATION, useValue: ESPACE_MUNASEB },
     // Service worker officiel (angular.dev/ecosystem/service-workers) : met en cache les
     // fichiers de l'application seulement (ngsw-config.json, aucun `dataGroups` :
     // jamais les réponses de /api). Désactivé en développement.

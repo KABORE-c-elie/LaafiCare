@@ -11,6 +11,7 @@ import {
   ReponseConnexionProfessionnelle,
   ReponseSecondFacteur,
 } from '../api/types';
+import { PARCOURS_CONNEXION } from './parcours';
 import { SessionService } from './session';
 
 /**
@@ -25,6 +26,7 @@ export const FENETRE_RELANCE_RENOUVELLEMENT_MS = 30_000;
 export class AccesService {
   private readonly http = inject(HttpClient);
   private readonly session = inject(SessionService);
+  private readonly parcours = inject(PARCOURS_CONNEXION);
 
   /** Horloge monotone (MDN, `performance.now()`), remplaçable dans les tests. */
   horloge: () => number = () => performance.now();
@@ -35,7 +37,7 @@ export class AccesService {
   async connecter(email: string, motDePasse: string): Promise<'complete' | 'second_facteur'> {
     const reponse = await firstValueFrom(
       this.http.post<ReponseConnexionProfessionnelle>(
-        '/api/professionnels/connexion',
+        this.parcours.routeConnexion,
         { email, mot_de_passe: motDePasse },
         { context: contexteJeton('aucun'), timeout: DELAI_REQUETE_MS },
       ),
@@ -52,7 +54,7 @@ export class AccesService {
   /** Second temps (§2.4) : un seul des deux champs est envoyé. */
   async validerSecondFacteur(corps: CorpsSecondFacteur): Promise<void> {
     const reponse = await firstValueFrom(
-      this.http.post<ReponseSecondFacteur>('/api/professionnels/connexion/second-facteur', corps, {
+      this.http.post<ReponseSecondFacteur>(this.parcours.routeSecondFacteur, corps, {
         context: contexteJeton('intermediaire'),
         timeout: DELAI_REQUETE_MS,
       }),

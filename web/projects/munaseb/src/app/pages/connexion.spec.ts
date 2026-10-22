@@ -2,7 +2,8 @@ import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import { SessionService, intercepteurAcces } from 'commun';
+import { ESPACE_APPLICATION, SessionService, intercepteurAcces } from 'commun';
+import { ESPACE_MUNASEB } from '../espace';
 import { ConnexionPage } from './connexion';
 
 function attendre(): Promise<void> {
@@ -22,6 +23,7 @@ describe('ConnexionPage', () => {
         provideRouter([]),
         provideHttpClient(withInterceptors([intercepteurAcces])),
         provideHttpClientTesting(),
+        { provide: ESPACE_APPLICATION, useValue: ESPACE_MUNASEB },
       ],
     });
     fixture = TestBed.createComponent(ConnexionPage);

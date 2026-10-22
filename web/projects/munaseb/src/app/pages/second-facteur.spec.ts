@@ -2,9 +2,12 @@ import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import { MESSAGES, SessionService, intercepteurAcces } from 'commun';
+import { ESPACE_APPLICATION, MESSAGES, SessionService, intercepteurAcces } from 'commun';
+import { SecondFacteurPage } from 'commun/connexion';
+import { ESPACE_MUNASEB } from '../espace';
 import { attendre } from './donnees-test';
-import { SecondFacteurPage } from './second-facteur';
+
+// Écran commun (commun/connexion), essayé avec le parcours professionnel par défaut.
 
 const ROUTE = '/api/professionnels/connexion/second-facteur';
 const PAIRE = { etape: 'complete', jeton_acces: 'a', expire_dans: 900, jeton_renouvellement: 'r' };
@@ -18,7 +21,12 @@ describe('SecondFacteurPage', () => {
   beforeEach(async () => {
     TestBed.configureTestingModule({
       imports: [SecondFacteurPage],
-      providers: [provideRouter([]), provideHttpClient(withInterceptors([intercepteurAcces])), provideHttpClientTesting()],
+      providers: [
+        provideRouter([]),
+        provideHttpClient(withInterceptors([intercepteurAcces])),
+        provideHttpClientTesting(),
+        { provide: ESPACE_APPLICATION, useValue: ESPACE_MUNASEB },
+      ],
     });
     session = TestBed.inject(SessionService);
     session.ouvrirSecondFacteur('jeton-intermediaire');

@@ -3,9 +3,8 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { Invitation, PageInvitations, intercepteurAcces, intercepteurJournalDev } from 'commun';
-import { FenetreService } from 'commun/fenetre';
+import { DonneesConfirmation, FenetreService, IssueFenetre } from 'commun/fenetre';
 import { from, of } from 'rxjs';
-import { DonneesConfirmation, IssueFenetre } from '../fenetres';
 import { INVITATIONS_PAR_PAGE } from '../invitations';
 import { attendre } from './donnees-test';
 import { InvitationsPage, MESSAGES_INVITATION } from './invitations';

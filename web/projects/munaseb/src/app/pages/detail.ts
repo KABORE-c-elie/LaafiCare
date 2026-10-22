@@ -29,16 +29,10 @@ import {
   libelleStatut,
   messagePourErreur,
 } from 'commun';
-import { FenetreService } from 'commun/fenetre';
+import { DonneesMotif, FenetreMotifComponent, FenetreService, IssueFenetre } from 'commun/fenetre';
 import { firstValueFrom } from 'rxjs';
 import { CadreComponent } from '../cadre';
-import {
-  DonneesRejet,
-  DonneesValidation,
-  FenetreRejetComponent,
-  FenetreValidationComponent,
-  IssueFenetre,
-} from '../fenetres';
+import { DonneesValidation, FenetreValidationComponent, donneesRejet } from '../fenetres';
 import { RemboursementsService, libelleActe, nomAdherent } from '../remboursements';
 
 export const MESSAGE_PLAFOND_ATTEINT =
@@ -278,11 +272,11 @@ export class DetailPage implements OnInit {
     }
     this.envoiEnCours.set(true);
     this.message.set(null);
-    const donnees: DonneesRejet = { envoyer: (motif) => this.remboursements.rejeter(this.id(), motif) };
-    const ref = this.fenetres.ouvrir<IssueFenetre<void>, DonneesRejet, FenetreRejetComponent>(
-      FenetreRejetComponent,
+    const donnees = donneesRejet((motif) => this.remboursements.rejeter(this.id(), motif));
+    const ref = this.fenetres.ouvrir<IssueFenetre<void>, DonneesMotif, FenetreMotifComponent>(
+      FenetreMotifComponent,
       donnees,
-      'titre-rejet',
+      donnees.idTitre,
     );
     const issue = await firstValueFrom(ref.closed);
     if (issue?.ok === true) {

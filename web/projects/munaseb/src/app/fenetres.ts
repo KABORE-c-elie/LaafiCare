@@ -1,12 +1,8 @@
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
-import { FormsModule } from '@angular/forms';
-import { ChampComponent, FcfaPipe, ReponseValidation, codeErreur } from 'commun';
-import { FenetreComponent } from 'commun/fenetre';
+import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
+import { FcfaPipe, ReponseValidation } from 'commun';
+import { DonneesMotif, FenetreComponent, IssueFenetre } from 'commun/fenetre';
 import { MOTIF_MAX } from './remboursements';
-
-/** Fin d'une fenêtre d'action : succès avec la réponse, ou erreur laissée à la page. `undefined` : annulée. */
-export type IssueFenetre<R> = { ok: true; resultat: R } | { ok: false; erreur: unknown };
 
 export interface DonneesValidation {
   montantDemande: number;
@@ -14,20 +10,27 @@ export interface DonneesValidation {
   envoyer: () => Promise<ReponseValidation>;
 }
 
-export interface DonneesRejet {
-  envoyer: (motif: string) => Promise<void>;
-}
-
-export interface DonneesConfirmation<R> {
-  titre: string;
-  texte: string;
-  /** Libellé du bouton qui confirme, ex. « Inviter comme responsable ». */
-  action: string;
-  envoyer: () => Promise<R>;
-}
-
 export const MESSAGE_MOTIF_VIDE = 'Écrivez le motif du rejet.';
 export const MESSAGE_MOTIF_TROP_LONG = 'Le motif ne doit pas dépasser 1 000 caractères.';
+
+/**
+ * Fenêtre du rejet d'une demande (docs/api.md §2.3.6) : la fenêtre de motif
+ * commune (`commun/fenetre`), avec les textes de l'agent MUNASEB.
+ */
+export function donneesRejet(envoyer: (motif: string) => Promise<void>): DonneesMotif {
+  return {
+    titre: 'Rejeter la demande',
+    idTitre: 'titre-rejet',
+    libelle: 'Motif du rejet',
+    action: 'Rejeter la demande',
+    rappel: "Le motif n'apparaît pas dans la notification de l'adhérent.",
+    max: MOTIF_MAX,
+    maxAffiche: '1 000',
+    messageVide: MESSAGE_MOTIF_VIDE,
+    messageTropLong: MESSAGE_MOTIF_TROP_LONG,
+    envoyer,
+  };
+}
 
 /** Confirmation de la validation (docs/api.md §2.3.6). L'envoi se fait ici : jamais deux envois. */
 @Component({
@@ -72,142 +75,6 @@ export class FenetreValidationComponent {
       this.ref.close({ ok: true, resultat: await this.donnees.envoyer() });
     } catch (erreur) {
       this.ref.close({ ok: false, erreur });
-    } finally {
-      this.ref.disableClose = false;
-      this.envoiEnCours.set(false);
-    }
-  }
-}
-
-/**
- * Confirmation d'une action avant l'appel (invitation d'un responsable,
- * annulation d'une invitation). Comme la validation, l'envoi se fait dans la
- * fenêtre : jamais deux envois.
- */
-@Component({
-  selector: 'lc-fenetre-confirmation',
-  imports: [FenetreComponent],
-  changeDetection: ChangeDetectionStrategy.OnPush,
-  template: `
-    <lc-fenetre [titre]="donnees.titre" idTitre="titre-confirmation">
-      <p>{{ donnees.texte }}</p>
-      <div actions>
-        <button type="button" class="bouton bouton--secondaire" [disabled]="envoiEnCours()" (click)="annuler()">
-          Retour
-        </button>
-        <button type="button" class="bouton bouton--principal" [disabled]="envoiEnCours()" (click)="confirmer()">
-          {{ envoiEnCours() ? 'Envoi…' : donnees.action }}
-        </button>
-      </div>
-    </lc-fenetre>
-  `,
-})
-export class FenetreConfirmationComponent {
-  protected readonly donnees = inject<DonneesConfirmation<unknown>>(DIALOG_DATA);
-  private readonly ref = inject<DialogRef<IssueFenetre<unknown>>>(DialogRef);
-  protected readonly envoiEnCours = signal(false);
-
-  annuler(): void {
-    this.ref.close();
-  }
-
-  async confirmer(): Promise<void> {
-    if (this.envoiEnCours()) {
-      return;
-    }
-    this.envoiEnCours.set(true);
-    this.ref.disableClose = true;
-    try {
-      this.ref.close({ ok: true, resultat: await this.donnees.envoyer() });
-    } catch (erreur) {
-      this.ref.close({ ok: false, erreur });
-    } finally {
-      this.ref.disableClose = false;
-      this.envoiEnCours.set(false);
-    }
-  }
-}
-
-/** Rejet avec motif obligatoire, 1 000 caractères au plus (docs/api.md §2.3.6). */
-@Component({
-  selector: 'lc-fenetre-rejet',
-  imports: [FenetreComponent, ChampComponent, FormsModule],
-  changeDetection: ChangeDetectionStrategy.OnPush,
-  template: `
-    <lc-fenetre titre="Rejeter la demande" idTitre="titre-rejet">
-      <lc-champ libelle="Motif du rejet" pour="motif" [erreur]="erreur()">
-        <textarea
-          id="motif"
-          class="champ__saisie"
-          rows="5"
-          [ngModel]="motif()"
-          (ngModelChange)="saisir($event)"
-          [attr.aria-invalid]="erreur() !== null"
-          [attr.aria-describedby]="erreur() !== null ? 'motif-erreur motif-aide' : 'motif-aide'"
-        ></textarea>
-      </lc-champ>
-      <p class="champ__aide" id="motif-aide">
-        <span [class.compteur--depasse]="longueur() > max">{{ longueur() }} / 1 000 caractères</span>.
-        Le motif n'apparaît pas dans la notification de l'adhérent.
-      </p>
-      <div actions>
-        <button type="button" class="bouton bouton--secondaire" [disabled]="envoiEnCours()" (click)="annuler()">
-          Annuler
-        </button>
-        <button type="button" class="bouton bouton--sombre" [disabled]="envoiEnCours()" (click)="confirmer()">
-          {{ envoiEnCours() ? 'Envoi…' : 'Rejeter la demande' }}
-        </button>
-      </div>
-    </lc-fenetre>
-  `,
-})
-export class FenetreRejetComponent {
-  private readonly donnees = inject<DonneesRejet>(DIALOG_DATA);
-  private readonly ref = inject<DialogRef<IssueFenetre<void>>>(DialogRef);
-
-  protected readonly max = MOTIF_MAX;
-  protected readonly motif = signal('');
-  protected readonly erreur = signal<string | null>(null);
-  protected readonly envoiEnCours = signal(false);
-  // Compté en caractères (points de code), pas en unités UTF-16 : un emoji compte pour un.
-  protected readonly longueur = computed(() => [...this.motif()].length);
-
-  saisir(valeur: string): void {
-    this.motif.set(valeur);
-    this.erreur.set(null);
-  }
-
-  annuler(): void {
-    this.ref.close();
-  }
-
-  async confirmer(): Promise<void> {
-    if (this.envoiEnCours()) {
-      return;
-    }
-    if (this.motif().trim() === '') {
-      this.erreur.set(MESSAGE_MOTIF_VIDE);
-      return;
-    }
-    if (this.longueur() > MOTIF_MAX) {
-      this.erreur.set(MESSAGE_MOTIF_TROP_LONG);
-      return;
-    }
-    this.envoiEnCours.set(true);
-    this.ref.disableClose = true;
-    try {
-      await this.donnees.envoyer(this.motif());
-      this.ref.close({ ok: true, resultat: undefined });
-    } catch (erreur) {
-      // Le serveur garde le dernier mot (§2.3.6) : ses deux refus du motif s'affichent ici.
-      const code = codeErreur(erreur);
-      if (code === 'motif_vide') {
-        this.erreur.set(MESSAGE_MOTIF_VIDE);
-      } else if (code === 'motif_trop_long') {
-        this.erreur.set(MESSAGE_MOTIF_TROP_LONG);
-      } else {
-        this.ref.close({ ok: false, erreur });
-      }
     } finally {
       this.ref.disableClose = false;
       this.envoiEnCours.set(false);

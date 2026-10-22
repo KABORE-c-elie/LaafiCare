@@ -59,7 +59,7 @@
                 "input": "projects/munaseb/public"
               }
             ],
-            "styles": ["projects/munaseb/src/styles.css"]
+            "styles": ["projects/commun/styles/base.css", "projects/munaseb/src/styles.css"]
           },
           "configurations": {
             "production": {

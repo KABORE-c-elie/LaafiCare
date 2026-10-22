@@ -3,9 +3,8 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { DemandeDetail, StatutDemande, intercepteurAcces } from 'commun';
-import { FenetreService } from 'commun/fenetre';
+import { FenetreService, IssueFenetre } from 'commun/fenetre';
 import { of } from 'rxjs';
-import { IssueFenetre } from '../fenetres';
 import { DetailPage, MESSAGE_PLAFOND_ATTEINT } from './detail';
 import { attendre, demandeDetail } from './donnees-test';
 

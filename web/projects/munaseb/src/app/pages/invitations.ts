@@ -15,10 +15,9 @@ import {
   formaterDateBurkina,
   messagePourErreur,
 } from 'commun';
-import { FenetreService } from 'commun/fenetre';
+import { DonneesConfirmation, FenetreConfirmationComponent, FenetreService, IssueFenetre } from 'commun/fenetre';
 import { firstValueFrom } from 'rxjs';
 import { CadreComponent } from '../cadre';
-import { DonneesConfirmation, FenetreConfirmationComponent, IssueFenetre } from '../fenetres';
 import { InvitationsService, libelleStatutInvitation } from '../invitations';
 import { LIBELLES_ROLE, RoleMunaseb, estRoleMunaseb } from '../roles';
 

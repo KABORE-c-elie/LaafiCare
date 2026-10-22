@@ -1,19 +1,16 @@
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { HttpErrorResponse } from '@angular/common/http';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import {
-  FenetreRejetComponent,
-  FenetreValidationComponent,
-  MESSAGE_MOTIF_TROP_LONG,
-  MESSAGE_MOTIF_VIDE,
-} from './fenetres';
+import { FenetreMotifComponent } from 'commun/fenetre';
+import { FenetreValidationComponent, MESSAGE_MOTIF_TROP_LONG, MESSAGE_MOTIF_VIDE, donneesRejet } from './fenetres';
 
 function attendre(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve));
 }
 
-describe('FenetreRejetComponent', () => {
-  let fixture: ComponentFixture<FenetreRejetComponent>;
+// Fenêtre de motif commune (commun/fenetre), avec les textes du rejet d'une demande.
+describe('FenetreMotifComponent (rejet d’une demande)', () => {
+  let fixture: ComponentFixture<FenetreMotifComponent>;
   let envoyer: ReturnType<typeof vi.fn<(motif: string) => Promise<void>>>;
   let ref: { close: ReturnType<typeof vi.fn>; disableClose: boolean };
 
@@ -21,13 +18,13 @@ describe('FenetreRejetComponent', () => {
     envoyer = vi.fn<(motif: string) => Promise<void>>(() => Promise.resolve());
     ref = { close: vi.fn(), disableClose: false };
     TestBed.configureTestingModule({
-      imports: [FenetreRejetComponent],
+      imports: [FenetreMotifComponent],
       providers: [
-        { provide: DIALOG_DATA, useValue: { envoyer } },
+        { provide: DIALOG_DATA, useValue: donneesRejet(envoyer) },
         { provide: DialogRef, useValue: ref },
       ],
     });
-    fixture = TestBed.createComponent(FenetreRejetComponent);
+    fixture = TestBed.createComponent(FenetreMotifComponent);
     await fixture.whenStable();
   });
 
