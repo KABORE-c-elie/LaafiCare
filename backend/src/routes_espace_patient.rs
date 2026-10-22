@@ -145,3 +145,280 @@ pub async fn marquer_toutes_lues(patient: PatientAuthentifie, State(state): Stat
         Err(_) => reponse_erreur_interne("notifications lues", "erreur de la base").into_response(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+    use laaficare_backend::config::CleTotp;
+    use laaficare_backend::demande_remboursement_munaseb::{self as remboursement, Acte, AffectationAgent, TypeActeMunaseb};
+    use laaficare_backend::jwt::JwtService;
+    use laaficare_backend::nip;
+    use laaficare_backend::sms::SmsSenderConsole;
+    use serde_json::Value;
+    use sqlx::PgPool;
+    use std::sync::Arc;
+
+    // Base temporaire par test ; données fictives.
+
+    fn etat(pool: PgPool) -> AppState {
+        AppState {
+            db: pool,
+            jwt: JwtService::new(&"a".repeat(32)),
+            sms: Arc::new(SmsSenderConsole),
+            cle_totp: Arc::new(CleTotp::depuis_octets([7; 32])),
+            email: Arc::new(laaficare_backend::email::EmailSenderConsole),
+            url_application_web: Arc::from("http://localhost:4200"),
+            contact_securite: Arc::from("securite@example.org"),
+            taches_reinitialisation: Arc::new(Default::default()),
+        }
+    }
+
+    fn nip_valide(payload: &str) -> String {
+        (0..=9).map(|d| format!("{payload}{d}")).find(|n| nip::valider(n)).unwrap()
+    }
+
+    /// Compte patient, dossier, contrat et période en cours. Renvoie
+    /// (compte, NIP).
+    async fn adherent(pool: &PgPool, telephone: &str, payload_nip: &str, carte: &str) -> (Uuid, String) {
+        let nip = nip_valide(payload_nip);
+        let u: Uuid =
+            sqlx::query_scalar("INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('OUEDRAOGO', 'Awa', $1) RETURNING id")
+                .bind(telephone)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let compte: Uuid = sqlx::query_scalar(
+            "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'patient', 'x') RETURNING id",
+        )
+        .bind(u)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let patient_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO patient (utilisateur_id, nip, date_naissance, lieu_naissance) \
+             VALUES ($1, $2, '2000-01-01', 'Ouagadougou') RETURNING id",
+        )
+        .bind(u)
+        .bind(&nip)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let contrat: Uuid = sqlx::query_scalar(
+            "INSERT INTO contrat_assurance_munaseb (patient_id, numero_carte, ufr, universite, num_matricule) \
+             VALUES ($1, $2, 'UFR fictive', 'Université fictive', 'MAT-FICTIF') RETURNING id",
+        )
+        .bind(patient_id)
+        .bind(carte)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO periode_adhesion_munaseb (contrat_id, date_paiement, date_debut, date_fin) \
+             VALUES ($1, CURRENT_DATE - 30, CURRENT_DATE - 30, CURRENT_DATE + 300)",
+        )
+        .bind(contrat)
+        .execute(pool)
+        .await
+        .unwrap();
+        (compte, nip)
+    }
+
+    async fn agent(pool: &PgPool) -> AffectationAgent {
+        let u: Uuid = sqlx::query_scalar(
+            "INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('KABRE', 'Inoussa', '+22670030098') RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let compte: Uuid = sqlx::query_scalar(
+            "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'professionnel', 'x') RETURNING id",
+        )
+        .bind(u)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let structure_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO structure (type_structure, nom, telephone, telephone_urgence, region, email, commune, province, \
+                                    latitude, longitude, createur_compte_id, statut) \
+             VALUES ('munaseb', 'MUNASEB', '+22670000000', '+22670000000', 'Région fictive', 'structure@example.org', \
+                     'Commune fictive', 'Province fictive', 12.371400, -1.519700, $1, 'validee') RETURNING id",
+        )
+        .bind(compte)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let affectation_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO affectation (compte_id, structure_id, role) VALUES ($1, $2, 'agent_assurance_munaseb') RETURNING id",
+        )
+        .bind(compte)
+        .bind(structure_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        AffectationAgent { affectation_id, structure_id }
+    }
+
+    async fn demande(pool: &PgPool, nip: &str, partenaire_id: Uuid, reference: &str) -> Uuid {
+        remboursement::creer_depuis_acte(
+            pool,
+            &Acte {
+                nip: nip.to_string(),
+                partenaire_id,
+                type_acte: TypeActeMunaseb::Pharmacie,
+                reference_acte: reference.to_string(),
+                date_acte: chrono::Utc::now().date_naive(),
+                montant_acte_fcfa: 10_000,
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn notifications_de(pool: &PgPool, nip: &str) -> Vec<Uuid> {
+        sqlx::query_scalar(
+            "SELECT n.id FROM notification n JOIN patient p ON p.utilisateur_id = n.utilisateur_id \
+             WHERE p.nip = $1 ORDER BY n.id",
+        )
+        .bind(nip)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    /// Statut et corps JSON (`Null` si vide).
+    async fn lire(reponse: Response) -> (StatusCode, Value) {
+        let statut = reponse.status();
+        let octets = to_bytes(reponse.into_body(), usize::MAX).await.unwrap();
+        (statut, if octets.is_empty() { Value::Null } else { serde_json::from_slice(&octets).unwrap() })
+    }
+
+    fn ids(valeur: &Value, cle: &str) -> Vec<String> {
+        valeur[cle].as_array().unwrap().iter().map(|e| e["id"].as_str().unwrap().to_string()).collect()
+    }
+
+    /// E2 et E9, par les six routes, avec deux adhérents A et B qui ont
+    /// chacun un contrat, des demandes et des notifications :
+    /// - B ne voit jamais rien de A, sur chaque route (droits, liste,
+    ///   détail, notifications, marquer une, marquer toutes) ;
+    /// - aucune réponse ne contient de NIP, de `reference_acte`, de nom
+    ///   d'agent ni d'identifiant d'affectation ou de structure d'agent ;
+    /// - motif de rejet dans le détail, jamais dans la liste ;
+    /// - pagination par `suivant` (demandes et notifications), limite hors
+    ///   bornes en 400 ;
+    /// - marquer deux fois la même notification : 204 puis 204.
+    #[sqlx::test]
+    #[ignore]
+    async fn six_routes_et_donnees_d_un_autre_patient(pool: PgPool) {
+        let state = etat(pool.clone());
+        let ag = agent(&pool).await;
+        let partenaire: Uuid = sqlx::query_scalar(
+            "INSERT INTO partenaire_sante_munaseb (nom, type, ville, telephone) \
+             VALUES ('Pharmacie fictive', 'pharmacie', 'Ouagadougou', '+22670030099') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let (a, nip_a) = adherent(&pool, "+22670030001", "900000000030001", "CARTE-A").await;
+        let (b, nip_b) = adherent(&pool, "+22670030002", "900000000030002", "CARTE-B").await;
+        let a1 = demande(&pool, &nip_a, partenaire, "REF-SECRETE-A1").await;
+        let a2 = demande(&pool, &nip_a, partenaire, "REF-SECRETE-A2").await;
+        remboursement::rejeter(&pool, a2, ag, "Motif fictif A").await.unwrap();
+        let b1 = demande(&pool, &nip_b, partenaire, "REF-SECRETE-B1").await;
+        let notif_a = notifications_de(&pool, &nip_a).await;
+        let notif_b = notifications_de(&pool, &nip_b).await;
+        assert_eq!((notif_a.len(), notif_b.len()), (3, 1), "création ×2 et rejet pour A, création pour B");
+
+        let pa = || PatientAuthentifie { compte_id: a };
+        let pb = || PatientAuthentifie { compte_id: b };
+        let filtre = |limite, avant| RequeteApi(FiltreDemandes { statut: None, limite, avant });
+        let filtre_n = |limite, avant| RequeteApi(FiltreNotifications { limite, avant });
+        let mut corps = Vec::new();
+
+        // 1. Droits : chacun sa carte.
+        let (s, v) = lire(droits(pb(), State(state.clone())).await).await;
+        assert_eq!((s, v["etat"].as_str(), v["numero_carte"].as_str()), (StatusCode::OK, Some("couvert"), Some("CARTE-B")));
+        corps.push(v);
+        let (_, v) = lire(droits(pa(), State(state.clone())).await).await;
+        assert_eq!(v["numero_carte"].as_str(), Some("CARTE-A"));
+        corps.push(v);
+
+        // 2. Liste : B ne voit que la sienne ; A, les siennes, sans motif ;
+        // pagination.
+        let (_, v) = lire(lister_demandes(pb(), State(state.clone()), filtre(None, None)).await).await;
+        assert_eq!(ids(&v, "demandes"), [b1.to_string()]);
+        corps.push(v);
+        let (_, p1) = lire(lister_demandes(pa(), State(state.clone()), filtre(Some(1), None)).await).await;
+        assert_eq!(ids(&p1, "demandes"), [a2.to_string()]);
+        let suivant: Uuid = p1["suivant"].as_str().unwrap().parse().unwrap();
+        let (_, p2) = lire(lister_demandes(pa(), State(state.clone()), filtre(Some(1), Some(suivant))).await).await;
+        assert_eq!(ids(&p2, "demandes"), [a1.to_string()]);
+        let suivant: Uuid = p2["suivant"].as_str().unwrap().parse().unwrap();
+        let (_, p3) = lire(lister_demandes(pa(), State(state.clone()), filtre(Some(1), Some(suivant))).await).await;
+        assert!(ids(&p3, "demandes").is_empty() && p3["suivant"].is_null());
+        for page in [&p1, &p2] {
+            assert!(!page.to_string().contains("Motif fictif") && !page.to_string().contains("motif_rejet"));
+        }
+        corps.extend([p1, p2]);
+        let (s, _) = lire(lister_demandes(pa(), State(state.clone()), filtre(Some(101), None)).await).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+
+        // 3. Détail : celui de A introuvable pour B ; A voit son motif.
+        let (s, v) = lire(detail_demande(pb(), State(state.clone()), CheminApi(a2)).await).await;
+        assert_eq!((s, v["code"].as_str()), (StatusCode::NOT_FOUND, Some("demande_inconnue")));
+        let (s, v) = lire(detail_demande(pa(), State(state.clone()), CheminApi(a2)).await).await;
+        assert_eq!((s, v["motif_rejet"].as_str()), (StatusCode::OK, Some("Motif fictif A")));
+        corps.push(v);
+
+        // 4. Notifications : B ne voit que la sienne ; pagination de A.
+        let (_, v) = lire(lister_notifications(pb(), State(state.clone()), filtre_n(None, None)).await).await;
+        assert_eq!(ids(&v, "notifications"), [notif_b[0].to_string()]);
+        assert_eq!(v["non_lues"], 1);
+        corps.push(v);
+        let (_, n1) = lire(lister_notifications(pa(), State(state.clone()), filtre_n(Some(2), None)).await).await;
+        assert_eq!(n1["non_lues"], 3);
+        let suivant: Uuid = n1["suivant"].as_str().unwrap().parse().unwrap();
+        let (_, n2) = lire(lister_notifications(pa(), State(state.clone()), filtre_n(Some(2), Some(suivant))).await).await;
+        let mut vus = ids(&n1, "notifications");
+        vus.extend(ids(&n2, "notifications"));
+        assert_eq!(vus, notif_a.iter().rev().map(Uuid::to_string).collect::<Vec<_>>());
+        assert!(n2["suivant"].is_null());
+        corps.extend([n1, n2]);
+
+        // 5. Marquer une notification de A en étant B : 404, rien ne change ;
+        // A marque la sienne deux fois : 204, 204.
+        let (s, v) = lire(marquer_lue(pb(), State(state.clone()), CheminApi(notif_a[0])).await).await;
+        assert_eq!((s, v["code"].as_str()), (StatusCode::NOT_FOUND, Some("notification_inconnue")));
+        for _ in 0..2 {
+            let (s, _) = lire(marquer_lue(pa(), State(state.clone()), CheminApi(notif_a[0])).await).await;
+            assert_eq!(s, StatusCode::NO_CONTENT);
+        }
+
+        // 6. B marque toutes les siennes : celles de A ne changent pas.
+        let (s, _) = lire(marquer_toutes_lues(pb(), State(state.clone())).await).await;
+        assert_eq!(s, StatusCode::NO_CONTENT);
+        let (_, v) = lire(lister_notifications(pa(), State(state.clone()), filtre_n(None, None)).await).await;
+        assert_eq!(v["non_lues"], 2);
+        let (_, v) = lire(lister_notifications(pb(), State(state.clone()), filtre_n(None, None)).await).await;
+        assert_eq!(v["non_lues"], 0);
+
+        // Aucune réponse ne contient de NIP, de référence d'acte, ni rien de
+        // l'agent.
+        let interdits = [
+            nip_a.clone(),
+            nip_b.clone(),
+            "REF-SECRETE".to_string(),
+            "KABRE".to_string(),
+            "Inoussa".to_string(),
+            ag.affectation_id.to_string(),
+            ag.structure_id.to_string(),
+            "MAT-FICTIF".to_string(),
+        ];
+        for v in &corps {
+            let texte = v.to_string();
+            for interdit in &interdits {
+                assert!(!texte.contains(interdit.as_str()), "{interdit} dans {texte}");
+            }
+        }
+    }
+}
