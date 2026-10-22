@@ -646,6 +646,44 @@ textarea.champ__saisie {
   color: var(--texte-secondaire);
 }
 
+/* ---------- Invitations du responsable ---------- */
+
+.section {
+  margin-bottom: 1.5rem;
+}
+
+.section__titre {
+  font-size: 1.125rem;
+  margin: 0 0 1rem;
+}
+
+.barre .section__titre {
+  margin: 0;
+}
+
+/* Groupe de boutons radio : la légende sert de libellé (WCAG 2.2, 1.3.1). */
+.choix {
+  border: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+}
+
+.choix__option {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+  min-height: 44px;
+}
+
+.choix__option input {
+  height: 20px;
+  margin: 0;
+  width: 20px;
+}
+
 /* ---------- Détail d'une demande ---------- */
 
 .detail__entete {

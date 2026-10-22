@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRouteSnapshot, CanActivateFn, Router, RouterStateSnapshot, UrlTree, provideRouter } from '@angular/router';
 import { Affectation, SessionService } from 'commun';
-import { exigerConnecte, exigerEnExercice, exigerSecondFacteur } from './gardes';
+import { exigerConnecte, exigerEnExercice, exigerRole, exigerSecondFacteur } from './gardes';
 
 const PAIRE = { jeton_acces: 'a', expire_dans: 900, jeton_renouvellement: 'r' };
 const AFFECTATION: Affectation = {
@@ -50,6 +50,15 @@ describe('gardes de route', () => {
     expect(executer(exigerConnecte)).toBe(true);
     session.ouvrirEnExercice(PAIRE, AFFECTATION);
     expect(executer(exigerConnecte)).toBe(true);
+  });
+
+  it('chaque rôle n’ouvre que ses pages : un autre rôle revient au choix de l’espace', () => {
+    session.ouvrirEnExercice(PAIRE, AFFECTATION);
+    expect(executer(exigerRole('agent_assurance_munaseb'))).toBe(true);
+    expect(executer(exigerRole('responsable'))).toBe('/espaces');
+    session.ouvrirEnExercice(PAIRE, { ...AFFECTATION, role: 'responsable' });
+    expect(executer(exigerRole('responsable'))).toBe(true);
+    expect(executer(exigerRole('agent_assurance_munaseb'))).toBe('/espaces');
   });
 
   it('le second facteur exige un jeton intermédiaire', () => {

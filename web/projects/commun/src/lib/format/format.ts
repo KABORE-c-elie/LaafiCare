@@ -34,6 +34,17 @@ export function formaterJour(jour: string): string {
   return JOUR.format(new Date(Date.UTC(Number(annee), Number(mois) - 1, Number(quantieme))));
 }
 
+const DATE_BURKINA = new Intl.DateTimeFormat(LOCALE, { dateStyle: 'short', timeZone: FUSEAU_BURKINA });
+
+/**
+ * Jour d'un instant RFC 3339 au Burkina, ex. `29/10/2026` : la forme du SMS
+ * d'invitation (docs/api.md §2.10, « avant le JJ/MM/AAAA »).
+ */
+export function formaterDateBurkina(instant: string): string {
+  const date = new Date(instant);
+  return Number.isNaN(date.getTime()) ? instant : DATE_BURKINA.format(date);
+}
+
 /** Date et heure RFC 3339 en UTC (docs/api.md §1.1), affichée à l'heure du Burkina. */
 export function formaterDateHeure(instant: string): string {
   const date = new Date(instant);

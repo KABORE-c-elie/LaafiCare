@@ -1,5 +1,5 @@
 import { Routes } from '@angular/router';
-import { exigerConnecte, exigerEnExercice, exigerSecondFacteur } from './gardes';
+import { exigerConnecte, exigerEnExercice, exigerRole, exigerSecondFacteur } from './gardes';
 
 // Chargement différé des pages (loadComponent, angular.dev/guide/routing/loading-strategies),
 // sauf la connexion, première page vue.
@@ -31,14 +31,20 @@ export const routes: Routes = [
   {
     path: 'demandes',
     title: 'Demandes de remboursement · Assurance MUNASEB',
-    canActivate: [exigerEnExercice],
+    canActivate: [exigerEnExercice, exigerRole('agent_assurance_munaseb')],
     loadComponent: () => import('./pages/demandes').then((m) => m.DemandesPage),
   },
   {
     path: 'demandes/:id',
     title: 'Détail de la demande · Assurance MUNASEB',
-    canActivate: [exigerEnExercice],
+    canActivate: [exigerEnExercice, exigerRole('agent_assurance_munaseb')],
     loadComponent: () => import('./pages/detail').then((m) => m.DetailPage),
+  },
+  {
+    path: 'invitations',
+    title: 'Invitations · Assurance MUNASEB',
+    canActivate: [exigerEnExercice, exigerRole('responsable')],
+    loadComponent: () => import('./pages/invitations').then((m) => m.InvitationsPage),
   },
   { path: '**', redirectTo: 'connexion' },
 ];

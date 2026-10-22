@@ -83,7 +83,7 @@ Pour tester le backend depuis l'application, sans Postman : en développement se
 |---|---|---|
 | **Styles en ligne de la CDK** | La CDK insère 3 éléments `<style>` (overlay, texte masqué, conteneur de fenêtre), bloqués par `style-src 'self'`. L'affichage reste correct (mêmes règles dans la feuille globale), mais la console affiche ces blocages quand une fenêtre s'ouvre. | **On ne touche pas à la CSP** (porteur, 2026-10-20). Les empreintes `sha256` ne sont pas ajoutées. |
 | **Trusted Types** | Bloquent l'enregistrement du service worker d'Angular : `navigator.serviceWorker.register` exige un `TrustedScriptURL`, d'où l'erreur `NG05604`. | Non activés ; les activer demanderait une politique propre à l'application et un enregistrement du service worker fait à la main. |
-| **vite 8.3.0** (`npm audit` : 1 faille élevée, 1 modérée, `launch-editor`) | Épinglé exactement par `@angular/build` 22.2.3. Concerne le serveur de développement seulement, pas la construction de production. | **Attendre `@angular/build` 22.2.4** (porteur, 2026-10-20) : ni `overrides`, ni retour à la 22.1.9. `ng serve` reste sur `localhost`, jamais `--host`. `npm audit` est relancé au début de chaque séance. |
+| **vite 8.3.0** (`npm audit` du 2026-10-22 : 1 faille élevée, 1 faible ; `launch-editor` et vite, domaine vulnérable 8.3.0 à 8.3.2) | Épinglé exactement par `@angular/build` 22.2.3, **et encore par la 22.2.4** sortie le 2026-10-22, qui ne corrige donc rien. Concerne le serveur de développement seulement, pas la construction de production. | **Pas de mise à jour vers 22.2.4** (porteur, 2026-10-22) : tous les paquets Angular restent sur la même version ; on attend une version qui fixe **vite en 8.3.3 ou plus**. Ni `overrides`, ni retour à la 22.1.9. `ng serve` reste sur `localhost`, jamais `--host`. `npm audit` est relancé au début de chaque séance. |
 | **Option C des jetons** | Voir section 3. | À décider côté backend, avant le pilote. |
 | **Favicon** | Aucune icône web dans le dépôt. | En attente des fichiers. |
 | **Conseil sous le mot de passe professionnel** : « Choisissez un mot de passe différent de celui de votre compte patient » (`docs/points-ouverts.md`, étape 3.7 ; un conseil, pas une obligation, le serveur accepte un mot de passe identique) | Aucun formulaire de création de mot de passe dans le web pour l'instant : la connexion et le renvoi du lien demandent un mot de passe existant. | À placer sous le champ « mot de passe professionnel » de l'**écran de création de structure**, dont l'emplacement (application mobile ou espace patient du web, docs/api.md §2.8) reste à décider. |
@@ -142,3 +142,29 @@ docs/api.md ne fixe pas de texte pour ces cas. Le message `erreur` du serveur po
 - adresse et historique sans jeton, second lien compris ;
 - aucune violation de la CSP ;
 - ni jeton ni mot de passe dans la console.
+
+## 11. Rôles de l'application MUNASEB et invitations du responsable (2026-10-22)
+
+Décisions A1 à A6 du porteur (2026-10-22). Contrat : `docs/api.md` §2.6 et §2.10.
+
+**Rôles.**
+- **Choix de l'espace** : il montre les affectations des structures `munaseb` dont le rôle est `agent_assurance_munaseb` ou `responsable` (`roles.ts`). Une autre affectation s'ouvre dans l'application de son métier.
+- **Page d'arrivée par rôle** : l'agent arrive sur `/demandes`, le responsable sur `/invitations`.
+- **Gardes par rôle** (`exigerRole`, après `exigerEnExercice`) : un autre rôle revient au choix de l'espace. Elles ne protègent pas les données : le serveur répond 403 `acces_refuse`, et l'intercepteur ramène alors au choix de l'espace avec « Votre accès à cet espace a été retiré. ».
+
+**Inviter.**
+- **Numéro** : envoyé **tel que saisi**. Le serveur le normalise (§1.6 : « L'application peut donc envoyer le numéro tel que saisi »), et aucune de ses règles n'est recopiée. L'aide sous le champ garde « Un numéro étranger commence par + » : §1.6 accepte un numéro étranger de 7 à 15 chiffres.
+- **Rôle** : « Agent MUNASEB » est choisi par défaut. « Responsable » demande une **confirmation** (porteur, A3), car ce rôle peut inviter et retirer des accès. La fenêtre fait l'envoi elle-même, comme celle de la validation : jamais deux envois.
+- **Réponse** : toujours « Invitation envoyée. Valable jusqu'au JJ/MM/AAAA. », que le numéro ait un compte ou non (§2.10). La date est le jour du Burkina, comme dans le SMS.
+
+**Liste.**
+- **Colonnes** : téléphone (affiché en entier : c'est le responsable qui l'a saisi), rôle, statut, dates d'envoi et d'expiration, et le nom de la personne **après l'acceptation seulement**.
+- **Pagination** : 20 par page, avec le paramètre `avant`.
+- **Annuler** : seulement pour une invitation en attente, après une confirmation.
+- **Statuts** : neutres, « Acceptée » en vert. Jamais de rouge ni d'orange (CLAUDE.md §6) ; toujours une icône et un texte (WCAG 2.2, 1.4.1).
+
+**Messages** : un texte par `code` (M1, porteur, 2026-10-22), dans `MESSAGES_INVITATION` (`pages/invitations.ts`). Le message du serveur n'est jamais affiché. Le 429 `trop_de_demandes` n'a pas de décompte, puisque §2.10 ne donne pas de `Retry-After` pour cette limite.
+
+**Numéro jamais dans la console** : le journal de développement n'écrit que la méthode et le chemin. Un test vérifie que le numéro (saisi, normalisé, chiffres seuls) n'apparaît dans aucune ligne de la console.
+
+**Reporté (A6)** : liste des membres et retrait d'un accès (§2.12).

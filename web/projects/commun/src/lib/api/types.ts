@@ -10,8 +10,8 @@ export interface CorpsErreur {
   regles_non_respectees?: string[];
   /** Avec `en_carence`, date `AAAA-MM-JJ`. */
   debut_couverture?: string;
-  /** Avec `transition_invalide`. */
-  statut_actuel?: StatutDemande;
+  /** Avec `transition_invalide` : statut d'une demande (§2.3.6) ou d'une invitation (§2.10). */
+  statut_actuel?: string;
 }
 
 /** Paire de jetons d'une session (§1.7). `jeton_renouvellement` : 64 caractères hexadécimaux. */
@@ -103,4 +103,35 @@ export interface DemandeDetail extends DemandeResume {
 /** Réponse 200 de `POST …/remboursements/{id}/valider` (§2.3.6). Peut valoir 0. */
 export interface ReponseValidation {
   montant_rembourse_fcfa: number;
+}
+
+/** Statut d'une invitation (§2.10) ; `expiree` est calculé par le serveur. */
+export type StatutInvitation = 'en_attente' | 'expiree' | 'acceptee' | 'refusee' | 'annulee';
+
+/** Réponse 201 de `POST /api/professionnels/invitations` (§2.10), identique que le numéro ait un compte ou non. */
+export interface InvitationEnvoyee {
+  invitation_id: string;
+  /** Instant RFC 3339. */
+  expire_le: string;
+}
+
+/** Une ligne de `GET /api/professionnels/invitations` (§2.10). */
+export interface Invitation {
+  id: string;
+  /** Numéro normalisé par le serveur (§1.6). */
+  telephone: string;
+  role: string;
+  statut: StatutInvitation;
+  date_creation: string;
+  expire_le: string;
+  date_reponse: string | null;
+  /** Rempli seulement après l'acceptation. */
+  accepte_par_nom: string | null;
+  accepte_par_prenom: string | null;
+}
+
+export interface PageInvitations {
+  invitations: Invitation[];
+  /** Curseur pour `avant`, ou `null` à la dernière page. */
+  suivant: string | null;
 }

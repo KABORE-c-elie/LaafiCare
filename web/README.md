@@ -1,9 +1,9 @@
 # LaafiCare : applications web
 
-Ce dossier contient les applications web de LaafiCare, écrites avec Angular 22. Pour l'instant, une seule application : **Assurance MUNASEB**, pour les agents de la mutuelle.
+Ce dossier contient les applications web de LaafiCare, écrites avec Angular 22. Pour l'instant, une seule application : **Assurance MUNASEB**, pour les agents et les responsables de la mutuelle.
 
 - `projects/commun` : ce que toutes les applications partagent (connexion, session, messages, boutons, champs…).
-- `projects/munaseb` : l'application des agents MUNASEB.
+- `projects/munaseb` : l'application MUNASEB. Après la connexion, chaque espace s'ouvre selon le rôle : un **agent** traite les demandes de remboursement ; un **responsable** invite des personnes (agents ou autres responsables) et suit ses invitations.
 - `docs/decisions.md` : les choix faits, et pourquoi.
 
 ## Ce qu'il faut installer
@@ -36,7 +36,7 @@ Puis ouvrir `http://localhost:4200` dans le navigateur.
 ## Tester l'application avec le backend (sans Postman)
 
 1. Lancer le backend (README à la racine), puis `npm start` ici, et ouvrir `http://localhost:4200`.
-2. Le serveur de développement n'écoute que sur `localhost` : ne jamais ajouter `--host` (une faille connue de son outil, vite 8.3.0, reste ouverte en attendant Angular 22.2.4 ; voir `docs/decisions.md`).
+2. Le serveur de développement n'écoute que sur `localhost` : ne jamais ajouter `--host` (une faille connue de son outil, vite 8.3.0, reste ouverte : Angular 22.2.4 ne la corrige pas ; voir `docs/decisions.md`).
 3. Ouvrir les outils de développement du navigateur (**F12**) :
    - onglet **Console** : en développement seulement, chaque erreur de l'API écrit une ligne, par exemple `[API] 401 identifiants_invalides POST /api/professionnels/connexion`. Elle donne le code HTTP, le champ `code` et la route, jamais un jeton, un mot de passe, un code ou une donnée d'adhérent. Cette ligne n'existe pas dans la version de production ;
    - onglet **Réseau** : filtre **Fetch/XHR**, case **Conserver le journal**. Un clic sur une ligne montre **En-têtes** (méthode, adresse, code HTTP), **Charge utile** (ce qui a été envoyé) et **Réponse** (le JSON reçu, avec le champ `code` en cas d'erreur).
@@ -51,6 +51,17 @@ Un compte professionnel doit avoir vérifié son email avant de se connecter. En
 3. Ce qu'on doit voir : « Votre email est vérifié. Vous pouvez maintenant vous connecter. » Rouvrir le même lien affiche « Ce lien n'est plus valable ou a déjà servi. Demandez-en un nouveau. », avec un petit formulaire pour recevoir un nouveau lien.
 
 Sur l'écran de connexion, un compte dont l'email n'est pas vérifié reçoit le message du serveur et un bouton **« Renvoyer le lien »**. Un second renvoi dans la minute est refusé : le bouton reste grisé, avec le temps restant.
+
+### Inviter une personne (responsable)
+
+Il faut une structure MUNASEB **validée** par l'équipe LaafiCare, et un compte responsable de cette structure.
+
+1. Se connecter, puis choisir l'espace **« Responsable »** : la page **Invitations** s'ouvre.
+2. Saisir un numéro **fictif** (par exemple `70 00 00 02`), choisir le rôle, puis **« Envoyer l'invitation »**. Pour le rôle « Responsable », une fenêtre demande de confirmer.
+3. Ce qu'on doit voir : « Invitation envoyée. Valable jusqu'au JJ/MM/AAAA. », que le numéro ait un compte ou non. L'invitation apparaît dans la liste, « En attente ». En développement, le SMS s'affiche dans le terminal du backend.
+4. **« Annuler »** sur une invitation en attente, puis confirmer : elle passe à « Annulée ».
+
+Un agent n'ouvre que les demandes, un responsable que les invitations. Une adresse tapée à la main vers l'autre page ramène au choix de l'espace.
 
 ## Lancer les tests automatiques
 

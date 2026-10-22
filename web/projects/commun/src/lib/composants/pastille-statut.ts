@@ -36,6 +36,7 @@ export class PastilleStatutComponent {
   protected readonly icone = computed(() => ICONES[this.statut()]);
 }
 
-export function libelleStatut(statut: StatutDemande): string {
-  return LIBELLES[statut];
+/** Libellé d'un statut de demande ; une valeur inconnue (ex. `statut_actuel` d'une erreur) est rendue telle quelle. */
+export function libelleStatut(statut: string): string {
+  return LIBELLES[statut as StatutDemande] ?? statut;
 }

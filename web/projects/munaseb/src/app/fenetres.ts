@@ -18,6 +18,14 @@ export interface DonneesRejet {
   envoyer: (motif: string) => Promise<void>;
 }
 
+export interface DonneesConfirmation<R> {
+  titre: string;
+  texte: string;
+  /** Libellé du bouton qui confirme, ex. « Inviter comme responsable ». */
+  action: string;
+  envoyer: () => Promise<R>;
+}
+
 export const MESSAGE_MOTIF_VIDE = 'Écrivez le motif du rejet.';
 export const MESSAGE_MOTIF_TROP_LONG = 'Le motif ne doit pas dépasser 1 000 caractères.';
 
@@ -59,6 +67,55 @@ export class FenetreValidationComponent {
     }
     this.envoiEnCours.set(true);
     // Pendant l'envoi, ni Échap ni un clic à côté ne ferment la fenêtre.
+    this.ref.disableClose = true;
+    try {
+      this.ref.close({ ok: true, resultat: await this.donnees.envoyer() });
+    } catch (erreur) {
+      this.ref.close({ ok: false, erreur });
+    } finally {
+      this.ref.disableClose = false;
+      this.envoiEnCours.set(false);
+    }
+  }
+}
+
+/**
+ * Confirmation d'une action avant l'appel (invitation d'un responsable,
+ * annulation d'une invitation). Comme la validation, l'envoi se fait dans la
+ * fenêtre : jamais deux envois.
+ */
+@Component({
+  selector: 'lc-fenetre-confirmation',
+  imports: [FenetreComponent],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `
+    <lc-fenetre [titre]="donnees.titre" idTitre="titre-confirmation">
+      <p>{{ donnees.texte }}</p>
+      <div actions>
+        <button type="button" class="bouton bouton--secondaire" [disabled]="envoiEnCours()" (click)="annuler()">
+          Retour
+        </button>
+        <button type="button" class="bouton bouton--principal" [disabled]="envoiEnCours()" (click)="confirmer()">
+          {{ envoiEnCours() ? 'Envoi…' : donnees.action }}
+        </button>
+      </div>
+    </lc-fenetre>
+  `,
+})
+export class FenetreConfirmationComponent {
+  protected readonly donnees = inject<DonneesConfirmation<unknown>>(DIALOG_DATA);
+  private readonly ref = inject<DialogRef<IssueFenetre<unknown>>>(DialogRef);
+  protected readonly envoiEnCours = signal(false);
+
+  annuler(): void {
+    this.ref.close();
+  }
+
+  async confirmer(): Promise<void> {
+    if (this.envoiEnCours()) {
+      return;
+    }
+    this.envoiEnCours.set(true);
     this.ref.disableClose = true;
     try {
       this.ref.close({ ok: true, resultat: await this.donnees.envoyer() });

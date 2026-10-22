@@ -12,11 +12,7 @@ import {
   messagePourErreur,
 } from 'commun';
 import { CadreComponent } from '../cadre';
-
-const LIBELLES_ROLE: Readonly<Record<string, string>> = {
-  agent_assurance_munaseb: 'Agent MUNASEB',
-  responsable: 'Responsable',
-};
+import { LIBELLES_ROLE, PAGE_DU_ROLE, estRoleMunaseb } from '../roles';
 
 // Statuts d'une structure (CLAUDE.md §14, « Structures et licence »).
 const LIBELLES_STATUT_STRUCTURE: Readonly<Record<string, string>> = {
@@ -87,7 +83,7 @@ export class EspacesPage implements OnInit {
   }
 
   protected libelleRole(role: string): string {
-    return LIBELLES_ROLE[role] ?? role;
+    return estRoleMunaseb(role) ? LIBELLES_ROLE[role] : role;
   }
 
   /** Raison d'une ligne grisée (§2.6) : statut de la structure, sinon licence expirée. */
@@ -109,7 +105,8 @@ export class EspacesPage implements OnInit {
     this.message.set(null);
     try {
       await this.acces.activer(affectation);
-      await this.router.navigate(['/demandes']);
+      // Chaque rôle arrive sur ses propres pages (agent : demandes ; responsable : invitations).
+      await this.router.navigate([estRoleMunaseb(affectation.role) ? PAGE_DU_ROLE[affectation.role] : '/espaces']);
     } catch (erreur) {
       const decodee = decoderErreur(erreur);
       const indisponible =
@@ -130,7 +127,9 @@ export class EspacesPage implements OnInit {
     this.chargement.set(true);
     try {
       const toutes = await this.acces.listerAffectations();
-      this.affectations.set(toutes.filter((a) => a.structure_type === 'munaseb'));
+      // Seuls les rôles de cette application (roles.ts) : une autre affectation
+      // s'ouvre dans l'application de son métier.
+      this.affectations.set(toutes.filter((a) => a.structure_type === 'munaseb' && estRoleMunaseb(a.role)));
     } catch (erreur) {
       const decodee = decoderErreur(erreur);
       // Session terminée : l'intercepteur a déjà ramené à la connexion.
