@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, ElementRef, inject, signal, viewChild } from '@angular/core';
-import { FormControl, ReactiveFormsModule } from '@angular/forms';
+import { FormControl, FormGroup, ReactiveFormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import {
   AccesService,
@@ -25,7 +25,7 @@ import {
       </section>
 
       <main class="accueil__formulaire">
-        <form class="carte formulaire" (ngSubmit)="envoyer()" novalidate>
+        <form class="carte formulaire" [formGroup]="formulaire" (ngSubmit)="envoyer()" novalidate>
           <h2 class="formulaire__titre">Code de vérification</h2>
           @if (secours()) {
             <p>Saisissez l'un de vos codes de secours.</p>
@@ -86,6 +86,11 @@ export class SecondFacteurPage {
   private readonly saisie = viewChild<ElementRef<HTMLInputElement>>('saisie');
 
   protected readonly code = new FormControl('', { nonNullable: true });
+  // Avec les formulaires réactifs, seule la directive `[formGroup]`
+  // (FormGroupDirective) émet `ngSubmit` ; `NgForm` est dans FormsModule. Sans
+  // elle, « Valider » déclenchait la soumission native du navigateur : la page
+  // se rechargeait et la session (en mémoire) était perdue (essai du 2026-10-22).
+  protected readonly formulaire = new FormGroup({ code: this.code });
   protected readonly secours = signal(false);
   protected readonly envoiEnCours = signal(false);
   protected readonly message = signal<string | null>(null);
