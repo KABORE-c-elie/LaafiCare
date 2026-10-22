@@ -296,5 +296,6 @@ Règles garanties par la base : **jamais modifiées ni supprimées** ; seulement
 | 0023 | Nom d'une structure : 100 caractères au plus, ni retour à la ligne ni caractère de contrôle (le nom est repris dans le SMS d'invitation) |
 | 0024 | Liens de réinitialisation du mot de passe (professionnels et administrateurs) dans la table des jetons d'email |
 | 0025 | Motif de fermeture de session `desactivation_affectation` : un accès retiré par un responsable ferme aussitôt les sessions ouvertes sur cette affectation |
+| 0026 | Droits des rôles du serveur et des outils : le serveur lit et écrit les données sans pouvoir changer les tables ni les traces ; seuls les outils ouvrent la fenêtre de réenrôlement (fonction `vider_fenetre_reenrolement` pour la refermer) |
 
 Une migration déjà appliquée ne change plus jamais : toute évolution passe par une nouvelle migration. Un test vérifie aussi qu'aucun caractère invisible ne s'y glisse ([`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs)).

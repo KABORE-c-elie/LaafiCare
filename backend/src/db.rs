@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use sqlx::PgPool;
+use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
 
 // BNF-03 (reprise après incident) : PostgreSQL peut démarrer après le
@@ -33,6 +34,31 @@ const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 // base de données et pas par une erreur réseau, donc filtrer par type
 // manquerait ce cas. Un mot de passe faux échoue plus lentement, mais jamais
 // en silence : chaque tentative est journalisée avec sa cause.
+/// Les migrations de `./migrations`, intégrées au programme à la compilation
+/// (doc sqlx 0.9, `migrate!` : « static MIGRATOR: Migrator =
+/// sqlx::migrate!(); »). Seule la commande `migrer` les applique (P1,
+/// décision 5 du porteur, 2026-10-22) ; le serveur et les outils vérifient
+/// seulement qu'elles le sont.
+pub static MIGRATIONS: Migrator = sqlx::migrate!();
+
+/// Vérifie que toutes les migrations du programme ont été appliquées avec
+/// succès. Le serveur et les outils n'ont pas le droit d'écrire le journal
+/// des migrations (migration 0026) : sans ce contrôle, ils démarreraient sur
+/// une base en retard et échoueraient plus tard, au milieu d'une requête.
+/// Renvoie le nombre de migrations manquantes.
+pub async fn migrations_manquantes(pool: &PgPool) -> Result<usize, sqlx::Error> {
+    let journal_present: bool = sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
+        .fetch_one(pool)
+        .await?;
+    if !journal_present {
+        return Ok(MIGRATIONS.iter().count());
+    }
+    let appliquees: Vec<i64> = sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE success")
+        .fetch_all(pool)
+        .await?;
+    Ok(MIGRATIONS.iter().filter(|m| !appliquees.contains(&m.version)).count())
+}
+
 pub async fn connecter(database_url: &str) -> Result<PgPool, sqlx::Error> {
     let mut tentative: u32 = 1;
     let mut delai = DELAI_INITIAL;

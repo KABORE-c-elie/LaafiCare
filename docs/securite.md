@@ -193,7 +193,9 @@ Beaucoup de règles sont vérifiées deux fois : par le code, et par la base Pos
 - **Un seul second facteur actif par compte**, un secret chiffré de la bonne taille, un code de secours rattaché à son second facteur (migration 0013).
 - **Un seul établissement validé par numéro d'autorisation**, et une seule MUNASEB validée (migration 0012).
 
-**Limite connue** : ces protections tiennent contre les erreurs, pas contre un administrateur de la base. En production, le serveur devra donc se connecter avec un compte PostgreSQL sans droits d'administration.
+**Le serveur n'a pas les droits pour défaire ces protections** (migration 0026, 2026-10-22). Il se connecte avec un rôle limité, `laaficare_serveur` : ni administrateur de la base, ni propriétaire des tables. Il ne peut donc ni désactiver un trigger, ni modifier ou effacer une trace, ni créer ou changer une table, ni écrire le journal des migrations. Les outils de l'équipe ont leur propre rôle, `laaficare_outils`, **seul autorisé à ouvrir la fenêtre de réenrôlement** d'un administrateur ; le serveur peut seulement la refermer, par une fonction prévue pour cela. Les migrations sont appliquées à part (`cargo run --bin migrer`), avec le rôle propriétaire. Un test vérifie ces refus et fait tourner un parcours complet du serveur avec son seul rôle ([`tests/droits_des_roles.rs`](../backend/tests/droits_des_roles.rs)).
+
+**Limite connue** : le rôle propriétaire, lui, peut tout faire. Il ne doit servir qu'aux migrations ; en production, son mot de passe reste sur le poste qui les applique, jamais sur le serveur.
 
 **Les migrations elles-mêmes sont protégées** : un test refuse tout caractère invisible ou trompeur (espace insécable, tiret qui ressemble au tiret simple) dans les fichiers de migration, et Git y impose des fins de ligne identiques sur toutes les machines. Sinon, une migration pourrait changer à l'insu de tous, et le serveur refuserait de démarrer en production.
 Fichiers : [`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs), [`.gitattributes`](../.gitattributes).
@@ -222,7 +224,7 @@ La clé de chiffrement du second facteur doit être **sauvegardée à part** en 
 - une **liste de mots de passe interdits** (les plus courants ou déjà divulgués), exigée par NIST ;
 - une **limite du nombre de demandes par adresse IP** sur les connexions et les réinitialisations ;
 - le choix du **stockage du jeton de renouvellement dans un navigateur** (applications web) ;
-- un compte PostgreSQL sans droits d'administration, le chiffrement du disque de la base, un antivirus et un nettoyage des fichiers déposés ;
+- le chiffrement du disque de la base, un antivirus et un nettoyage des fichiers déposés ;
 - un fournisseur de SMS réel ;
 - la vérification des requêtes SQL dès la compilation.
 

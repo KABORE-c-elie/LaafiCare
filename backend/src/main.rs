@@ -18,7 +18,7 @@ use axum::{Json, Router, extract::State, http::StatusCode, routing::get, routing
 use serde::Serialize;
 use sqlx::PgPool;
 
-use laaficare_backend::config::{self, CleTotp, Config};
+use laaficare_backend::config::{self, CleTotp, Config, Programme};
 use laaficare_backend::db;
 use laaficare_backend::email::{EmailSender, EmailSenderConsole};
 use laaficare_backend::jwt::JwtService;
@@ -115,7 +115,7 @@ async fn main() {
         }
     }
 
-    let config = Config::from_env().unwrap_or_else(|erreur| {
+    let config = Config::from_env(Programme::Serveur).unwrap_or_else(|erreur| {
         tracing::error!(%erreur, "configuration invalide");
         std::process::exit(1)
     });
@@ -133,16 +133,21 @@ async fn main() {
             std::process::exit(1)
         });
 
-    // `sqlx::migrate!()` intègre le SQL de `./migrations` à la compilation
-    // (doc sqlx 0.9, macro.migrate.html) : aucun fichier requis au runtime,
-    // le binaire compilé suffit. Un échec de migration est une erreur de
-    // configuration au même titre qu'une base injoignable : même traitement
-    // (log clair, sortie en code 1), jamais de panic.
-    if let Err(erreur) = sqlx::migrate!().run(&pool).await {
-        tracing::error!(%erreur, "échec des migrations de base de données");
-        std::process::exit(1);
+    // Le serveur n'applique plus les migrations (P1, décision 5 du porteur,
+    // 2026-10-22) : son rôle PostgreSQL n'en a pas le droit. Il refuse de
+    // démarrer sur une base en retard, plutôt que d'échouer plus tard au
+    // milieu d'une requête. Même traitement qu'une base injoignable.
+    match db::migrations_manquantes(&pool).await {
+        Ok(0) => tracing::info!("base à jour"),
+        Ok(manquantes) => {
+            tracing::error!(manquantes, "base pas à jour : lancer `cargo run --bin migrer`");
+            std::process::exit(1);
+        }
+        Err(erreur) => {
+            tracing::error!(%erreur, "lecture du journal des migrations impossible");
+            std::process::exit(1);
+        }
     }
-    tracing::info!("migrations appliquées");
 
     let jwt = JwtService::new(&config.jwt_secret);
     let sms: Arc<dyn SmsSender> = Arc::new(sms::SmsSenderConsole);

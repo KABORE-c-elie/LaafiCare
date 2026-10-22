@@ -53,7 +53,7 @@ Réglé par l'option 3, décidée le 2026-10-12 : jetons d'accès de 15 minutes,
 
 ### Fenêtre de réenrôlement d'un administrateur : écriture réservée aux outils locaux
 
-**Noté le 2026-10-15 (étape 3.6.4, migration 0019).** Seul un outil local de l'équipe doit pouvoir ouvrir la fenêtre de 10 minutes pendant laquelle un administrateur sans second facteur en enregistre un nouveau (`compte.reenrolement_autorise_jusqu_au`). Aujourd'hui, c'est garanti **par le code seulement** : le serveur et les outils utilisent le même compte PostgreSQL. **En production**, un compte PostgreSQL séparé pour les outils locaux, **seul autorisé à écrire cette colonne** (droits par colonne de PostgreSQL), garantirait par la base qu'aucune route ne peut ouvrir une fenêtre. À traiter avec le compte PostgreSQL sans droits d'administration (section 3).
+**Fermé le 2026-10-22 (P1, migration 0026).** Le rôle des outils, `laaficare_outils`, est le seul à pouvoir écrire `compte.reenrolement_autorise_jusqu_au` (droits par colonne). Le serveur la referme seulement, par la fonction `vider_fenetre_reenrolement` ; aucune route ne peut ouvrir une fenêtre, et la base le garantit.
 
 ### Prévenir l'administrateur quand son second facteur change
 
@@ -175,7 +175,7 @@ En production, le serveur n'accepte que des connexions chiffrées (HTTPS) : jeto
 
 ### Infrastructure
 
-- Rôle PostgreSQL sans droits d'administration pour le serveur : sinon, les protections des historiques peuvent être désactivées.
+- Rôle PostgreSQL sans droits d'administration pour le serveur : **fait le 2026-10-22** (P1, migration 0026). Reste pour la production : créer chez l'hébergeur un rôle propriétaire sans droits de superuser pour appliquer les migrations, lancer `sql/roles.sql`, et ne garder sur le serveur que `DATABASE_URL_SERVEUR` (et `DATABASE_URL_OUTILS` si les outils y tournent). **Le rôle propriétaire de production ne doit pas être superuser**, et c'est lui qui doit appliquer les migrations : la fonction `vider_fenetre_reenrolement` (migration 0026) est `SECURITY DEFINER`, elle s'exécute avec les droits de son propriétaire (doc PostgreSQL 18, CREATE FUNCTION). Créée par un superuser, elle tournerait avec tous les droits ; créée par le rôle propriétaire sans droits d'administration, elle ne peut que ce que ce rôle peut (en développement, l'utilisateur `laaficare` de Docker est superuser : écart accepté par le porteur le 2026-10-22).
 - Chiffrement du disque de la base.
 - Fournisseurs réels : SMS (codes, invitations) et email (réinitialisation, vérification de l'email). Crate et fournisseur à présenter.
 - Fichiers déposés par les structures : réécriture des images, antivirus, désactivation du contenu actif des PDF (OWASP).
@@ -194,7 +194,7 @@ En production, le serveur n'accepte que des connexions chiffrées (HTTPS) : jeto
 **Noté le 2026-10-15.** La mise en production n'est pas encore découpée en étapes, comme le sont celles du backoffice (CLAUDE.md, section 12). Voici les éléments déjà connus, repris de ce document, à découper plus tard en étapes ordonnées, chacune présentée et validée avant d'être faite :
 
 - **Cadre légal** : formalité auprès de la CIL (déclaration ou autorisation), hébergement des données de santé dans le pays, aucun transfert vers l'étranger sans autorisation (section 3, « Cadre légal »).
-- **Comptes PostgreSQL** : un compte sans droits d'administration pour le serveur ; un compte séparé pour les outils locaux, seul autorisé à écrire la fenêtre de réenrôlement (section 2).
+- **Comptes PostgreSQL** : faits le 2026-10-22 (P1) ; reste leur mise en place chez l'hébergeur (section 3, « Infrastructure »).
 - **HTTPS** obligatoire.
 - **Sauvegardes** chiffrées, dans le pays, avec essais de restauration ; sauvegarde à part de la clé `TOTP_CLE_CHIFFREMENT`.
 - **Chiffrement du disque** de la base.

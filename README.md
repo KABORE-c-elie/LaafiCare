@@ -213,7 +213,9 @@ git checkout dev
 | Variable | Rôle | Exemple **fictif** |
 |---|---|---|
 | `POSTGRES_PASSWORD` | mot de passe de la base de développement, lu par Docker | une valeur choisie |
-| `DATABASE_URL` | adresse de la base, avec ce même mot de passe | `postgres://utilisateur:motdepasse@127.0.0.1:5433/laaficare` |
+| `DATABASE_URL` | adresse de la base avec le rôle **propriétaire** et ce même mot de passe ; sert seulement à la commande `migrer` et aux tests | `postgres://laaficare:motdepasse@127.0.0.1:5433/laaficare` |
+| `DATABASE_URL_SERVEUR` | adresse de la base pour le **serveur**, avec le rôle `laaficare_serveur` (voir « Rôles de la base » ci-dessous) | `postgres://laaficare_serveur:autremotdepasse@127.0.0.1:5433/laaficare` |
+| `DATABASE_URL_OUTILS` | adresse de la base pour les **outils** de l'équipe, avec le rôle `laaficare_outils` | `postgres://laaficare_outils:encoreunautre@127.0.0.1:5433/laaficare` |
 | `ENVIRONNEMENT` | `developpement` sur votre machine, `production` sur le vrai serveur ; obligatoire | `developpement` |
 | `URL_APPLICATION_WEB` | adresse de l'application web, sans `/` final : les liens envoyés par email y mènent ; obligatoire ; `https://` exigé en production | `http://localhost:4200` |
 | `CONTACT_SECURITE` | adresse email de l'équipe, donnée dans les alertes de sécurité (second facteur enregistré ou désactivé) ; obligatoire ; en production, une vraie adresse (les adresses d'exemple sont refusées) | `securite@example.org` |
@@ -223,9 +225,31 @@ git checkout dev
 
 Le fichier `.env` contient des secrets : il n'est jamais envoyé dans Git.
 
-**Vous aviez déjà un `.env` ?** Ajoutez-y les lignes `ENVIRONNEMENT=developpement`, `URL_APPLICATION_WEB=http://localhost:4200` et `CONTACT_SECURITE=securite@example.org` (variables obligatoires) : sans elles, le serveur et les outils refusent de démarrer. En `production`, ils refusent aussi tant que les SMS et les emails sont seulement simulés, ce qui est le cas aujourd'hui.
+**Vous aviez déjà un `.env` ?** Ajoutez-y les lignes `ENVIRONNEMENT=developpement`, `URL_APPLICATION_WEB=http://localhost:4200` et `CONTACT_SECURITE=securite@example.org` (variables obligatoires), ainsi que `DATABASE_URL_SERVEUR` et `DATABASE_URL_OUTILS` (voir « Rôles de la base ») : sans elles, le serveur et les outils refusent de démarrer. En `production`, ils refusent aussi tant que les SMS et les emails sont seulement simulés, ce qui est le cas aujourd'hui.
 
-**Votre base de développement contient déjà une structure ?** La migration 0022 rend obligatoires le numéro d'urgence, la région et l'email d'une structure : elle refuse de s'appliquer sur une base qui contient déjà une structure, et le serveur ne démarre pas. Repartez alors d'une base vide (`docker compose down -v`, qui **efface toute la base de développement**), puis relancez le serveur.
+**Votre base de développement contient déjà une structure ?** La migration 0022 rend obligatoires le numéro d'urgence, la région et l'email d'une structure : elle refuse de s'appliquer sur une base qui contient déjà une structure, et le serveur ne démarre pas. Repartez alors d'une base vide (`docker compose down -v`, qui **efface toute la base de développement**), puis relancez `docker compose up -d` et `cargo run --bin migrer`.
+
+### Rôles de la base
+
+Le serveur ne se connecte pas à la base avec tous les droits. Il utilise un **rôle limité**, `laaficare_serveur` : il peut lire et écrire les données, mais il ne peut ni créer ou modifier des tables, ni effacer les traces (historique des demandes, décisions de l'équipe…), ni désactiver les protections de la base. Les outils de l'équipe utilisent un second rôle, `laaficare_outils`. Seule la commande `migrer` (voir « Lancer ») utilise le rôle propriétaire, qui a tous les droits.
+
+**Créer les rôles, une seule fois.** Sur une base toute neuve, Docker les crée tout seul au premier démarrage. Sur une base qui existait déjà, lancer depuis `backend/`, Docker démarré :
+```
+docker exec -i laaficare-db psql -U laaficare -d laaficare -f - < sql/roles.sql
+```
+Relancer cette commande ne casse rien : un rôle qui existe déjà est laissé tel quel.
+
+**Donner un mot de passe à chaque rôle.** Ouvrir la console de la base :
+```
+docker exec -it laaficare-db psql -U laaficare -d laaficare
+```
+puis taper, une ligne après l'autre :
+```
+\password laaficare_serveur
+\password laaficare_outils
+\q
+```
+Chaque `\password` demande le mot de passe deux fois, **sans l'afficher**. Choisissez deux mots de passe différents, puis reportez-les dans `DATABASE_URL_SERVEUR` et `DATABASE_URL_OUTILS` du fichier `.env`.
 
 ### Lancer
 
@@ -234,12 +258,15 @@ Le fichier `.env` contient des secrets : il n'est jamais envoyé dans Git.
    ```
    docker compose up -d     # démarre PostgreSQL en arrière-plan
    docker compose ps        # vérifie : la base doit apparaître « running »
+   cargo run --bin migrer   # met la base à jour
    cargo run                # compile et lance le serveur (les outils : cargo run --bin <nom>)
    ```
 
+**`cargo run --bin migrer`** applique à la base les changements de structure du projet (les « migrations », dans `backend/migrations/`). Elle se connecte avec le rôle propriétaire (`DATABASE_URL`), le seul qui en a le droit. Lancez-la **après chaque récupération du code** (`git pull`) qui apporte une nouvelle migration, puis démarrez le serveur. La relancer quand tout est déjà à jour ne fait rien de plus. Le serveur, lui, **refuse de démarrer sur une base en retard** et l'écrit dans le terminal (« base pas à jour : lancer `cargo run --bin migrer` »).
+
 **La première compilation prend plusieurs minutes** : Rust fabrique d'abord toutes les bibliothèques utilisées. Les suivantes sont bien plus rapides. Ce n'est pas un blocage.
 
-Au démarrage, le serveur applique les migrations manquantes. Pour vérifier qu'il répond, ouvrir `http://127.0.0.1:8080/health` dans un navigateur (avec le port choisi) : la page affiche `"status":"ok"`.
+Au démarrage, le serveur vérifie que la base est à jour. Pour vérifier qu'il répond, ouvrir `http://127.0.0.1:8080/health` dans un navigateur (avec le port choisi) : la page affiche `"status":"ok"`.
 
 Le serveur s'arrête avec `Ctrl+C` dans le terminal où il tourne. PostgreSQL s'arrête avec `docker compose down` ; les données sont gardées pour la prochaine fois.
 
@@ -357,11 +384,12 @@ Les tests qui utilisent la base créent chacun une base temporaire, supprimée e
 |---|---|---|
 | Les tests en base échouent tous avec `PoolTimedOut` | PostgreSQL ne répond pas : Docker Desktop n'est pas démarré | démarrer Docker Desktop, puis `docker compose up -d` et `docker compose ps` |
 | Le serveur s'arrête aussitôt avec « configuration invalide » | il reste un `A_GENERER` dans `backend/.env`, une valeur mal formée (secret trop court, clé qui n'est pas en hexadécimal), ou `ENVIRONNEMENT`, `URL_APPLICATION_WEB` ou `CONTACT_SECURITE` manque | compléter `.env` (voir « Préparer la configuration ») |
-| Le serveur s'arrête sur « échec des migrations » après la mise à jour | la base de développement contient déjà une structure (migration 0022) | repartir d'une base vide, `docker compose down -v` (voir « Préparer la configuration ») |
+| `cargo run --bin migrer` s'arrête sur « échec des migrations » | la base de développement contient déjà une structure (migration 0022) ; ou, avec « role "laaficare_serveur" does not exist », les rôles n'ont pas été créés | repartir d'une base vide, `docker compose down -v` (voir « Préparer la configuration ») ; ou créer les rôles (voir « Rôles de la base ») |
+| Le serveur ou un outil répond « base pas à jour » | les dernières migrations ne sont pas appliquées | lancer `cargo run --bin migrer`, puis relancer |
+| Les tests `droits_des_roles` échouent avec « role … does not exist » | les rôles n'existent pas sur le PostgreSQL de développement | les créer (voir « Rôles de la base ») |
 | « envoi de SMS simulé : refusé en production » | `ENVIRONNEMENT=production` sur une machine de développement | mettre `ENVIRONNEMENT=developpement` |
-| Un outil répond « base pas à jour » | le serveur n'a pas encore appliqué les dernières migrations | lancer `cargo run` une fois, puis relancer l'outil |
 | Un outil s'arrête quand il demande un mot de passe | il est lancé depuis le terminal de Git Bash | le relancer depuis PowerShell |
-| Le serveur s'arrête car la base est injoignable | Docker n'est pas démarré, ou le mot de passe de `DATABASE_URL` n'est pas celui de `POSTGRES_PASSWORD` | démarrer Docker ; mettre le même mot de passe dans les deux variables |
+| Le serveur s'arrête car la base est injoignable | Docker n'est pas démarré, ou le mot de passe de `DATABASE_URL_SERVEUR` n'est pas celui donné au rôle `laaficare_serveur` (`DATABASE_URL_OUTILS` pour un outil ; `DATABASE_URL` et `POSTGRES_PASSWORD` pour `migrer`) | démarrer Docker ; remettre le bon mot de passe (`\password`, voir « Rôles de la base ») |
 | Réponse 429 `trop_de_demandes` | trop de codes demandés, ou trop d'essais de code | attendre le nombre de secondes indiqué par l'en-tête `Retry-After`, ou demander un nouveau code |
 | Réponse 401 `jeton_invalide` sur une route ordinaire | jeton d'accès expiré (15 min), d'une autre sorte, émis avant un changement de mot de passe, ou session fermée | renouveler (`POST /api/sessions/renouveler`) ; si le renouvellement répond aussi 401, se reconnecter |
 
