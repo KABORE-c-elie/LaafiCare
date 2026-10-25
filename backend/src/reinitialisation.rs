@@ -295,7 +295,8 @@ pub async fn reinitialiser(
                 .await
                 .map_err(|e| interne("lecture du compte patient", &e))?;
         if let Some(hash_patient) = hash_patient {
-            let identique = mot_de_passe::verifier(nouveau_mot_de_passe, &hash_patient)
+            let identique = mot_de_passe::verifier_async(nouveau_mot_de_passe, &hash_patient)
+                .await
                 .map_err(|_| ErreurReinitialisation::Interne("comparaison avec le mot de passe patient"))?;
             if identique {
                 return Err(ErreurReinitialisation::MotDePasseIdentiquePatient);
@@ -303,7 +304,10 @@ pub async fn reinitialiser(
         }
     }
     // Haché avant la transaction : Argon2id ne garde pas de verrous.
-    let hash = mot_de_passe::hacher(nouveau_mot_de_passe).map_err(|_| ErreurReinitialisation::Interne("hachage"))?;
+    // Version asynchrone pour ne pas bloquer Tokio.
+    let hash = mot_de_passe::hacher_async(nouveau_mot_de_passe)
+        .await
+        .map_err(|_| ErreurReinitialisation::Interne("hachage"))?;
 
     let mut tx = pool.begin().await.map_err(|e| interne("transaction", &e))?;
     sqlx::query("SELECT id FROM compte WHERE id = $1 FOR UPDATE")

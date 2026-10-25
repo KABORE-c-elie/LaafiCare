@@ -17,8 +17,9 @@ Les fichiers de code cités sont dans [`backend/src/`](../backend/src/) et [`bac
 7. [Comptes séparés](#7-comptes-séparés)
 8. [Ce que la base de données garantit elle-même](#8-ce-que-la-base-de-données-garantit-elle-même)
 9. [Les pièces justificatives](#9-les-pièces-justificatives)
-10. [Les secrets du serveur](#10-les-secrets-du-serveur)
-11. [Ce qui reste à faire avant la mise en service](#11-ce-qui-reste-à-faire-avant-la-mise-en-service)
+10. [Résilience, tâches de fond et performance](#10-résilience-tâches-de-fond-et-performance)
+11. [Les secrets du serveur](#11-les-secrets-du-serveur)
+12. [Ce qui reste à faire avant la mise en service](#12-ce-qui-reste-à-faire-avant-la-mise-en-service)
 
 ---
 
@@ -27,6 +28,7 @@ Les fichiers de code cités sont dans [`backend/src/`](../backend/src/) et [`bac
 **Le mot de passe n'est jamais enregistré.** Le serveur n'en garde qu'une *empreinte* (un *hachage*) : une transformation à sens unique. On peut vérifier qu'un mot de passe saisi donne la même empreinte, mais on ne peut pas retrouver le mot de passe à partir de l'empreinte. Si la base était volée, les mots de passe ne seraient pas lisibles.
 
 **L'algorithme : Argon2id.** C'est celui que recommande l'OWASP (*Password Storage Cheat Sheet*). Il est volontairement lent et gourmand en mémoire : un attaquant qui voudrait essayer des milliards de mots de passe sur une empreinte volée devrait y consacrer énormément de calcul. Paramètres : 19 Mio de mémoire, 2 passes, 1 fil d'exécution (le minimum OWASP). Chaque empreinte contient un *sel*, une valeur aléatoire propre à chaque compte, pour que deux personnes ayant le même mot de passe n'aient pas la même empreinte.
+Pour éviter tout gel ou famine du moteur asynchrone Tokio lors de ce calcul intensif en mémoire et CPU, le hachage et la vérification sont déportés sur un pool de threads d'arrière-plan dédié (`tokio::task::spawn_blocking`), via `hacher_async` et `verifier_async`.
 Fichier : [`mot_de_passe.rs`](../backend/src/mot_de_passe.rs). Source : OWASP, documentation de la bibliothèque `argon2` 0.6.
 
 **Les règles** (source : NIST SP 800-63B, révision 4, §3.1.1.2) :
@@ -207,12 +209,20 @@ Les établissements déposent leurs autorisations officielles (PDF, JPEG ou PNG,
 
 - le type du fichier est reconnu par ses **premiers octets**, jamais par son nom ou par ce que déclare l'expéditeur ;
 - le nom d'origine est remplacé par un identifiant, et une **empreinte** (SHA-256) est enregistrée ;
+- les fichiers sont protégés au niveau réseau par une limite stricte de corps HTTP (`DefaultBodyLimit` de 5 Mo dans Axum) interdisant le déni de service par saturation de mémoire tampon ;
 - les fichiers sont stockés dans la base, **jamais à une adresse publique**, et seule l'équipe LaafiCare peut les télécharger ;
 - le contenu n'est lu que par la route de téléchargement, jamais par les listes.
+- **Évolution vers Stockage Objet** : afin d'éviter la saturation du cache mémoire PostgreSQL et des journaux WAL sous fort volume de téléversement, une interface vers un stockage objet compatible S3/MinIO est prévue, stockant uniquement en base l'empreinte SHA-256, la taille et la clé d'objet, avec délivrance d'URLs pré-signées temporaires.
 
 Structure en place : migration 0012. Les routes viendront à une étape ultérieure.
 
-## 10. Les secrets du serveur
+## 10. Résilience, Tâches de Fond et Performance
+
+- **Maintenance asynchrone hors chemin chaud** : les purges de lignes expirées (sessions, envois d'OTP de plus d'une heure, jetons d'email périmés) ne sont plus exécutées au milieu des requêtes de connexion des utilisateurs, mais par un tâche de fond dédiée périodique (`src/maintenance.rs`) toutes les 10 minutes, éliminant tout verrouillage de table sous charge.
+- **Cache local des habilitations** : la vérification d'exercice d'un professionnel (`affectation::controler_exercice`) utilise un cache mémoire LRU à courte durée de vie (15 secondes, via `moka`), évitant de rejouer la jointure de 5 tables à chaque requête successive d'un même praticien.
+- **Traçabilité HTTP (`X-Request-ID`)** : chaque requête reçoit ou propage un identifiant unique `X-Request-ID` corrélé dans les traces pour faciliter le diagnostic et l'audit sans impacter les performances.
+
+## 11. Les secrets du serveur
 
 Les secrets (accès à la base, secret des jetons, clé de chiffrement du second facteur) ne sont **jamais dans le code ni dans Git**. Ils sont lus au démarrage dans des variables d'environnement, en développement depuis un fichier `backend/.env` qui n'est jamais envoyé dans Git.
 
@@ -220,7 +230,7 @@ Le modèle [`backend/.env.example`](../backend/.env.example) a des valeurs volon
 
 La clé de chiffrement du second facteur doit être **sauvegardée à part** en production : la perdre rendrait tous les seconds facteurs inutilisables.
 
-## 11. Ce qui reste à faire avant la mise en service
+## 12. Ce qui reste à faire avant la mise en service
 
 - une **liste de mots de passe interdits** (les plus courants ou déjà divulgués), exigée par NIST ;
 - une **limite du nombre de demandes par adresse IP** sur les connexions et les réinitialisations ;

@@ -130,7 +130,9 @@ pub async fn preparer(pool: &PgPool, patient_compte_id: Uuid, saisie: &Saisie<'_
                 Some(_) => return Err(ErreurComptePro::EmailDifferent),
             };
             // Haché avant la transaction : Argon2id ne garde pas de verrous.
-            let hash = mot_de_passe::hacher(saisie.mot_de_passe)
+            // Version asynchrone déportée sur spawn_blocking pour ne pas bloquer Tokio.
+            let hash = mot_de_passe::hacher_async(saisie.mot_de_passe)
+                .await
                 .map_err(|_| ErreurComptePro::Interne("hachage du mot de passe"))?;
             Compte::Nouveau { email: email.to_string(), hash, enregistrer_email }
         }

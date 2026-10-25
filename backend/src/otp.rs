@@ -112,20 +112,15 @@ pub async fn generer_et_enregistrer(pool: &PgPool, utilisateur_id: Uuid) -> Resu
         .fetch_one(&mut *tx)
         .await?;
 
-    // O7 b : les envois de plus d'une heure ne servent plus au comptage ;
-    // effacés pour tous les numéros, à chaque envoi.
-    sqlx::query("DELETE FROM envoi_otp WHERE envoye_le < now() - interval '1 hour'")
-        .execute(&mut *tx)
-        .await?;
-
-    // Nombre d'envois dans l'heure, secondes avant la fin du délai O1, et
-    // secondes avant que le plus ancien envoi sorte de la fenêtre (O2).
-    // NULL quand il n'y a aucun envoi.
+    // O7 b : les envois de plus d'une heure ne servent plus au comptage.
+    // La purge de masse n'est plus exécutée sur le chemin chaud OLTP (décision P0)
+    // afin d'éviter la contention de verrous ; elle est déportée en tâche de fond.
+    // Le filtre ci-dessous restreint strictement la fenêtre d'observation à la dernière heure.
     let (envois, attente_delai, attente_fenetre): (i64, Option<i64>, Option<i64>) = sqlx::query_as(
         "SELECT count(*), \
                 ceil(extract(epoch FROM max(envoye_le) + make_interval(secs => $2) - now()))::bigint, \
                 ceil(extract(epoch FROM min(envoye_le) + interval '1 hour' - now()))::bigint \
-         FROM envoi_otp WHERE utilisateur_id = $1",
+         FROM envoi_otp WHERE utilisateur_id = $1 AND envoye_le >= now() - interval '1 hour'",
     )
     .bind(utilisateur_id)
     .bind(DELAI_MIN_ENTRE_ENVOIS_SECS)
@@ -249,6 +244,16 @@ pub async fn verifier(pool: &PgPool, utilisateur_id: Uuid, code: &str) -> Result
     }
 
     Ok(VerificationOtp::Invalide)
+}
+
+/// Purge les envois d'OTP vieux de plus d'une heure.
+/// Exécutée par la tâche de fond de maintenance périodique (décision P0 / DBA).
+pub async fn purger_expires(pool: &PgPool) -> Result<u64, sqlx::Error> {
+    let suppr = sqlx::query("DELETE FROM envoi_otp WHERE envoye_le < now() - interval '1 hour'")
+        .execute(pool)
+        .await?
+        .rows_affected();
+    Ok(suppr)
 }
 
 #[cfg(test)]

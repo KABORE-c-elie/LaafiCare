@@ -282,9 +282,9 @@ async fn confirmer_activation_a(
     let totp = totp_depuis(dechiffrer_secret(cle, compte_id, &secret_chiffre, &nonce)?)?;
     let pas = pas_valide(&totp, code, instant)?;
 
-    // Hachés avant la transaction : 10 hachages Argon2id ne doivent pas
-    // garder des verrous ouverts.
-    let (codes, hachages) = generer_codes_secours()?;
+    // Hachés avant la transaction sur le pool bloquant de Tokio : 10 hachages
+    // Argon2id ne doivent pas bloquer le réacteur async ni garder des verrous ouverts.
+    let (codes, hachages) = generer_codes_secours().await?;
 
     let mut transaction = pool.begin().await?;
     // Réenrôlement : la fenêtre est vidée en premier, en une requête
@@ -409,17 +409,23 @@ async fn verifier_code_a(
 /// cryptographique selon la doc de rand 0.10, comme dans `otp.rs`). Affichés
 /// `XXXXX-XXXXX` ; hachés sans le tiret, en Argon2id (NIST §3.1.2 : sous
 /// 112 bits, hachage de mot de passe salé exigé).
-fn generer_codes_secours() -> Result<(Vec<String>, Vec<String>), ErreurTotp> {
-    let mut codes = Vec::with_capacity(NOMBRE_CODES_SECOURS);
-    let mut hachages = Vec::with_capacity(NOMBRE_CODES_SECOURS);
-    for _ in 0..NOMBRE_CODES_SECOURS {
-        let brut: String = (0..LONGUEUR_CODE_SECOURS)
-            .map(|_| ALPHABET_BASE32[random_range(0..ALPHABET_BASE32.len())] as char)
-            .collect();
-        hachages.push(mot_de_passe::hacher(&brut).map_err(interne)?);
-        codes.push(format!("{}-{}", &brut[..5], &brut[5..]));
-    }
-    Ok((codes, hachages))
+/// Déporté sur `tokio::task::spawn_blocking` pour ne pas affamer le réacteur Tokio
+/// lors des 10 hachages Argon2id consécutifs.
+async fn generer_codes_secours() -> Result<(Vec<String>, Vec<String>), ErreurTotp> {
+    tokio::task::spawn_blocking(|| {
+        let mut codes = Vec::with_capacity(NOMBRE_CODES_SECOURS);
+        let mut hachages = Vec::with_capacity(NOMBRE_CODES_SECOURS);
+        for _ in 0..NOMBRE_CODES_SECOURS {
+            let brut: String = (0..LONGUEUR_CODE_SECOURS)
+                .map(|_| ALPHABET_BASE32[random_range(0..ALPHABET_BASE32.len())] as char)
+                .collect();
+            hachages.push(mot_de_passe::hacher(&brut).map_err(interne)?);
+            codes.push(format!("{}-{}", &brut[..5], &brut[5..]));
+        }
+        Ok((codes, hachages))
+    })
+    .await
+    .map_err(|e| ErreurTotp::Interne(e.to_string()))?
 }
 
 /// Accepte la saisie avec ou sans tiret ni espaces, en minuscules ou en
@@ -436,8 +442,9 @@ fn normaliser_code_secours(saisie: &str) -> Option<String> {
 
 /// X2 : le sel étant dans chaque hachage, le code saisi est comparé à tous
 /// les codes non utilisés (au plus 10 vérifications Argon2id), sans
-/// s'arrêter au premier trouvé. Usage unique garanti par la base : la
-/// condition `utilise_le IS NULL` de la mise à jour.
+/// s'arrêter au premier trouvé (égalisation du temps d'exécution).
+/// La boucle complète est déportée sur le pool de threads bloquants de Tokio
+/// (`spawn_blocking`) pour éradiquer tout déni de service (DoS) du réacteur asynchrone.
 pub async fn verifier_code_secours(pool: &PgPool, compte_id: Uuid, saisie: &str) -> Result<(), ErreurTotp> {
     compter_essai(pool, compte_id).await?;
     let Some(code) = normaliser_code_secours(saisie) else {
@@ -453,12 +460,18 @@ pub async fn verifier_code_secours(pool: &PgPool, compte_id: Uuid, saisie: &str)
     .fetch_all(pool)
     .await?;
 
-    let mut trouve = None;
-    for (id, hachage) in &disponibles {
-        if mot_de_passe::verifier(&code, hachage).map_err(interne)? {
-            trouve = Some(*id);
+    let trouve = tokio::task::spawn_blocking(move || {
+        let mut trouve = None;
+        for (id, hachage) in &disponibles {
+            if let Ok(true) = mot_de_passe::verifier(&code, hachage) {
+                trouve = Some(*id);
+            }
         }
-    }
+        trouve
+    })
+    .await
+    .map_err(|e| ErreurTotp::Interne(e.to_string()))?;
+
     let Some(id) = trouve else {
         return Err(ErreurTotp::Refuse);
     };
@@ -544,9 +557,9 @@ mod tests {
         assert!(url.contains("issuer=LaafiCare"), "{url}");
     }
 
-    #[test]
-    fn codes_de_secours_formats_et_saisie() {
-        let (codes, hachages) = generer_codes_secours().unwrap();
+    #[tokio::test]
+    async fn codes_de_secours_formats_et_saisie() {
+        let (codes, hachages) = generer_codes_secours().await.unwrap();
         assert_eq!(codes.len(), NOMBRE_CODES_SECOURS);
         assert_eq!(hachages.len(), NOMBRE_CODES_SECOURS);
         for code in &codes {

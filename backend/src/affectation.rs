@@ -16,12 +16,34 @@
 //! in that zone ». Le résultat ne dépend donc pas du fuseau du serveur
 //! PostgreSQL, contrairement à `current_date`.
 
+use std::sync::LazyLock;
+use std::time::Duration;
+
 use chrono::NaiveDate;
 use serde::Serialize;
 use sqlx::PgPool;
 use sqlx::types::Uuid;
 
 use crate::session::{self, ErreurSession, SessionActive};
+
+/// Cache mémoire court (15 secondes, 10 000 entrées max) pour le contrôle d'exercice (P2).
+/// Évite d'exécuter la jointure 5-tables à chaque requête HTTP d'un professionnel en exercice.
+static CACHE_EXERCICE: LazyLock<moka::future::Cache<(Uuid, i32, Uuid, Uuid), Exercice>> = LazyLock::new(|| {
+    moka::future::Cache::builder()
+        .time_to_live(Duration::from_secs(15))
+        .max_capacity(10_000)
+        .build()
+});
+
+/// Purge l'ensemble du cache mémoire d'exercice.
+pub fn purger_cache_exercice() {
+    CACHE_EXERCICE.invalidate_all();
+}
+
+/// Invalide une entrée précise du cache d'exercice (déconnexion ou révocation d'accès).
+pub async fn invalider_cache_exercice(cle: &(Uuid, i32, Uuid, Uuid)) {
+    CACHE_EXERCICE.invalidate(cle).await;
+}
 
 /// Condition « l'établissement permet d'exercer » (D4) : validé, et licence
 /// sans fin ou pas encore finie à la date du jour au Burkina. Alias de la
@@ -99,6 +121,11 @@ pub async fn controler_exercice(
     session_id: Uuid,
     affectation_id: Uuid,
 ) -> Result<ControleExercice, sqlx::Error> {
+    let cle = (compte_id, version_jeton, session_id, affectation_id);
+    if let Some(exercice) = CACHE_EXERCICE.get(&cle).await {
+        return Ok(ControleExercice::Valide(exercice));
+    }
+
     let ligne: Option<(bool, Option<bool>, Option<Uuid>, Option<String>, Option<String>)> = sqlx::query_as(concat!(
         // `IS NOT DISTINCT FROM` et non `=` : une session sans affectation a
         // `affectation_id` vide, et `= $4` donnerait NULL ; la colonne, lue
@@ -140,7 +167,9 @@ pub async fn controler_exercice(
     if !droit {
         return Ok(ControleExercice::DroitRetire);
     }
-    Ok(ControleExercice::Valide(Exercice { compte_id, affectation_id, structure_id, type_structure, role }))
+    let exercice = Exercice { compte_id, affectation_id, structure_id, type_structure, role };
+    CACHE_EXERCICE.insert(cle, exercice.clone()).await;
+    Ok(ControleExercice::Valide(exercice))
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -24,8 +24,7 @@ const DELAI_INITIAL: Duration = Duration::from_secs(1);
 // tentative IPv6 est refusée au bout de ~2 s (2 087 ms mesurés) avant le
 // repli sur IPv4 -- d'où le « slow acquire » de sqlx à chaque nouvelle
 // connexion, et des tests `#[sqlx::test]` très lents.
-const MAX_CONNEXIONS: u32 = 5;
-const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
+// Les valeurs de dimensionnement et de timeouts sont définies dans `OptionsPool`.
 
 // `PoolOptions::connect` ouvre une connexion immédiatement et renvoie l'erreur
 // telle quelle si elle échoue : la doc de sqlx 0.9 ne décrit aucun mécanisme
@@ -59,20 +58,54 @@ pub async fn migrations_manquantes(pool: &PgPool) -> Result<usize, sqlx::Error> 
     Ok(MIGRATIONS.iter().filter(|m| !appliquees.contains(&m.version)).count())
 }
 
+/// Options de dimensionnement et de timeouts du pool de connexions PostgreSQL (décision P1 / DBA).
+#[derive(Debug, Clone)]
+pub struct OptionsPool {
+    pub max_connexions: u32,
+    pub min_connexions: u32,
+    pub acquire_timeout: Duration,
+    pub idle_timeout: Duration,
+    pub max_lifetime: Duration,
+}
+
+impl Default for OptionsPool {
+    fn default() -> Self {
+        Self {
+            max_connexions: 10,
+            min_connexions: 2,
+            acquire_timeout: Duration::from_secs(5),
+            idle_timeout: Duration::from_secs(600), // 10 minutes
+            max_lifetime: Duration::from_secs(1800), // 30 minutes
+        }
+    }
+}
+
 pub async fn connecter(database_url: &str) -> Result<PgPool, sqlx::Error> {
+    connecter_avec_options(database_url, OptionsPool::default()).await
+}
+
+pub async fn connecter_avec_options(database_url: &str, options: OptionsPool) -> Result<PgPool, sqlx::Error> {
     let mut tentative: u32 = 1;
     let mut delai = DELAI_INITIAL;
 
     loop {
         let resultat = PgPoolOptions::new()
-            .max_connections(MAX_CONNEXIONS)
-            .acquire_timeout(ACQUIRE_TIMEOUT)
+            .max_connections(options.max_connexions)
+            .min_connections(options.min_connexions)
+            .acquire_timeout(options.acquire_timeout)
+            .idle_timeout(options.idle_timeout)
+            .max_lifetime(options.max_lifetime)
             .connect(database_url)
             .await;
 
         match resultat {
             Ok(pool) => {
-                tracing::info!(tentative, "connexion à PostgreSQL établie");
+                tracing::info!(
+                    tentative,
+                    max_conn = options.max_connexions,
+                    min_conn = options.min_connexions,
+                    "connexion à PostgreSQL établie"
+                );
                 return Ok(pool);
             }
             Err(erreur) if tentative >= MAX_TENTATIVES => {

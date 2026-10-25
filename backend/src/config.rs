@@ -12,7 +12,19 @@ use crate::adresse_email;
 // faire fuiter (le compilateur refuse).
 pub struct Config {
     pub database_url: String,
+    /// Adresse d'écoute (127.0.0.1 en local, 0.0.0.0 en conteneur Docker/Kubernetes).
+    pub server_host: String,
     pub server_port: u16,
+    /// Nombre maximal de connexions au pool PostgreSQL (défaut 10, configurable via DATABASE_MAX_CONNECTIONS).
+    pub database_max_connections: u32,
+    /// Nombre minimal de connexions conservées (défaut 2, configurable via DATABASE_MIN_CONNECTIONS).
+    pub database_min_connections: u32,
+    /// Délai d'acquisition d'une connexion en secondes (défaut 5s).
+    pub database_acquire_timeout_secs: u64,
+    /// Délai maximal d'inactivité avant fermeture d'une connexion TCP (défaut 600s / 10 min).
+    pub database_idle_timeout_secs: u64,
+    /// Durée de vie maximale d'une connexion TCP (défaut 1800s / 30 min) pour recyclage.
+    pub database_max_lifetime_secs: u64,
     pub jwt_secret: String,
     /// Clé AES-256 du chiffrement des secrets TOTP (décision Z4), distincte
     /// du secret JWT. Sa perte rend tous les TOTP inutilisables : en
@@ -144,9 +156,37 @@ impl Config {
         let url_application_web = valider_url_application_web(&lire("URL_APPLICATION_WEB")?, environnement)?;
         let contact_securite = valider_contact_securite(&lire("CONTACT_SECURITE")?, environnement)?;
 
+        let server_host = env::var("SERVER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        let database_max_connections = env::var("DATABASE_MAX_CONNECTIONS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10);
+        let database_min_connections = env::var("DATABASE_MIN_CONNECTIONS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2);
+        let database_acquire_timeout_secs = env::var("DATABASE_ACQUIRE_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(5);
+        let database_idle_timeout_secs = env::var("DATABASE_IDLE_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(600);
+        let database_max_lifetime_secs = env::var("DATABASE_MAX_LIFETIME_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1800);
+
         Ok(Config {
             database_url,
+            server_host,
             server_port,
+            database_max_connections,
+            database_min_connections,
+            database_acquire_timeout_secs,
+            database_idle_timeout_secs,
+            database_max_lifetime_secs,
             jwt_secret,
             totp_cle_chiffrement,
             environnement,

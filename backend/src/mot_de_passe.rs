@@ -179,6 +179,36 @@ pub fn verifier(mot_de_passe: &str, hash: &str) -> Result<bool, Error> {
     }
 }
 
+/// Erreur survenue lors du hachage ou de la vérification asynchrone d'un mot de passe.
+#[derive(Debug, thiserror::Error)]
+pub enum ErreurHachage {
+    #[error("erreur cryptographique argon2 : {0}")]
+    Argon2(#[from] Error),
+
+    #[error("tâche tokio interrompue : {0}")]
+    TacheInterrompue(#[from] tokio::task::JoinError),
+}
+
+/// Version asynchrone non-bloquante de `hacher`. Déporte le calcul
+/// intensif Argon2id (m=19456 KiB, t=2, p=1 ; ~30 à 100 ms de calcul pur) sur
+/// le pool de threads dédié aux tâches bloquantes de Tokio (`spawn_blocking`)
+/// pour ne pas affamer le réacteur asynchrone (starvation des worker threads Tokio).
+pub async fn hacher_async(mot_de_passe: &str) -> Result<String, ErreurHachage> {
+    let mdp = mot_de_passe.to_string();
+    let hash = tokio::task::spawn_blocking(move || hacher(&mdp)).await??;
+    Ok(hash)
+}
+
+/// Version asynchrone non-bloquante de `verifier`. Déporte la vérification
+/// mémoire-hard Argon2id (~30 à 100 ms) sur le pool de threads bloquants de
+/// Tokio pour préserver la réactivité du serveur sous forte concurrence.
+pub async fn verifier_async(mot_de_passe: &str, hash: &str) -> Result<bool, ErreurHachage> {
+    let mdp = mot_de_passe.to_string();
+    let h = hash.to_string();
+    let resultat = tokio::task::spawn_blocking(move || verifier(&mdp, &h)).await??;
+    Ok(resultat)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,5 +330,12 @@ mod tests {
     fn hachage_corrompu_renvoie_une_erreur_pas_un_faux() {
         let resultat = verifier("peu-importe", "pas-un-hachage-valide");
         assert!(resultat.is_err());
+    }
+
+    #[tokio::test]
+    async fn hache_et_verifie_async() {
+        let hash = hacher_async("mot-de-passe-async-123!").await.unwrap();
+        assert!(verifier_async("mot-de-passe-async-123!", &hash).await.unwrap());
+        assert!(!verifier_async("mauvais-mot-de-passe", &hash).await.unwrap());
     }
 }

@@ -219,7 +219,7 @@ pub async fn creer_compte(
         return Err(ErreurAuthPatient::TelephoneDejaUtilise);
     }
 
-    let hash = mot_de_passe::hacher(mot_de_passe).map_err(|e| ErreurAuthPatient::Interne(e.to_string()))?;
+    let hash = mot_de_passe::hacher_async(mot_de_passe).await.map_err(|e| ErreurAuthPatient::Interne(e.to_string()))?;
     let nip_genere = nip::generer(pool).await?;
 
     // Identité complétée, compte patient et ligne `patient` dans une seule
@@ -291,7 +291,7 @@ pub async fn reinitialiser_mot_de_passe(
     let compte_id = compte_patient.ok_or(ErreurAuthPatient::TelephoneInconnu)?;
 
     let hash =
-        mot_de_passe::hacher(nouveau_mot_de_passe).map_err(|e| ErreurAuthPatient::Interne(e.to_string()))?;
+        mot_de_passe::hacher_async(nouveau_mot_de_passe).await.map_err(|e| ErreurAuthPatient::Interne(e.to_string()))?;
 
     // - Verrouillage levé : prouver la possession du téléphone par l'OTP
     //   justifie le déblocage.

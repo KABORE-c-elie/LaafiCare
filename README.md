@@ -219,7 +219,13 @@ git checkout dev
 | `ENVIRONNEMENT` | `developpement` sur votre machine, `production` sur le vrai serveur ; obligatoire | `developpement` |
 | `URL_APPLICATION_WEB` | adresse de l'application web, sans `/` final : les liens envoyés par email y mènent ; obligatoire ; `https://` exigé en production | `http://localhost:4200` |
 | `CONTACT_SECURITE` | adresse email de l'équipe, donnée dans les alertes de sécurité (second facteur enregistré ou désactivé) ; obligatoire ; en production, une vraie adresse (les adresses d'exemple sont refusées) | `securite@example.org` |
+| `SERVER_HOST` | adresse IP d'écoute (`127.0.0.1` par défaut en local ; `0.0.0.0` en conteneur Docker ou sous Kubernetes) | `127.0.0.1` |
 | `SERVER_PORT` | port du serveur | `8080` |
+| `DATABASE_MAX_CONNECTIONS` | taille maximale du pool de connexions SQL (facultatif, défaut 10) | `20` |
+| `DATABASE_MIN_CONNECTIONS` | connexions pré-ouvertes permanentes (facultatif, défaut 2) | `5` |
+| `DATABASE_ACQUIRE_TIMEOUT_SECS` | délai maximal d'attente d'une connexion libre (facultatif, défaut 5s) | `5` |
+| `DATABASE_IDLE_TIMEOUT_SECS` | fermeture d'une connexion inutilisée (facultatif, défaut 600s / 10 min) | `600` |
+| `DATABASE_MAX_LIFETIME_SECS` | durée de vie maximale d'une connexion TCP (facultatif, défaut 1800s / 30 min) | `1800` |
 | `JWT_SECRET` | signe les jetons de connexion, 32 caractères au moins | 64 caractères hexadécimaux générés |
 | `TOTP_CLE_CHIFFREMENT` | chiffre les secrets du second facteur, exactement 64 caractères hexadécimaux | une autre valeur générée |
 
@@ -268,7 +274,7 @@ Chaque `\password` demande le mot de passe deux fois, **sans l'afficher**. Chois
 
 Au démarrage, le serveur vérifie que la base est à jour. Pour vérifier qu'il répond, ouvrir `http://127.0.0.1:8080/health` dans un navigateur (avec le port choisi) : la page affiche `"status":"ok"`.
 
-Le serveur s'arrête avec `Ctrl+C` dans le terminal où il tourne. PostgreSQL s'arrête avec `docker compose down` ; les données sont gardées pour la prochaine fois.
+Le serveur s'arrête avec `Ctrl+C` dans le terminal où il tourne (arrêt gracieux permettant de finaliser les requêtes et transactions en vol). PostgreSQL s'arrête avec `docker compose down` ; les données sont gardées pour la prochaine fois.
 
 > ⚠️ **`docker compose down -v` efface toute la base de développement**, comptes de test compris : identités, comptes patients, contrats, demandes, tout. Rien ne peut être récupéré. À n'utiliser que pour repartir volontairement d'une base vide.
 

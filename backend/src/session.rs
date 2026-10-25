@@ -367,16 +367,25 @@ async fn inserer_jeton(
 /// son émission, donc avant que la session, terminée, devienne purgeable
 /// 30 jours plus tard (6 mois pour `rejeu_detecte`). La purge et
 /// `renouveler` ne se disputent donc jamais les mêmes lignes.
-async fn purger(conn: &mut PgConnection) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "DELETE FROM session WHERE CASE \
-             WHEN motif_revocation = 'rejeu_detecte' THEN revoquee_le < now() - interval '6 months' \
-             ELSE LEAST(expire_le, COALESCE(revoquee_le, expire_le)) < now() - interval '30 days' \
-         END",
+/// Purge les sessions obsolètes (30 jours après expiration/révocation, ou 6 mois
+/// en cas de détection de rejeu).
+///
+/// La clause WHERE a été réécrite sans `CASE ... END` (forme sargable indexable).
+/// Exécutée en tâche d'arrière-plan périodique (décision P0 / DBA) plutôt que
+/// sur le chemin chaud d'ouverture de session pour éviter les blocages de table.
+pub async fn purger_sessions_expirees(pool: &PgPool) -> Result<u64, sqlx::Error> {
+    let suppr = sqlx::query(
+        "DELETE FROM session WHERE \
+         (motif_revocation = 'rejeu_detecte' AND revoquee_le < now() - interval '6 months') \
+         OR (motif_revocation IS DISTINCT FROM 'rejeu_detecte' AND ( \
+             (revoquee_le IS NOT NULL AND revoquee_le < now() - interval '30 days') \
+             OR (revoquee_le IS NULL AND expire_le < now() - interval '30 days') \
+         ))",
     )
-    .execute(conn)
-    .await?;
-    Ok(())
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(suppr)
 }
 
 // ---------------------------------------------------------------------
@@ -384,14 +393,13 @@ async fn purger(conn: &mut PgConnection) -> Result<(), sqlx::Error> {
 // ---------------------------------------------------------------------
 
 /// Ouvre une session après une authentification réussie (inscription,
-/// connexion). Purge d'abord les vieilles sessions (Q-b).
+/// connexion). Les vieilles sessions sont désormais purgées en tâche de fond (décision P0).
 pub async fn ouvrir(
     pool: &PgPool,
     compte_id: Uuid,
     affectation_id: Option<Uuid>,
 ) -> Result<SessionActive, ErreurSession> {
     let mut tx = pool.begin().await?;
-    purger(&mut tx).await?;
 
     let (type_compte, version_jeton): (String, i32) =
         sqlx::query_as("SELECT type_compte, version_jeton FROM compte WHERE id = $1")

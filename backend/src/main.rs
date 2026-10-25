@@ -14,9 +14,16 @@ mod routes_structure;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
-use axum::{Json, Router, extract::State, http::StatusCode, routing::get, routing::post};
+use axum::{
+    Json, Router,
+    extract::{DefaultBodyLimit, State},
+    http::StatusCode,
+    routing::{get, post},
+};
 use serde::Serialize;
 use sqlx::PgPool;
+use tower_http::cors::CorsLayer;
+use tower_http::trace::TraceLayer;
 
 use laaficare_backend::config::{self, CleTotp, Config, Programme};
 use laaficare_backend::db;
@@ -124,7 +131,14 @@ async fn main() {
     // l'abandon. Le message ci-dessous couvre les deux causes réelles vues en
     // test (base arrêtée, mauvais identifiants), car l'erreur de sqlx seule
     // (« pool timed out ») ne les distingue pas.
-    let pool = db::connecter(&config.database_url)
+    let pool_options = db::OptionsPool {
+        max_connexions: config.database_max_connections,
+        min_connexions: config.database_min_connections,
+        acquire_timeout: std::time::Duration::from_secs(config.database_acquire_timeout_secs),
+        idle_timeout: std::time::Duration::from_secs(config.database_idle_timeout_secs),
+        max_lifetime: std::time::Duration::from_secs(config.database_max_lifetime_secs),
+    };
+    let pool = db::connecter_avec_options(&config.database_url, pool_options)
         .await
         .unwrap_or_else(|_| {
             tracing::error!(
@@ -148,6 +162,10 @@ async fn main() {
             std::process::exit(1);
         }
     }
+
+    // Démarre la tâche périodique de maintenance (nettoyage des sessions expirées,
+    // des vieux OTP et des jetons d'email) déportée du flux OLTP utilisateur (P0).
+    laaficare_backend::maintenance::demarrer_maintenance_arriere_plan(pool.clone());
 
     let jwt = JwtService::new(&config.jwt_secret);
     let sms: Arc<dyn SmsSender> = Arc::new(sms::SmsSenderConsole);
@@ -254,9 +272,22 @@ async fn main() {
             taches_reinitialisation: Arc::new(laaficare_backend::reinitialisation::LimiteTaches::default()),
         });
 
-    // 127.0.0.1 : cohérent avec PostgreSQL exposé en local seulement. À
-    // élargir quand l'app mobile aura besoin d'un accès depuis le réseau.
-    let adresse = SocketAddr::from((Ipv4Addr::LOCALHOST, config.server_port));
+    // Limite de taille de corps : 5 Mo (pièces justificatives de structure et documents).
+    const TAILLE_MAX_CORPS_OCTETS: usize = 5 * 1024 * 1024;
+
+    let app = app
+        .layer(DefaultBodyLimit::max(TAILLE_MAX_CORPS_OCTETS))
+        .layer(CorsLayer::very_permissive())
+        .layer(TraceLayer::new_for_http())
+        .layer(tower_http::request_id::PropagateRequestIdLayer::x_request_id())
+        .layer(tower_http::request_id::SetRequestIdLayer::x_request_id(tower_http::request_id::MakeRequestUuid));
+
+    // Adresse d'écoute (127.0.0.1 en local par défaut, 0.0.0.0 en conteneur / production).
+    let ip: std::net::IpAddr = config
+        .server_host
+        .parse()
+        .unwrap_or(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST));
+    let adresse = SocketAddr::from((ip, config.server_port));
     let listener = tokio::net::TcpListener::bind(adresse)
         .await
         .unwrap_or_else(|erreur| {
@@ -266,9 +297,19 @@ async fn main() {
 
     tracing::info!(%adresse, "serveur démarré");
 
-    // Exemple officiel d'axum::serve (docs.rs, axum 0.8.9).
-    if let Err(erreur) = axum::serve(listener, app).await {
+    // Exemple officiel d'axum::serve avec arrêt gracieux (docs.rs, axum 0.8.9).
+    if let Err(erreur) = axum::serve(listener, app)
+        .with_graceful_shutdown(signal_arret())
+        .await
+    {
         tracing::error!(%erreur, "le serveur s'est arrêté sur une erreur");
         std::process::exit(1);
     }
+}
+
+async fn signal_arret() {
+    tokio::signal::ctrl_c()
+        .await
+        .expect("impossible d'écouter le signal d'arrêt Ctrl+C");
+    tracing::info!("signal d'arrêt reçu, fermeture gracieuse du serveur");
 }
