@@ -124,6 +124,61 @@ export interface ReponseValidation {
   montant_rembourse_fcfa: number;
 }
 
+/** Statut d'une structure (§2.8, §2.9). */
+export type StatutStructure = 'brouillon' | 'en_attente' | 'validee' | 'refusee' | 'suspendue' | 'abandonnee';
+
+/** Une ligne de `GET /api/administrateurs/structures` (§2.9). */
+export interface ResumeStructure {
+  id: string;
+  type: string;
+  nom: string;
+  statut: StatutStructure;
+  date_creation: string;
+  commune: string;
+  responsable_nom: string | null;
+  responsable_prenom: string | null;
+}
+
+export interface PageStructures {
+  structures: ResumeStructure[];
+  /** Curseur pour `apres`, ou `null` à la dernière page. */
+  suivant: string | null;
+}
+
+/** Une décision de l'équipe sur une structure (§2.9), jamais modifiée. */
+export interface DecisionStructure {
+  decision: 'validee' | 'refusee' | 'suspendue' | 'reactivee';
+  motif: string | null;
+  /** Date `AAAA-MM-JJ` comprise, ou `null`. */
+  licence_expire_le: string | null;
+  date_decision: string;
+  administrateur_nom: string | null;
+  administrateur_prenom: string | null;
+}
+
+/** Réponse de `GET /api/administrateurs/structures/{id}` (§2.9). */
+export interface DetailStructure extends ResumeStructure {
+  telephone: string;
+  telephone_urgence: string;
+  email: string;
+  region: string;
+  province: string;
+  parcelle: string | null;
+  lot: string | null;
+  section: string | null;
+  latitude: number;
+  longitude: number;
+  licence_expire_le: string | null;
+  responsable_telephone: string;
+  responsable_email: string | null;
+  responsable_email_verifie: boolean;
+  decisions: DecisionStructure[];
+  /** MUNASEB seulement : identifiants des autres demandes MUNASEB en attente. */
+  autres_demandes_munaseb_en_attente: string[];
+  /** MUNASEB seulement : identifiant de la MUNASEB déjà validée ou suspendue. */
+  munaseb_deja_validee: string | null;
+}
+
 /** Statut d'une invitation (§2.10) ; `expiree` est calculé par le serveur. */
 export type StatutInvitation = 'en_attente' | 'expiree' | 'acceptee' | 'refusee' | 'annulee';
 

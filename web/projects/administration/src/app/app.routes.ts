@@ -29,5 +29,11 @@ export const routes: Routes = [
     canActivate: [exigerAdministrateur],
     loadComponent: () => import('./pages/structures').then((m) => m.StructuresPage),
   },
+  {
+    path: 'structures/:id',
+    title: 'Demande de structure · Administration LaafiCare',
+    canActivate: [exigerAdministrateur],
+    loadComponent: () => import('./pages/structure').then((m) => m.StructurePage),
+  },
   { path: '**', redirectTo: 'connexion' },
 ];

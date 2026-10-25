@@ -45,6 +45,26 @@ export function formaterDateBurkina(instant: string): string {
   return Number.isNaN(date.getTime()) ? instant : DATE_BURKINA.format(date);
 }
 
+// `en-CA` écrit une date seule sous la forme AAAA-MM-JJ (forme de l'API, §1.1).
+const JOUR_ISO_BURKINA = new Intl.DateTimeFormat('en-CA', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  timeZone: FUSEAU_BURKINA,
+});
+
+/** Date du jour au Burkina Faso, `AAAA-MM-JJ` (la date que le backend prend pour « aujourd'hui », D9). */
+export function jourAuBurkina(maintenant: Date = new Date()): string {
+  return JOUR_ISO_BURKINA.format(maintenant);
+}
+
+/** Lendemain d'une date `AAAA-MM-JJ`, calculé en UTC (aucun changement d'heure ne s'y glisse). */
+export function lendemain(jour: string): string {
+  const [annee, mois, quantieme] = jour.split('-').map(Number);
+  const suivant = new Date(Date.UTC(annee, mois - 1, quantieme + 1));
+  return suivant.toISOString().slice(0, 10);
+}
+
 /** Date et heure RFC 3339 en UTC (docs/api.md §1.1), affichée à l'heure du Burkina. */
 export function formaterDateHeure(instant: string): string {
   const date = new Date(instant);

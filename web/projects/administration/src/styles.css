@@ -80,6 +80,36 @@
   }
 }
 
+/* ---------- Demandes de structure ---------- */
+
+/* Sept colonnes : moins large que le tableau des demandes de remboursement. */
+.tableau--structures {
+  min-width: 900px;
+}
+
+.avertissement {
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+}
+
+.avertissement p,
+.avertissement ul,
+.avertissement-nom p {
+  margin: 0;
+}
+
+.avertissement a {
+  color: inherit;
+  font-weight: 600;
+}
+
+/* Le nom tel qu'il partira dans les SMS : chaque caractère compte. */
+.nom-exact {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 /* ---------- Réenrôlement : QR code et codes de secours ---------- */
 
 /* Le QR code est dessiné sur fond blanc, modules noirs, avec une marge de

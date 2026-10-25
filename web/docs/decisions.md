@@ -232,3 +232,37 @@ Si le jeton est refusé (`jeton_invalide` : fenêtre expirée…), la page revie
 - **Résultat** : aucune violation de la CSP, rien dans le stockage du navigateur, et la clé n'est plus dans la page à la fin.
 - **Console** : une recommandation de Chrome, pas un blocage. Sur l'étape du mot de passe redemandé, « Password forms should have (optionally hidden) username fields for accessibility ». L'écran ne connaît pas l'email : la session ne le garde pas.
 - **QR code** : Chrome ne fournit pas `BarcodeDetector` sous Windows. Le décodage du QR se vérifie avec un téléphone, à l'essai manuel.
+
+## 14. Administration : décisions sur les demandes de structure (2026-10-22)
+
+Décisions B6 à B9 et M1 du porteur. Contrat : `docs/api.md` §2.9. Les formes exactes des réponses sont relues dans le backend (`decision_structure.rs`) : les avertissements MUNASEB sont des **identifiants**.
+
+**Liste (`/structures`)** :
+- filtre de statut, avec **« En attente » par défaut** (la file de travail), puis « Toutes », etc. ;
+- les plus anciennes d'abord, 20 par page avec `apres`.
+
+**Détail (`/structures/:id`)** :
+- les coordonnées de la structure et du responsable (email vérifié ou non), et l'historique des décisions (administrateur, licence, motif) ;
+- les avertissements MUNASEB : la MUNASEB déjà validée, et les autres demandes en attente, avec un lien vers chacune ;
+- Valider et Refuser, seulement pour une demande `en_attente`. Si l'email du responsable n'est pas vérifié, un avertissement s'affiche ; la validation reste proposée, et le serveur décide (409).
+
+**Validation** (`fenetre-validation.ts`, B8) :
+- avertissement sur le nom exact, repris tel quel dans les SMS d'invitation, avec la case « J'ai vérifié le nom de la structure. » obligatoire ;
+- licence « sans fin » (corps `{}`) ou « jusqu'à une date », **sans choix par défaut** ;
+- §2.9 : la date « doit être postérieure à aujourd'hui », et `licence_invalide` couvre une date « passée ou égale à aujourd'hui ». Le premier jour permis est donc **demain**, au Burkina Faso (`jourAuBurkina`, `lendemain` dans `commun`), avec l'attribut `min` du sélecteur de date. Le serveur garde le dernier mot : son `licence_invalide` s'affiche dans la fenêtre.
+
+**Refus** : la fenêtre de motif commune, 1 000 caractères avec compteur. Elle rappelle que le motif est lu par le responsable dans le suivi de sa demande, et jamais mis dans un email (§2.9).
+
+**Messages** :
+- un texte par `code` (M1) : `decision_sur_sa_propre_structure`, `munaseb_deja_validee`, `email_responsable_non_verifie`, `autorisation_deja_validee`, `structure_inconnue`, `transition_invalide` (avec le statut actuel, puis rechargement), `motif_vide`, `motif_trop_long` ;
+- jamais le message du serveur.
+
+**Statuts** : neutres. « En attente » est en bleu d'information, « Validée » en vert. Jamais de rouge ni d'orange.
+
+**Essai final du 2026-10-22**, dans Chrome sans interface, sur les deux constructions de production (CSP stricte), avec un faux backend :
+- **munaseb** : connexion, second facteur, choix de l'espace, demandes, détail, fenêtre de rejet, invitations, invitation envoyée. Les 9 captures sont identiques au pixel près à celles d'avant le lot B.
+- **administration** : réenrôlement (QR, clé, codes), reconnexion avec second facteur, liste, détail avec avertissement, validation avec une licence jusqu'à demain, refus avec motif. Le serveur a reçu `{"licence_expire_le": "<demain>"}` et `{"motif": "…"}`. Aucun stockage du navigateur, et la clé n'est plus dans la page à la fin.
+- **Console, dans les deux applications** :
+  - les 3 styles en ligne de la CDK, bloqués par `style-src 'self'` à l'ouverture d'une fenêtre. Ils sont déjà notés au §8, et l'affichage reste correct ;
+  - la recommandation de Chrome sur le mot de passe redemandé au réenrôlement (§13).
+  - Rien d'autre.

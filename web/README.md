@@ -84,6 +84,22 @@ Il faut un compte administrateur créé par l'outil `creer_premier_administrateu
 
 Si les 10 minutes sont passées, l'écran revient à la connexion avec « Le délai est dépassé. Reconnectez-vous. » : relancer l'outil, qui rouvre une fenêtre.
 
+### Administration : valider ou refuser une demande de structure
+
+Il faut une demande **soumise** (statut « En attente »), créée par un **autre** compte que celui de l'administrateur : personne ne décide sur sa propre structure.
+
+1. Se connecter à l'administration (mot de passe, puis code). La liste s'ouvre sur les demandes « En attente ».
+2. « Ouvrir » une demande : coordonnées, responsable, décisions passées, et avertissements s'il existe déjà une MUNASEB validée ou d'autres demandes MUNASEB.
+3. **Valider** :
+   1. vérifier que le nom ne ressemble ni à un lien ni à une consigne (il part dans les SMS d'invitation), puis cocher la case ;
+   2. choisir « Licence sans fin » ou « Jusqu'à une date » (demain au plus tôt) ;
+   3. cliquer sur « Valider la demande ».
+
+   Ce qu'on doit voir : « La demande est validée. » et le statut « Validée ».
+4. **Refuser** : écrire le motif (1 000 caractères au plus), puis « Refuser la demande ». Le responsable lit le motif dans le suivi de sa demande ; il n'est jamais mis dans un email.
+
+Une seule MUNASEB peut être validée : valider une seconde demande MUNASEB affiche « Une MUNASEB est déjà validée : une seule est admise. »
+
 ## Lancer les tests automatiques
 
 ```powershell
