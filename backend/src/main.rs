@@ -1,6 +1,7 @@
 mod erreur_api;
 mod extracteur_jwt;
 mod routes_administrateur;
+mod routes_contrat_munaseb;
 mod routes_espace_patient;
 mod routes_invitation;
 mod routes_membres;
@@ -185,6 +186,23 @@ async fn main() {
         .route(
             "/api/assurance-munaseb/remboursements/{id}/payer",
             post(routes_remboursement_munaseb::payer),
+        )
+        .route(
+            "/api/assurance-munaseb/parametres",
+            get(routes_contrat_munaseb::parametres).put(routes_contrat_munaseb::modifier_parametres),
+        )
+        .route(
+            "/api/assurance-munaseb/parametres/historique",
+            get(routes_contrat_munaseb::historique_parametres),
+        )
+        .route(
+            "/api/assurance-munaseb/contrats",
+            get(routes_contrat_munaseb::rechercher).post(routes_contrat_munaseb::adherer),
+        )
+        .route("/api/assurance-munaseb/contrats/{id}", get(routes_contrat_munaseb::detail))
+        .route(
+            "/api/assurance-munaseb/contrats/{id}/renouvellements",
+            post(routes_contrat_munaseb::renouveler),
         )
         .route("/api/patients/connexion", post(routes_patient::se_connecter))
         .route("/api/patients/moi", get(routes_patient::moi))
