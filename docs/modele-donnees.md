@@ -39,6 +39,12 @@ erDiagram
     partenaire_sante_munaseb ||--o{ demande_remboursement_munaseb : "émet"
     demande_remboursement_munaseb ||--o{ historique_statut_demande : "trace"
     utilisateur ||--o{ notification : "reçoit"
+    medicament }o--o{ dci : "contient"
+    structure ||--o{ lot_stock : "stocke (pharmacie)"
+    medicament ||--o{ lot_stock : "lot de"
+    lot_stock ||--o{ mouvement_stock : "journal"
+    vente ||--o{ mouvement_stock : "lignes"
+    affectation ||--o{ mouvement_stock : "auteur"
 ```
 
 ---
@@ -291,6 +297,36 @@ Règles garanties par la base : **jamais modifiées ni supprimées** ; seulement
 
 ---
 
+## 6. Pharmacie (2026-11-16)
+
+### Le catalogue national : `dci`, `medicament`, `medicament_dci`, `import_catalogue`
+
+Un **seul catalogue pour tout le pays**, partagé par toutes les pharmacies (D6). Un médicament a une dénomination, une forme, un dosage, et **une ou plusieurs DCI** (molécules ; plusieurs pour une association). Chaque ajout est rattaché à un **import** : l'administrateur LaafiCare qui l'a lancé, la source officielle, l'empreinte SHA-256 du fichier, le nombre de lignes. Jamais modifié ni effacé ; le serveur le lit, seul l'outil `importer_catalogue` l'écrit. **Vide tant que la liste nationale officielle n'est pas déposée** dans `docs/Reglementation, loi et reference/`. Fichier : [`catalogue.rs`](../backend/src/catalogue.rs). Migration 0030.
+
+### `lot_stock` : un lot reçu par une pharmacie
+
+Numéro de lot, date d'expiration, **prix d'achat unitaire**, fournisseur, médicament, pharmacie. La quantité n'est pas une colonne : c'est la somme des mouvements du lot. Jamais modifié ni effacé.
+
+### `mouvement_stock` : le journal
+
+Une ligne par entrée, vente, perte (`peremption`, `casse`, `autre`), écart d'inventaire ou annulation. Chaque ligne garde le **prix d'achat** de son lot, et une ligne de vente son **prix de vente** : figés. Auteur : l'affectation (pharmacien ou responsable de la même pharmacie). Une annulation désigne le mouvement annulé, une seule fois. Garanties de la base : **la quantité d'un lot n'est jamais négative** (trigger, même pour deux ventes simultanées) ; un mouvement ne vise que les lots et les ventes **de sa pharmacie** ; jamais modifié ni effacé. Fichier : [`stock_pharmacie.rs`](../backend/src/stock_pharmacie.rs). Migration 0031.
+
+### `vente` : l'en-tête d'une vente
+
+Pharmacie, auteur, date, case « sur ordonnance papier ». **Aucune donnée patient** (D10). Les lignes sont des mouvements.
+
+### `prix_vente_pharmacie`, `seuil_stock`, `reglage_pharmacie`
+
+- Prix de vente **par pharmacie et par médicament**, une version par changement, fixé par le **responsable** seulement (garanti par la base) ; jamais modifié.
+- Seuils minimal et maximal d'alerte, par médicament ; modifiables, jamais effacés.
+- Délai d'alerte de péremption de la pharmacie, réglé par le **responsable** (garanti par la base) ; vide = alerte désactivée (D9).
+
+### `operation_idempotente` : les clés d'idempotence
+
+Une ligne par clé `Idempotency-Key` reçue : pharmacie, clé, opération, empreinte SHA-256 de la requête, objet créé. Sert à renvoyer le même objet quand une requête est renvoyée après une coupure. Jamais modifiée ni effacée.
+
+---
+
 ## Les migrations, une par une
 
 | N° | Ce qu'elle apporte |
@@ -324,5 +360,7 @@ Règles garanties par la base : **jamais modifiées ni supprimées** ; seulement
 | 0027 | Trace des interventions de l'équipe sur un compte compromis (`intervention_compte` : retrait d'une affectation, blocage, réactivation), jamais modifiée ni supprimée, jamais sur ses propres comptes ; écrite par le seul rôle des outils |
 | 0028 | Contrat MUNASEB tenu par les agents : paramètres de la mutuelle en base et historisés (`parametre_munaseb`), numéro de carte, antenne, niveau d'études et plafond sur chaque période, paiement de la cotisation (`paiement_cotisation_munaseb`) ; traces jamais modifiées |
 | 0029 | Paramètres MUNASEB modifiés par le seul responsable de la structure (colonnes de l'auteur renommées) ; trace des adhésions sans patient (`echec_adhesion_munaseb`), pour la limite d'échecs par agent |
+| 0030 | Catalogue national des médicaments (`import_catalogue`, `dci`, `medicament`, `medicament_dci`) : jamais modifié ni effacé ; lu par le serveur, rempli par le seul outil d'import |
+| 0031 | Stock des pharmacies : lots, ventes, journal des mouvements (jamais négatif, jamais modifié), prix de vente historisés, seuils, réglages, clés d'idempotence |
 
 Une migration déjà appliquée ne change plus jamais : toute évolution passe par une nouvelle migration. Un test vérifie aussi qu'aucun caractère invisible ne s'y glisse ([`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs)).

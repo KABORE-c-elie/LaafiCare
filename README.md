@@ -139,7 +139,7 @@ Le projet a commencé par une phase de cadrage : un cahier des charges et des di
 | **Serveur : backoffice** | **création d'un établissement MUNASEB** (étape 3.7, réduite) : un patient crée la structure, devient son responsable, crée au passage son compte professionnel, fait vérifier son email par un lien, puis soumet sa demande ; suivi de ses demandes. **Décisions de l'équipe** (étape 3.8, réduite) : liste et détail des demandes, validation avec une licence (sans fin, ou jusqu'à une date), refus avec motif ; un administrateur ne décide jamais sur sa propre structure. **Invitations** (étape 3.10, réduite) : le responsable invite un agent par son numéro (SMS), la personne accepte ou refuse depuis son compte patient ; annulation, expiration après 7 jours |
 | Serveur : connexion professionnelle | **fonctionne** (`POST /api/professionnels/connexion`, puis `POST /api/professionnels/connexion/second-facteur` quand le second facteur est actif) : email et mot de passe, email obligatoirement vérifié, code TOTP ou code de secours, jeton intermédiaire à usage unique, session de 12 h au plus. Un compte professionnel naît quand un patient crée son établissement ; son email se vérifie par un lien (renvoyable une fois par minute). **Mot de passe oublié** (étape 3.12) : un lien valable 30 minutes, envoyé à l'email vérifié, pour les professionnels et les administrateurs ; toutes les sessions sont fermées après le changement, et une alerte part par email. |
 | **Serveur : connexion administrateur** | **fonctionne** (`POST /api/administrateurs/connexion`, second temps, réenrôlement) : second facteur toujours exigé ; un administrateur sans second facteur ne peut en enregistrer un que pendant une fenêtre de 10 minutes ouverte par l'équipe. **Testable dans Postman** après l'outil du premier administrateur (voir « Créer le premier administrateur ») |
-| **Outils de l'équipe** | **fonctionnent**, sur l'ordinateur du serveur seulement (jamais par le réseau) : `creer_premier_administrateur`, `creer_administrateur` (un administrateur en crée un autre), `desactiver_totp` (téléphone perdu), `intervenir_compte` (compte compromis : retirer un accès, bloquer, réactiver) ; chaque action est tracée |
+| **Outils de l'équipe** | **fonctionnent**, sur l'ordinateur du serveur seulement (jamais par le réseau) : `creer_premier_administrateur`, `creer_administrateur` (un administrateur en crée un autre), `desactiver_totp` (téléphone perdu), `intervenir_compte` (compte compromis : retirer un accès, bloquer, réactiver), `importer_catalogue` (catalogue national des médicaments) ; chaque action est tracée |
 | Applications Angular et Flutter | en cours, chacune dans sa branche (voir « Organisation du dépôt ») |
 
 **Le backoffice** est la partie qui gère les comptes et les établissements : création d'un établissement par son responsable, validation par l'équipe LaafiCare (licence), invitation des employés, administrateurs.
@@ -149,7 +149,7 @@ Le projet a commencé par une phase de cadrage : un cahier des charges et des di
 - **Ce qui marche encore** : l'abandon d'une demande en brouillon ou refusée par son créateur ; la liste des membres d'un établissement et le retrait de l'accès d'un agent ou d'un autre responsable par un responsable (ses sessions sur cet établissement se ferment aussitôt, et un email le prévient).
 - **Espace patient MUNASEB** (étape 6) : le patient voit ses droits (couvert, en carence, expiré, suspendu, avec le solde de sa période), ses demandes de remboursement et leur détail (motif d'un rejet compris), et ses notifications, qu'il peut marquer comme lues. Il ne voit jamais que ses propres données.
 - **Contrats MUNASEB** (étape 5) : un agent enregistre l'adhésion d'un étudiant (NIP et date de naissance, numéro de carte, paiement en espèces ou par mobile money), retrouve un contrat par son numéro de carte, le renouvelle chaque année (nouveau numéro de carte, délai de grâce de 10 jours), et lit les valeurs de la mutuelle (cotisation, fiche, délai de grâce, carence, plafond), que seul le **responsable** de la MUNASEB peut changer, chaque changement étant gardé dans un historique. Après 5 adhésions sans patient en 15 minutes, un agent doit attendre avant de réessayer. Plus besoin de SQL pour créer un contrat.
-- **Pharmacies** (itération ouverte le 2026-11-16) : un patient crée sa pharmacie, dépose son autorisation d'ouverture et d'exploitation (PDF, JPEG ou PNG, 5 Mo au plus), puis la soumet ; l'équipe LaafiCare consulte la pièce et valide ; le responsable invite ses pharmaciens.
+- **Pharmacies** (itération ouverte le 2026-11-16) : un patient crée sa pharmacie, dépose son autorisation d'ouverture et d'exploitation (PDF, JPEG ou PNG, 5 Mo au plus), puis la soumet ; l'équipe LaafiCare consulte la pièce et valide ; le responsable invite ses pharmaciens. **Stock** : le pharmacien enregistre l'arrivée d'un lot (numéro, date d'expiration, prix d'achat), vend au comptoir (le lot qui périme le plus tôt sort d'abord, un lot périmé ne se vend jamais), déclare les pertes, fait un inventaire rapide, et voit ses alertes (stock sous le seuil, lots bientôt périmés) et les médicaments de même molécule disponibles. Rien ne s'efface : une erreur se corrige par une annulation, tracée. Le **responsable** fixe les prix de vente et le délai d'alerte de péremption. Une requête renvoyée après une coupure ne crée rien deux fois. **Le catalogue des médicaments reste vide** tant que la liste nationale officielle n'est pas déposée (outil `importer_catalogue`).
 - **Ce qui n'est pas encore utilisable** : la suspension d'un contrat, les ayants droit et les tarifs selon le circuit de soins (en attente des réponses de la MUNASEB, voir [`docs/points-ouverts.md`](docs/points-ouverts.md)). Les hôpitaux, cliniques et laboratoires attendent la liste de leurs pièces justificatives.
 - **Les détails** : les tables et leurs règles dans [`docs/modele-donnees.md`](docs/modele-donnees.md), la double authentification dans [`docs/securite.md`](docs/securite.md), les routes prévues dans [`docs/api.md`](docs/api.md) (section 4).
 
@@ -325,6 +325,34 @@ Même parcours que la MUNASEB ci-dessus (étapes 1 à 9), avec `"type": "pharmac
 | 5. Vérifier la pièce (équipe) | `GET …/api/administrateurs/structures/<structure_id>`, puis `GET …/api/administrateurs/pieces/<piece_id>/fichier` | aucun | la pièce dans `pieces`, puis le fichier téléchargé |
 | 6. Valider, inviter | comme pour la MUNASEB, avec `"role": "pharmacien"` | — | 204, puis 201 |
 
+### Tenir le stock d'une pharmacie
+
+Il faut d'abord **un catalogue de test**, avec des médicaments **fictifs**. Écrire un petit fichier texte (UTF-8), par exemple `catalogue-fictif.txt` :
+
+```
+denomination;dci;forme;dosage
+Produit X fictif;Molécule-A fictive;comprimé;500 mg
+Produit Y fictif;Molécule-A fictive;comprimé;500 mg
+```
+
+puis, depuis `backend/`, lancer `cargo run --bin importer_catalogue` : l'outil demande l'email, le mot de passe et un code d'un administrateur, le chemin du fichier, la source (écrire « Liste fictive de test »), puis confirme. **Ne jamais importer de vraie liste avant le dépôt du fichier officiel** dans `docs/Reglementation, loi et reference/`.
+
+Ensuite, le pharmacien (ou le responsable) se connecte, active son affectation de la pharmacie, et, avec ce `jeton_acces` (exemples complets : `docs/api.md`, 2.15) :
+
+| Étape | Demande | Corps | Réponse attendue |
+|---|---|---|---|
+| 1. Trouver le médicament | `GET …/api/pharmacie/medicaments?q=produit` | aucun | 200, les deux produits avec leur `id` |
+| 2. Vendre sans prix | `POST …/api/pharmacie/ventes` | `{"sur_ordonnance_papier": false, "lignes": [{"medicament_id": "<id X>", "quantite": 1}]}` | 409 `prix_non_defini` |
+| 3. Fixer le prix (pharmacien) | `PUT …/api/pharmacie/prix/<id X>` | `{"prix_unitaire_fcfa": 250}` | 403 `acces_refuse` : seul le responsable fixe les prix |
+| 4. Fixer le prix (responsable) | même demande avec le jeton du responsable | même corps | 200 |
+| 5. Entrée d'un lot | `POST …/api/pharmacie/entrees`, en-tête `Idempotency-Key: entree-1` | `{"medicament_id": "<id X>", "numero_lot": "LOT-1", "date_expiration": "<dans 2 mois>", "quantite": 10, "prix_achat_unitaire_fcfa": 100, "fournisseur": "Grossiste fictif"}` | 201, le lot (`quantite` 10) |
+| 6. Renvoyer la même entrée | exactement la même demande, même clé | même corps | 201, **le même lot** (même `id`) : rien n'est créé deux fois |
+| 7. Vendre | même demande qu'à l'étape 2 | même corps | 201, la vente, `total_fcfa` 250 |
+| 8. Voir le stock | `GET …/api/pharmacie/stock` | aucun | 200, `quantite_disponible` 9 |
+| 9. Voir le journal | `GET …/api/pharmacie/mouvements` | aucun | 200, l'entrée et la vente, avec le nom de l'auteur |
+| 10. Médicaments de même molécule | `GET …/api/pharmacie/medicaments/<id X>/equivalents` | aucun | 200, le produit Y |
+| 11. Alertes | `PUT …/api/pharmacie/seuils/<id X>` avec `{"seuil_min": 20, "seuil_max": null}`, puis `GET …/api/pharmacie/alertes` | — | 204, puis le produit X dans `sous_seuil_min` |
+
 ### Enregistrer un contrat MUNASEB (agent)
 
 L'agent invité à l'étape 9 ci-dessus se connecte (`POST …/api/professionnels/connexion`), active son affectation `agent_assurance_munaseb`, puis, avec ce `jeton_acces` (exemples complets : `docs/api.md`, 2.14) :
@@ -389,6 +417,8 @@ Si l'outil s'arrête en cours, ou si les 10 minutes passent : relancer `cargo ru
   3. **réactiver un compte bloqué**, après avoir vérifié la CNIB de la personne devant soi : elle choisit ensuite un nouveau mot de passe avec « Mot de passe oublié ? ».
 
   Chaque fois, l'outil affiche la personne trouvée et demande de confirmer, puis un motif. Chaque action est tracée, sans pouvoir être modifiée ; la personne est prévenue par email si elle en a un vérifié. Un administrateur ne peut agir sur aucun de ses propres comptes.
+
+- `cargo run --bin importer_catalogue` : ajouter des médicaments au catalogue national, depuis un fichier tiré d'un document officiel (voir « Tenir le stock d'une pharmacie »). Rien ne peut ensuite être effacé ;
 
 **Gardez toujours au moins deux administrateurs avec un second facteur actif** : `desactiver_totp` exige un autre administrateur que la personne visée.
 

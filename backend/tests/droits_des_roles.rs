@@ -89,6 +89,30 @@ async fn ce_que_chaque_role_peut_faire(pool: PgPool) {
     refuse(&mut conn, "UPDATE echec_adhesion_munaseb SET date_echec = date_echec WHERE false").await;
     refuse(&mut conn, "DELETE FROM echec_adhesion_munaseb WHERE false").await;
     permis(&mut conn, "SELECT plafond_munaseb_en_vigueur()").await;
+    // Catalogue national (migration 0030) : le serveur le lit seulement ;
+    // seul l'outil local d'import l'écrit (D6).
+    refuse(&mut conn, "INSERT INTO dci (nom, cle) VALUES ('x', 'x')").await;
+    refuse(&mut conn, "UPDATE medicament SET forme = forme WHERE false").await;
+    refuse(&mut conn, "DELETE FROM medicament_dci WHERE false").await;
+    permis(&mut conn, "SELECT count(*) FROM medicament").await;
+    // Stock (migration 0031) : journal, lots, ventes, prix et clés
+    // d'idempotence ajoutés, jamais modifiés ni effacés ; seuils et
+    // réglages modifiables, jamais effacés.
+    for sql in [
+        "UPDATE mouvement_stock SET quantite = quantite WHERE false",
+        "DELETE FROM mouvement_stock WHERE false",
+        "UPDATE lot_stock SET fournisseur = fournisseur WHERE false",
+        "DELETE FROM vente WHERE false",
+        "UPDATE prix_vente_pharmacie SET prix_unitaire_fcfa = prix_unitaire_fcfa WHERE false",
+        "DELETE FROM operation_idempotente WHERE false",
+        "DELETE FROM seuil_stock WHERE false",
+        "DELETE FROM reglage_pharmacie WHERE false",
+        "TRUNCATE mouvement_stock",
+    ] {
+        refuse(&mut conn, sql).await;
+    }
+    permis(&mut conn, "UPDATE seuil_stock SET seuil_min = seuil_min WHERE false").await;
+    permis(&mut conn, "UPDATE reglage_pharmacie SET modifie_le = modifie_le WHERE false").await;
 
     permis(&mut conn, "SELECT count(*) FROM _sqlx_migrations").await;
     permis(&mut conn, "UPDATE compte SET statut = statut, version_jeton = version_jeton WHERE false").await;
@@ -105,6 +129,9 @@ async fn ce_que_chaque_role_peut_faire(pool: PgPool) {
     )
     .await;
     refuse(&mut conn, "DELETE FROM intervention_compte WHERE false").await;
+    // L'outil d'import ajoute au catalogue, sans jamais le modifier.
+    permis(&mut conn, "INSERT INTO dci (nom, cle) SELECT nom, cle FROM dci WHERE false").await;
+    refuse(&mut conn, "UPDATE medicament SET forme = forme WHERE false").await;
     refuse(&mut conn, "DELETE FROM historique_statut_demande WHERE false").await;
     refuse(&mut conn, "ALTER TABLE historique_statut_demande DISABLE TRIGGER ALL").await;
 }
@@ -372,4 +399,93 @@ async fn parcours_du_serveur_avec_son_role(proprietaire: PgPool) {
     membres::desactiver(&serveur, &email, "securite@example.org", responsable, munaseb, agent.affectation_id)
         .await
         .unwrap();
+}
+
+/// Parcours de la pharmacie (migrations 0030 et 0031) avec le rôle du
+/// serveur : prix, entrée, vente, annulation, perte, inventaire, seuils,
+/// réglages et lectures, clés d'idempotence comprises. Le catalogue est
+/// importé avec le rôle propriétaire (l'outil d'import a son propre rôle).
+#[sqlx::test]
+#[ignore]
+async fn parcours_pharmacie_avec_le_role_du_serveur(proprietaire: PgPool) {
+    use laaficare_backend::idempotence::Cle;
+    use laaficare_backend::stock_pharmacie::{
+        self as stock, AffectationPharmacie, Annulation, LigneDemandee, LigneInventaire, MotifPerte, NouvelInventaire,
+        NouvelleEntree, NouvellePerte, NouvelleVente, Reglages, RolePharmacie, Seuils,
+    };
+
+    let admin: Uuid = sqlx::query_scalar(
+        "WITH u AS (INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('ADMIN', 'Fictif', '+22670049999') RETURNING id) \
+         INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) SELECT id, 'administrateur_laaficare', 'x' FROM u RETURNING id",
+    )
+    .fetch_one(&proprietaire)
+    .await
+    .unwrap();
+    let fichier = "denomination;dci;forme;dosage\nProduit X fictif;Molécule-A fictive;comprimé;500 mg\n";
+    laaficare_backend::catalogue::importer(&proprietaire, admin, "Liste fictive", fichier.as_bytes()).await.unwrap();
+    let x: Uuid = sqlx::query_scalar("SELECT id FROM medicament").fetch_one(&proprietaire).await.unwrap();
+    let compte: Uuid = sqlx::query_scalar(
+        "WITH u AS (INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('SANOU', 'Ali', '+22670049998') RETURNING id) \
+         INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) SELECT id, 'professionnel', 'x' FROM u RETURNING id",
+    )
+    .fetch_one(&proprietaire)
+    .await
+    .unwrap();
+    let structure_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO structure (type_structure, nom, telephone, telephone_urgence, region, email, commune, province, \
+                                latitude, longitude, createur_compte_id, statut) \
+         VALUES ('pharmacie', 'Pharmacie fictive', '+22670000000', '+22670000000', 'Région fictive', 'p@example.org', \
+                 'Commune fictive', 'Province fictive', 12.3714, -1.5197, $1, 'validee') RETURNING id",
+    )
+    .bind(compte)
+    .fetch_one(&proprietaire)
+    .await
+    .unwrap();
+    let affectation_id: Uuid =
+        sqlx::query_scalar("INSERT INTO affectation (compte_id, structure_id, role) VALUES ($1, $2, 'responsable') RETURNING id")
+            .bind(compte)
+            .bind(structure_id)
+            .fetch_one(&proprietaire)
+            .await
+            .unwrap();
+    let titulaire = AffectationPharmacie { affectation_id, structure_id, role: RolePharmacie::Responsable };
+
+    let serveur = pool_du_serveur(&proprietaire).await;
+    stock::fixer_prix(&serveur, titulaire, x, 200).await.unwrap();
+    let cle = Cle::lire("cle-1").unwrap();
+    let entree = NouvelleEntree {
+        medicament_id: x,
+        numero_lot: "LOT-1".into(),
+        date_expiration: chrono::Utc::now().date_naive() + chrono::Duration::days(60),
+        quantite: 10,
+        prix_achat_unitaire_fcfa: 100,
+        fournisseur: "Grossiste fictif".into(),
+    };
+    let lot = stock::entrer(&serveur, titulaire, Some(&cle), &entree).await.unwrap();
+    assert_eq!(stock::entrer(&serveur, titulaire, Some(&cle), &entree).await.unwrap().id, lot.id);
+    let vente = NouvelleVente {
+        sur_ordonnance_papier: true,
+        lignes: vec![LigneDemandee { medicament_id: x, quantite: 2, lot_id: None }],
+    };
+    let v = stock::vendre(&serveur, titulaire, None, &vente).await.unwrap();
+    stock::annuler_vente(&serveur, titulaire, None, v.id, &Annulation { motif: "Erreur".into() }).await.unwrap();
+    let perte = stock::declarer_perte(
+        &serveur,
+        titulaire,
+        None,
+        &NouvellePerte { lot_id: lot.id, quantite: 1, motif: MotifPerte::Casse, commentaire: None },
+    )
+    .await
+    .unwrap();
+    stock::annuler_mouvement(&serveur, titulaire, None, perte.id, &Annulation { motif: "Erreur".into() }).await.unwrap();
+    let inventaire = NouvelInventaire { lignes: vec![LigneInventaire { lot_id: lot.id, quantite_comptee: 9 }] };
+    assert_eq!(stock::inventorier(&serveur, titulaire, None, &inventaire).await.unwrap().ecarts.len(), 1);
+    stock::fixer_seuils(&serveur, titulaire, x, &Seuils { seuil_min: 5, seuil_max: None }).await.unwrap();
+    stock::fixer_seuils(&serveur, titulaire, x, &Seuils { seuil_min: 20, seuil_max: None }).await.unwrap();
+    stock::regler(&serveur, titulaire, &Reglages { delai_alerte_peremption_jours: Some(90) }).await.unwrap();
+    let alertes = stock::alertes(&serveur, structure_id).await.unwrap();
+    assert_eq!((alertes.sous_seuil_min.len(), alertes.bientot_perimes.len()), (1, 1));
+    assert_eq!(stock::etat(&serveur, structure_id, None, 50).await.unwrap()[0].quantite_disponible, 9);
+    assert_eq!(stock::journal(&serveur, structure_id, None, 50).await.unwrap().len(), 6);
+    assert!(stock::equivalents(&serveur, structure_id, x).await.unwrap().is_some());
 }

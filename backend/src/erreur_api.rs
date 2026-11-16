@@ -21,6 +21,7 @@ use axum::http::request::Parts;
 use chrono::NaiveDate;
 use laaficare_backend::mot_de_passe::RegleMotDePasse;
 use serde::Serialize;
+use sqlx::types::Uuid;
 
 #[derive(Debug, Serialize)]
 pub struct ErreurApi {
@@ -41,6 +42,13 @@ pub struct ErreurApi {
     /// n'ont pas été déposés (soumission d'une structure).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pieces_manquantes: Option<Vec<&'static str>>,
+    /// Seulement pour `stock_insuffisant` et `prix_non_defini` (pharmacie) :
+    /// le médicament concerné, pour que l'application montre la bonne ligne.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub medicament_id: Option<Uuid>,
+    /// Seulement pour `stock_insuffisant` : la quantité encore disponible.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quantite_disponible: Option<i64>,
 }
 
 impl ErreurApi {
@@ -53,6 +61,8 @@ impl ErreurApi {
             statut_actuel: None,
             regles_non_respectees: None,
             pieces_manquantes: None,
+            medicament_id: None,
+            quantite_disponible: None,
         }
     }
 }

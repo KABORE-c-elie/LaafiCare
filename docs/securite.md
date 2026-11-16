@@ -197,6 +197,16 @@ Beaucoup de règles sont vérifiées deux fois : par le code, et par la base Pos
 
 **L'agent MUNASEB ne peut pas chercher un patient par son NIP** (étape 5). Pour l'adhésion, il donne le NIP **et** la date de naissance lue sur la pièce d'identité ; si l'un des deux ne correspond pas, la réponse est la même (« aucun patient »). Une faute de frappe qui tomberait sur le NIP d'un autre patient ne lui crée donc pas de contrat, et la route ne sert pas à savoir si un NIP existe (OWASP API Security Top 10 2023, API3 : ne rien exposer de plus que nécessaire). **Les essais sont limités** (2026-11-16) : au 5ᵉ échec d'un même agent en 15 minutes, ses adhésions sont refusées (429, avec le délai d'attente) le temps que le plus ancien échec sorte de la fenêtre, même avec un couple correct ; chaque échec est tracé avec son affectation, sans le NIP ni la date essayés (OWASP API4:2023 *Unrestricted Resource Consumption* ; OWASP *Authentication Cheat Sheet*, « Protect Against Automated Attacks »). La valeur est celle du verrouillage des comptes (5 essais en 15 minutes) : aucune source n'en donne une autre. **Seul le responsable** de la MUNASEB modifie les paramètres de la mutuelle ; les agents les lisent. L'agent retrouve un contrat par le **numéro de carte** imprimé sur la carte que l'adhérent présente ; il voit son nom, jamais son NIP ni son téléphone. Fichier : [`contrat_assurance_munaseb.rs`](../backend/src/contrat_assurance_munaseb.rs).
 
+**Pharmacie** (migrations 0030 et 0031, 2026-11-16) :
+
+- **Une pharmacie ne voit et ne touche que son stock.** La pharmacie vient toujours de l'affectation du jeton, jamais de la requête ; un lot, une vente ou un mouvement d'une autre pharmacie répond comme un objet qui n'existe pas (404). La base le garantit aussi : un mouvement ne peut viser que les lots, les ventes et les auteurs de sa propre pharmacie (OWASP API Security Top 10 2023, API1 *Broken Object Level Authorization*).
+- **Le stock ne devient jamais négatif**, même avec deux ventes en même temps : la base le refuse.
+- **Le journal du stock, les ventes, les prix et le catalogue ne se modifient ni ne s'effacent.** Une erreur se corrige par une écriture d'annulation, tracée avec son auteur.
+- **Le prix de vente et les réglages** n'ont pour auteur que le **responsable** de la pharmacie (garanti par la base) ; un pharmacien reçoit 403.
+- **Le catalogue** n'est écrit que par l'outil d'import de l'équipe, avec son propre rôle ; le serveur le lit seulement.
+- **Une requête renvoyée après une coupure ne crée rien deux fois** (en-tête `Idempotency-Key`, draft IETF) : la base garde, par pharmacie, chaque clé avec l'empreinte de sa requête ; la même clé avec une autre requête est refusée.
+- **Aucune donnée patient** n'est enregistrée avec une vente (D10).
+
 **Le serveur n'a pas les droits pour défaire ces protections** (migration 0026, 2026-10-22). Il se connecte avec un rôle limité, `laaficare_serveur` : ni administrateur de la base, ni propriétaire des tables. Il ne peut donc ni désactiver un trigger, ni modifier ou effacer une trace, ni créer ou changer une table, ni écrire le journal des migrations. Les outils de l'équipe ont leur propre rôle, `laaficare_outils`, **seul autorisé à ouvrir la fenêtre de réenrôlement** d'un administrateur ; le serveur peut seulement la refermer, par une fonction prévue pour cela. Les migrations sont appliquées à part (`cargo run --bin migrer`), avec le rôle propriétaire. Un test vérifie ces refus et fait tourner un parcours complet du serveur avec son seul rôle ([`tests/droits_des_roles.rs`](../backend/tests/droits_des_roles.rs)).
 
 **Limite connue** : le rôle propriétaire, lui, peut tout faire. Il ne doit servir qu'aux migrations ; en production, son mot de passe reste sur le poste qui les applique, jamais sur le serveur.
@@ -213,7 +223,7 @@ Les établissements déposent leurs autorisations officielles (PDF, JPEG ou PNG,
 - les fichiers sont stockés dans la base, **jamais à une adresse publique**, et seule l'équipe LaafiCare peut les télécharger ;
 - le contenu n'est lu que par la route de téléchargement, jamais par les listes.
 
-Structure en place : migration 0012. Les routes viendront à une étape ultérieure.
+Structure en place : migration 0012. Routes en service depuis le 2026-11-16, pour les pharmacies (`docs/api.md`, sections 2.8 et 2.9) : le téléchargement répond en pièce jointe (`Content-Disposition: attachment`), avec `X-Content-Type-Options: nosniff` (le navigateur ne devine pas le type) et `Cache-Control: no-store` (aucune copie gardée). **Restent avant la production** : antivirus, réécriture des images, retrait du contenu actif des PDF (section 11).
 
 ## 10. Les secrets du serveur
 
