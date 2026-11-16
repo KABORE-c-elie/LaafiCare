@@ -232,8 +232,9 @@ Résumé :
 | POST | `/api/assurance-munaseb/remboursements/{id}/valider` | jeton en exercice, agent MUNASEB | fonctionne (section 2.3) |
 | POST | `/api/assurance-munaseb/remboursements/{id}/rejeter` | jeton en exercice, agent MUNASEB | fonctionne (section 2.3) |
 | POST | `/api/assurance-munaseb/remboursements/{id}/payer` | jeton en exercice, agent MUNASEB | fonctionne (section 2.3) |
-| GET, PUT | `/api/assurance-munaseb/parametres` | jeton en exercice, agent MUNASEB | fonctionne (section 2.14) |
-| GET | `/api/assurance-munaseb/parametres/historique` | jeton en exercice, agent MUNASEB | fonctionne (section 2.14) |
+| GET | `/api/assurance-munaseb/parametres` | jeton en exercice, agent MUNASEB ou responsable de la MUNASEB | fonctionne (section 2.14) |
+| PUT | `/api/assurance-munaseb/parametres` | jeton en exercice, **responsable** de la MUNASEB seulement | fonctionne (section 2.14) |
+| GET | `/api/assurance-munaseb/parametres/historique` | jeton en exercice, agent MUNASEB ou responsable de la MUNASEB | fonctionne (section 2.14) |
 | POST, GET | `/api/assurance-munaseb/contrats` | jeton en exercice, agent MUNASEB | fonctionne (section 2.14) ; GET avec `?numero_carte=` |
 | GET | `/api/assurance-munaseb/contrats/{id}` | jeton en exercice, agent MUNASEB | fonctionne (section 2.14) |
 | POST | `/api/assurance-munaseb/contrats/{id}/renouvellements` | jeton en exercice, agent MUNASEB | fonctionne (section 2.14) |
@@ -1194,7 +1195,12 @@ Libellés conseillés : `en_attente` « Reçue », `en_cours` « En cours de tra
 
 ### 2.14 Agent MUNASEB : contrats et paramètres (étape 5)
 
-Toutes ces routes demandent un **jeton agent MUNASEB en exercice**, comme les remboursements (section 2.3) : 401 pour un autre jeton, 403 `acces_refuse` pour une affectation qui n'est pas celle d'un agent d'une MUNASEB validée et sous licence. Elles remplacent le contrat posé à la main en SQL.
+Ces routes demandent un **jeton professionnel en exercice** dans la MUNASEB validée et sous licence (401 pour un autre jeton) :
+- **contrats** (adhésion, recherche, détail, renouvellement) : affectation `agent_assurance_munaseb`, comme les remboursements (section 2.3) ;
+- **lecture des paramètres** et de leur historique : agent **ou** responsable de la MUNASEB ;
+- **modification des paramètres** : **responsable** de la MUNASEB seulement (précisé le 2026-11-16 : ces valeurs touchent l'argent de toutes les adhésions suivantes).
+
+Tout autre rôle ou une structure qui n'est pas la MUNASEB validée : 403 `acces_refuse`, avant la lecture du corps. Ces routes remplacent le contrat posé à la main en SQL.
 
 **Règles de calcul d'une période** (CLAUDE.md §12, réponses du porteur du 2026-10-22, **à confirmer par la MUNASEB**) :
 - la **date de paiement** est toujours la date du jour au Burkina, fixée par le serveur ; l'agent ne la saisit jamais ;
@@ -1219,15 +1225,16 @@ Le numéro de carte **change chaque année** : chaque période porte le sien, un
   "carence_mois": 1,
   "plafond_periode_fcfa": 100000,
   "date_effet": "2026-11-16T09:16:59.418551Z",
-  "agent_nom": null,
-  "agent_prenom": null
+  "auteur_nom": null,
+  "auteur_prenom": null
 }
 ```
 
-- `agent_nom`, `agent_prenom` : l'agent qui a posé cette version ; `null` pour les valeurs initiales.
+- `auteur_nom`, `auteur_prenom` : le responsable de la MUNASEB qui a posé cette version ; `null` pour les valeurs initiales.
 
 #### `PUT /api/assurance-munaseb/parametres`
 
+- **Appelant** : le **responsable** de la MUNASEB, son affectation `responsable` active. Un agent reçoit **403 `acces_refuse`**.
 - **Corps** : les cinq valeurs, toutes obligatoires (`cotisation_fcfa`, `fiche_fcfa`, `delai_grace_jours`, `carence_mois`, `plafond_periode_fcfa`).
 - **Réponse 200** : la version en vigueur après l'écriture, même forme que ci-dessus. Des valeurs identiques aux valeurs en vigueur ne créent pas de nouvelle version (la même est renvoyée).
 - 422 `donnees_invalides` : montant négatif, délai de grâce hors de 0 à 60 jours, carence hors de 0 à 12 mois, plafond nul ou négatif (garde-fous contre une faute de frappe), ou champ manquant.
@@ -1272,6 +1279,9 @@ Adhésion d'un patient. Le patient est désigné par son **NIP** (montré par so
 | 409 | `numero_carte_deja_utilise` | numéro de carte déjà pris (toutes années confondues) |
 | 409 | `reference_transaction_deja_utilisee` | référence mobile money déjà enregistrée |
 | 422 | `donnees_invalides` | champ vide, trop long, caractère de contrôle, référence manquante ou en trop, date déclarée future ; le message nomme le champ |
+| 429 | `trop_de_demandes` | cet agent a eu **5 adhésions sans patient** (`patient_inconnu`) dans les **15 dernières minutes** ; en-tête `Retry-After` en secondes |
+
+**Limite d'échecs** (ajoutée le 2026-11-16) : chaque `patient_inconnu` est enregistré avec l'affectation de l'agent (ni le NIP ni la date essayés ne sont gardés). Au 5ᵉ dans une fenêtre glissante de 15 minutes, **toute** adhésion de cet agent reçoit 429, même avec un NIP et une date corrects, jusqu'à ce que le plus ancien échec sorte de la fenêtre (`Retry-After`). Une adhésion réussie ne remet pas le compte à zéro. Un NIP mal formé (`nip_invalide`) ne compte pas. Les autres agents ne sont pas touchés. L'application affiche : « Trop d'essais sans résultat. Réessayez dans N minutes. »
 
 #### `GET /api/assurance-munaseb/contrats?numero_carte=` et `GET /api/assurance-munaseb/contrats/{id}`
 
@@ -1337,7 +1347,7 @@ La seule recherche de l'agent est le **numéro de carte** (de n'importe quelle a
 |---|---|---|
 | `authentification_requise` | 401 | routes protégées |
 | `jeton_invalide` | 401 | routes protégées |
-| `acces_refuse` | 403 | routes protégées (routes MUNASEB : pas agent MUNASEB, affectation désactivée, établissement suspendu, licence expirée ; invitations et membres : affectation qui n'est pas `responsable`) |
+| `acces_refuse` | 403 | routes protégées (routes MUNASEB : pas agent MUNASEB, affectation désactivée, établissement suspendu, licence expirée ; invitations, membres et modification des paramètres MUNASEB : affectation qui n'est pas `responsable`) |
 | `affectation_non_exercable` | 403 | activation d'une affectation |
 | `affectation_inconnue` | 404 | activation et désactivation d'une affectation |
 | `dernier_responsable` | 409 | désactivation d'une affectation |
@@ -1347,7 +1357,7 @@ La seule recherche de l'agent est le **numéro de carte** (de n'importe quelle a
 | `telephone_invalide` | 422 | routes patient, création d'une invitation |
 | `telephone_service_invalide`, `telephone_urgence_invalide` | 422 | création de structure |
 | `code_invalide` | 401 | inscription, réinitialisation, second facteur (professionnel, administrateur), confirmation du réenrôlement |
-| `trop_de_demandes` | 429 | demande de code et renvoi du lien de vérification (avec `Retry-After`), inscription, réinitialisation et création d'une invitation (sans) |
+| `trop_de_demandes` | 429 | demande de code, renvoi du lien de vérification et adhésion à la MUNASEB (avec `Retry-After`), inscription, réinitialisation et création d'une invitation (sans) |
 | `telephone_deja_utilise` | 409 | inscription |
 | `telephone_inconnu` | 404 | réinitialisation |
 | `mot_de_passe_non_conforme` | 422 | inscription, réinitialisation (patient, professionnel, administrateur), création de structure, acceptation d'une invitation |

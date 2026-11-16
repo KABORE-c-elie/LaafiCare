@@ -150,7 +150,9 @@ Contrat dans `docs/api.md`, section 2.14.
 - **Adhésion** : demander le NIP (lu sur le QR code de l'application du patient) **et** la date de naissance (lue sur sa pièce d'identité). Un 404 `patient_inconnu` ne dit pas lequel des deux est faux : afficher « NIP ou date de naissance incorrect ».
 - **Recherche** : par numéro de carte seulement ; il n'existe pas de recherche par NIP ni par nom.
 - **Paiement** : le champ « référence de la transaction » n'apparaît que pour le mobile money. Les montants ne se saisissent pas : afficher ceux des paramètres en vigueur.
-- **Paramètres** : demander une confirmation avant d'enregistrer (le plafond et la carence touchent toutes les adhésions suivantes) ; montrer l'historique.
+- **Paramètres** : l'écran de modification n'apparaît que pour le **responsable** de la MUNASEB (un agent reçoit 403) ; demander une confirmation avant d'enregistrer (le plafond et la carence touchent toutes les adhésions suivantes) ; montrer l'historique.
+- **Trop d'essais** : sur un 429 `trop_de_demandes` à l'adhésion, afficher « Trop d'essais sans résultat. Réessayez dans N minutes. » avec `Retry-After`, sans rouge ni orange.
+- **À décider (2026-11-16)** : durée de conservation des traces d'échecs d'adhésion (`echec_adhesion_munaseb`, gardées sans limite aujourd'hui, comme les autres traces) ; valeur de la limite (5 en 15 minutes, reprise du verrouillage BF-01) à revoir avec la MUNASEB après le pilote, selon le nombre réel de fautes de frappe aux guichets.
 - **Couleurs** : un contrat expiré ou suspendu ne s'affiche ni en rouge ni en orange (CLAUDE.md §6).
 
 ---

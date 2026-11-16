@@ -34,7 +34,8 @@ erDiagram
     periode_adhesion_munaseb ||--o{ demande_remboursement_munaseb : "rattache"
     periode_adhesion_munaseb ||--o| paiement_cotisation_munaseb : "payée par"
     affectation ||--o{ paiement_cotisation_munaseb : "enregistre"
-    affectation ||--o{ parametre_munaseb : "modifie"
+    affectation ||--o{ parametre_munaseb : "modifie (responsable)"
+    affectation ||--o{ echec_adhesion_munaseb : "échoue"
     partenaire_sante_munaseb ||--o{ demande_remboursement_munaseb : "émet"
     demande_remboursement_munaseb ||--o{ historique_statut_demande : "trace"
     utilisateur ||--o{ notification : "reçoit"
@@ -140,7 +141,11 @@ Une ligne par période enregistrée par un agent : mode (`especes` ou `mobile_mo
 
 ### `parametre_munaseb` : les valeurs de la mutuelle
 
-Cotisation (5 000 FCFA), fiche (100 FCFA), délai de grâce (10 jours), durée de la carence (1 mois) et plafond par période (100 000 FCFA), **en base**, modifiables par un agent. Chaque modification ajoute une **version** avec l'agent qui l'a faite ; aucune version ne se modifie ni ne s'efface, ce qui donne l'historique complet. Un changement ne touche que les périodes et paiements suivants. Migration 0028.
+Cotisation (5 000 FCFA), fiche (100 FCFA), délai de grâce (10 jours), durée de la carence (1 mois) et plafond par période (100 000 FCFA), **en base**, modifiables par le **responsable** de la MUNASEB seulement (les agents les lisent). Chaque modification ajoute une **version** avec le responsable qui l'a faite (la base refuse tout autre rôle comme auteur) ; aucune version ne se modifie ni ne s'efface, ce qui donne l'historique complet. Un changement ne touche que les périodes et paiements suivants. Migrations 0028 et 0029.
+
+### `echec_adhesion_munaseb` : les adhésions sans patient
+
+Une ligne par adhésion dont le NIP et la date de naissance ne désignent aucun patient : l'affectation de l'agent et la date, **jamais le NIP ni la date essayés**. Elle sert à la limite : au 5ᵉ échec d'un même agent en 15 minutes, ses adhésions sont refusées le temps que le plus ancien échec sorte de la fenêtre. Jamais modifiée ni supprimée. Migration 0029.
 
 ### `tarif_acte_munaseb` : ce que rembourse la mutuelle
 
@@ -316,5 +321,6 @@ Règles garanties par la base : **jamais modifiées ni supprimées** ; seulement
 | 0026 | Droits des rôles du serveur et des outils : le serveur lit et écrit les données sans pouvoir changer les tables ni les traces ; seuls les outils ouvrent la fenêtre de réenrôlement (fonction `vider_fenetre_reenrolement` pour la refermer) |
 | 0027 | Trace des interventions de l'équipe sur un compte compromis (`intervention_compte` : retrait d'une affectation, blocage, réactivation), jamais modifiée ni supprimée, jamais sur ses propres comptes ; écrite par le seul rôle des outils |
 | 0028 | Contrat MUNASEB tenu par les agents : paramètres de la mutuelle en base et historisés (`parametre_munaseb`), numéro de carte, antenne, niveau d'études et plafond sur chaque période, paiement de la cotisation (`paiement_cotisation_munaseb`) ; traces jamais modifiées |
+| 0029 | Paramètres MUNASEB modifiés par le seul responsable de la structure (colonnes de l'auteur renommées) ; trace des adhésions sans patient (`echec_adhesion_munaseb`), pour la limite d'échecs par agent |
 
 Une migration déjà appliquée ne change plus jamais : toute évolution passe par une nouvelle migration. Un test vérifie aussi qu'aucun caractère invisible ne s'y glisse ([`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs)).
