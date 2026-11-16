@@ -614,3 +614,40 @@ Aucun cycle avec `session::renouveler`, qui ne verrouille ni structure ni affect
   - **Trusted Types** : ils bloquent l'enregistrement du service worker d'Angular ; leur activation dans la politique de sécurité du contenu (CSP) est à résoudre ;
   - **styles en ligne de la CDK d'Angular** : refusés par une CSP stricte, qui interdit les styles en ligne ; leur traitement est à décider ;
   - **faille de `vite`** : elle ne touche que le serveur de développement ; en attente d'`@angular/build` 22.2.4.
+
+---
+
+## 15. Pharmacie (itération ouverte le 2026-11-16)
+
+**Décision du porteur (2026-11-16)** : après l'étape 5 MUNASEB, le backend de la **pharmacie** (officine), en deux passes : une lecture et une proposition (décisions D1 à D16), puis le code, sur la branche `backend-pharmacie`, migrations à partir de 0030. Cette itération **rouvre** la pharmacie, mise hors de l'itération MUNASEB (§12) ; **Médecin, Ordonnance, DossierMedical et Allergie restent hors périmètre** (D2) : sans eux, ni ordonnance numérique (BF-03), ni alerte d'allergie, ni substitution notifiée au médecin (BF-05 complet).
+
+**Décisions D1 à D16 (porteur, 2026-11-16)** :
+- **D1** : migrations de la pharmacie à partir de 0030 ; la migration 0028 de la branche `remediation-audit` sera renumérotée après la dernière, à son intégration.
+- **D2** : d'abord le stock (BF-04) et les équivalents par DCI, sans ordonnance ; le module médecin plus tard.
+- **D3** : officine d'abord (type `pharmacie`) ; pharmacie hospitalière avec le type hôpital, plus tard.
+- **D4** : une seule pièce exigée, `autorisation_ouverture_exploitation`, seul document nommé par un texte officiel trouvé (arrêté n° 2006-040/MS/CAB, article 4 b, dans `docs/Reglementation, loi et reference/`) ; liste à confirmer par la DGPML ou l'Ordre.
+- **D5** : rôles `responsable` et `pharmacien` ; **pas de préparateur** en V1 (absent de la liste fermée des rôles, droits inconnus).
+- **D6** : un **catalogue national unique**, tenu par l'équipe LaafiCare par un **outil local d'import** (jamais une route) ; **aucune donnée réelle** tant que le fichier officiel (liste nationale des médicaments essentiels 2023) n'est pas dans `docs/Reglementation, loi et reference/` ; les tests n'utilisent que des médicaments fictifs.
+- **D7** : prix de vente **par pharmacie** ; prix d'achat **par lot** (le diagramme qui met `prix` sur `Medicament` est à corriger).
+- **D8** : sortie par lot **FEFO** (le lot qui périme le plus tôt), proposée par le système ; source OMS à vérifier (`docs/points-ouverts.md`).
+- **D9** : délai d'alerte de péremption réglé par chaque pharmacie, **sans valeur par défaut** : alerte désactivée tant qu'il n'est pas réglé.
+- **D10** : vente au comptoir enregistrée sans donnée patient, avec la case « sur ordonnance papier » ; la décision reste au pharmacien, faute de liste officielle accessible des produits sur ordonnance.
+- **D11** : alertes **dans l'application** (seuils, péremption), jamais par SMS (réservé au code de connexion, §12).
+- **D12** : après un scan du NIP, le pharmacien ne verra que le nom, le prénom et l'état des droits MUNASEB (étape à venir), jamais le dossier.
+- **D13** : un partenaire MUNASEB deviendra un lien entre la MUNASEB et une structure ; une délivrance chez un partenaire appellera `creer_depuis_acte` (type `pharmacie`) ; en attente des tarifs par circuit (§12).
+- **D14** : pharmacies de garde hors du MVP (Should Have) ; plus tard, avec la permission de l'Ordre (qui publie le programme de garde).
+- **D15** : MVP en ligne seulement (BF-13 plus tard).
+- **D16** : numéro d'ordre du pharmacien (profil professionnel, Q10) : pas pour le MVP, à décider avant le pilote.
+- **Ajout du porteur** : chaque création de mouvement de stock, de vente et de dépense accepte une **clé d'idempotence** (en-tête `Idempotency-Key`, draft IETF *The Idempotency-Key HTTP Header Field*) : la même requête renvoyée après une coupure ne crée jamais deux lignes (CDC, BNF « aucune saisie perdue »).
+
+**Besoin du porteur, absent du CDC (2026-11-16) : le bénéfice net de la pharmacie.**
+- **Ventes** : chaque ligne garde le **prix de vente** et le **prix d'achat du lot sorti**, figés au moment de la vente (même logique que le plafond figé de l'étape 5).
+- **Pertes** (périmés, casse, écart d'inventaire) : valorisées au **prix d'achat du lot**.
+- **Dépenses** : journal par pharmacie (date, catégorie, montant, libellé, auteur) ; catégories `loyer`, `salaires`, `electricite`, `eau`, `transport`, `impots_taxes`, `entretien`, `autres` ; **jamais modifiée ni effacée**, une correction se fait par une **écriture d'annulation** tracée, comme pour le stock.
+- **Rapport** : ventes − coût d'achat des produits vendus = **marge brute** ; marge brute − pertes − dépenses = **bénéfice net** ; par semaine (lundi à dimanche), mois, année ou entre deux dates, **à l'heure du Burkina** ; avec la **valeur du stock restant au prix d'achat** en fin de période.
+- Montants en **FCFA entiers**. **Aucun calcul d'impôt** : les impôts sont une dépense saisie. **Ce n'est pas la comptabilité officielle (SYSCOHADA)**.
+- **Droits** : dépenses et rapports réservés au **responsable** de la pharmacie (403 `acces_refuse` pour un pharmacien) ; le pharmacien fait les entrées, les ventes, les pertes et les inventaires.
+
+**État des étapes (branche `backend-pharmacie`)** :
+1. ✅ **Type `pharmacie` ouvert, pièces justificatives et validation** (2026-11-16) : `piece_justificative.rs` (dépôt en brouillon par le créateur, PDF, JPEG ou PNG reconnus par leurs premiers octets, 5 Mio au plus avec une limite posée sur la route, nom jamais gardé, SHA-256, remplacement qui garde l'ancienne pièce inactive) ; soumission refusée tant qu'une pièce exigée manque (409 `pieces_manquantes`) ; pièces dans le détail vu par l'équipe, avec l'avertissement des numéros en double ; téléchargement réservé à l'équipe (`attachment`, `nosniff`, `no-store`) ; le registre des autorisations (0012) refuse un même numéro validé deux fois. Aucune migration : les tables de la 0012 suffisaient.
+2. ✅ **Invitations de pharmaciens** : ligne `pharmacie` → `responsable`, `pharmacien` dans `roles_permis`.

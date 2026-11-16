@@ -200,6 +200,9 @@ Résumé :
 | POST | `/api/structures` | jeton `laaficare:patient` | fonctionne (section 2.8) ; type `munaseb` seulement |
 | POST | `/api/structures/{id}/soumettre` | jeton `laaficare:patient` du créateur | fonctionne (section 2.8) |
 | POST | `/api/structures/{id}/abandonner` | jeton `laaficare:patient` du créateur | fonctionne (section 2.8) |
+| POST | `/api/structures/{id}/pieces/{type_piece}` | jeton `laaficare:patient` du créateur | fonctionne (section 2.8) |
+| GET | `/api/structures/{id}/pieces` | jeton `laaficare:patient` du créateur | fonctionne (section 2.8) |
+| GET | `/api/administrateurs/pieces/{id}/fichier` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
 | GET | `/api/structures/mes-demandes` | jeton `laaficare:patient` | fonctionne (section 2.8) |
 | GET | `/api/administrateurs/structures` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
 | GET | `/api/administrateurs/structures/{id}` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
@@ -888,7 +891,7 @@ Cycle : `brouillon` (création) → `en_attente` (soumission) → `validee` ou `
 | 409 | `email_deja_utilise` | `email_professionnel` appartient à une autre personne |
 | 409 | `second_facteur_requis` | le compte professionnel a un second facteur : pas encore pris en charge ici |
 | 422 | `donnees_invalides` | champ obligatoire manquant ou vide, `email` ou `email_professionnel` refusé par le contrôle ci-dessus (le message nomme le champ : « Le champ « email » n'est pas une adresse email valide. »), type inconnu |
-| 422 | `type_non_disponible` | type connu mais pas encore ouvert (clinique, hôpital, pharmacie, laboratoire) |
+| 422 | `type_non_disponible` | type connu mais pas encore ouvert (clinique, hôpital, laboratoire). **`pharmacie` est ouvert depuis le 2026-11-16** (officine) |
 | 422 | `nom_trop_long` | nom de plus de 100 caractères |
 | 422 | `nom_invalide` | nom avec un retour à la ligne ou un caractère invisible |
 | 422 | `telephone_service_invalide` | numéro de service : format non reconnu (section 1.6) |
@@ -899,7 +902,7 @@ Cycle : `brouillon` (création) → `en_attente` (soumission) → `validee` ou `
 
 #### `POST /api/structures/{id}/soumettre`
 
-- **Appelant** : jeton patient du **créateur**. Pas de corps. La MUNASEB se soumet sans pièce justificative.
+- **Appelant** : jeton patient du **créateur**. Pas de corps. La MUNASEB se soumet sans pièce justificative ; une **pharmacie** doit avoir déposé son `autorisation_ouverture_exploitation` (route suivante).
 - **Réponses** :
 
 | Code | `code` | Cas |
@@ -909,7 +912,33 @@ Cycle : `brouillon` (création) → `en_attente` (soumission) → `validee` ou `
 | 403 | `acces_refuse` | compte professionnel désactivé |
 | 404 | `structure_inconnue` | structure inexistante, ou créée par une autre personne (jamais distingués) |
 | 409 | `transition_invalide` | la structure n'est pas en brouillon ; `statut_actuel` dans la réponse |
+| 409 | `pieces_manquantes` | pièces exigées non déposées ; **`pieces_manquantes`** dans la réponse, par exemple `["autorisation_ouverture_exploitation"]` (ajouté le 2026-11-16) |
 | 500 | `erreur_interne` | panne |
+
+#### `POST /api/structures/{id}/pieces/{type_piece}?numero=&date_piece=`
+
+Dépôt d'une pièce justificative (ajouté le 2026-11-16), **une requête par fichier** (réseau faible).
+
+- **Appelant** : jeton patient du **créateur**, sur une demande **en brouillon**.
+- **`type_piece`** : `autorisation_ouverture_exploitation` pour une pharmacie (seule pièce demandée aujourd'hui ; liste à confirmer par la DGPML ou l'Ordre des pharmaciens). `autorisation_creation` n'est pas demandée à une pharmacie.
+- **Paramètres** : `numero` (le numéro inscrit sur le document, 100 caractères au plus, gardé tel quel) et `date_piece` (`AAAA-MM-JJ`, jamais après aujourd'hui).
+- **Corps** : **le fichier lui-même**, tel quel (pas de formulaire). PDF, JPEG ou PNG, **5 Mo au plus**. Le serveur reconnaît le type par les premiers octets du fichier : l'en-tête `Content-Type` et le nom du fichier ne servent à rien et ne sont pas gardés.
+- Un nouveau dépôt du même type **remplace** la pièce active ; l'ancienne reste gardée, inactive.
+- **Réponses** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 201 | — | `{"id", "type_piece", "numero", "date_piece", "type_mime", "taille", "sha256", "active", "date_depot"}` |
+| 404 | `structure_inconnue` | structure inexistante, ou créée par une autre personne |
+| 409 | `transition_invalide` | la demande n'est plus en brouillon ; `statut_actuel` dans la réponse |
+| 413 | `fichier_trop_grand` | plus de 5 Mo |
+| 415 | `format_refuse` | ni PDF, ni JPEG, ni PNG (SVG et HEIC refusés) |
+| 422 | `piece_non_prevue` | ce type de pièce n'est pas demandé pour ce type de structure |
+| 422 | `fichier_vide`, `donnees_invalides` | fichier vide ; numéro vide, trop long ou réduit à « N° », date future |
+
+#### `GET /api/structures/{id}/pieces`
+
+- **Appelant** : jeton patient du **créateur**. **Réponse 200** : `{"pieces": [ … ]}`, les pièces actives, même forme que ci-dessus, **sans le fichier**. 404 `structure_inconnue`.
 
 #### `POST /api/structures/{id}/abandonner`
 
@@ -969,7 +998,14 @@ Réservé à l'équipe LaafiCare : jeton d'accès `laaficare:administrateur` (se
 - **Avertissements MUNASEB** (vides pour les autres types) :
   - `autres_demandes_munaseb_en_attente` : les autres demandes MUNASEB en attente ;
   - `munaseb_deja_validee` : la MUNASEB déjà validée ou suspendue, si elle existe.
+- **`pieces`** (ajouté le 2026-11-16) : toutes les pièces, anciennes comprises (`active` à `false`), **sans le fichier** ; chacune avec **`meme_numero_dans`**, la liste des autres demandes dont une pièce active du même type porte le même numéro (comparé sans espaces, sans « N° », majuscules et tirets unifiés). Une seule structure peut être validée avec un même numéro : la seconde validation répond 409 `autorisation_deja_validee`.
 - 404 `structure_inconnue`.
+
+#### `GET /api/administrateurs/pieces/{id}/fichier`
+
+- **Appelant** : jeton administrateur. **La seule route qui renvoie le contenu d'une pièce.**
+- **Réponse 200** : le fichier, avec `Content-Type` (le type reconnu au dépôt), `Content-Disposition: attachment; filename="piece-<id>.pdf"` (nom choisi par le serveur), `X-Content-Type-Options: nosniff` et `Cache-Control: no-store`. Le navigateur l'enregistre au lieu de l'ouvrir.
+- 404 `piece_inconnue`.
 
 #### `POST /api/administrateurs/structures/{id}/valider`
 
@@ -1007,6 +1043,7 @@ Le **responsable** d'une structure validée invite au numéro de téléphone. La
 - **Le SMS**, sans lien ni code, entièrement dans l'alphabet GSM 7 bits (3GPP TS 23.038) : `LaafiCare : invitation à rejoindre "{structure}" comme {agent MUNASEB | responsable}. Ouvrez ou installez LaafiCare avec ce numéro pour répondre avant le {JJ/MM/AAAA}. LaafiCare ne demande jamais votre mot de passe.` Avec un nom de 100 caractères GSM 7 bits, il tient en 2 parties au plus. Un nom qui contient un caractère hors de cet alphabet (un `ê`, par exemple) le fait partir en UCS-2, plus long.
 - **En développement**, le SMS s'affiche dans le terminal du serveur.
 - **Pour la MUNASEB**, deux rôles : `agent_assurance_munaseb` et `responsable`.
+- **Pour une pharmacie** (ajouté le 2026-11-16), deux rôles : `pharmacien` et `responsable`. Pas de préparateur en V1.
 
 #### Côté responsable : jeton `laaficare:professionnel_en_exercice` sur une affectation `responsable`
 
@@ -1367,7 +1404,12 @@ La seule recherche de l'agent est le **numéro de carte** (de n'importe quelle a
 | `lien_invalide` | 400 | vérification de l'email, réinitialisation du mot de passe |
 | `type_non_disponible`, `localisation_hors_burkina`, `nom_trop_long`, `nom_invalide` | 422 | création de structure |
 | `demande_deja_en_cours`, `email_different`, `email_deja_utilise`, `second_facteur_requis` | 409 | création de structure |
-| `structure_inconnue` | 404 | soumission et abandon d'une structure, routes administrateur des structures |
+| `structure_inconnue` | 404 | soumission et abandon d'une structure, pièces justificatives, routes administrateur des structures |
+| `pieces_manquantes` | 409 | soumission d'une structure (avec `pieces_manquantes`) |
+| `piece_non_prevue`, `fichier_vide` | 422 | dépôt d'une pièce |
+| `fichier_trop_grand` | 413 | dépôt d'une pièce |
+| `format_refuse` | 415 | dépôt d'une pièce |
+| `piece_inconnue` | 404 | téléchargement d'une pièce |
 | `decision_sur_sa_propre_structure` | 403 | validation, refus d'une structure |
 | `email_responsable_non_verifie`, `munaseb_deja_validee`, `autorisation_deja_validee` | 409 | validation d'une structure |
 | `licence_invalide` | 422 | validation d'une structure |

@@ -37,6 +37,10 @@ pub struct ErreurApi {
     /// respectées, pour que l'application affiche une liste à cocher.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub regles_non_respectees: Option<Vec<RegleMotDePasse>>,
+    /// Seulement pour `pieces_manquantes` : les types de pièces exigées qui
+    /// n'ont pas été déposés (soumission d'une structure).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pieces_manquantes: Option<Vec<&'static str>>,
 }
 
 impl ErreurApi {
@@ -48,6 +52,7 @@ impl ErreurApi {
             debut_couverture: None,
             statut_actuel: None,
             regles_non_respectees: None,
+            pieces_manquantes: None,
         }
     }
 }

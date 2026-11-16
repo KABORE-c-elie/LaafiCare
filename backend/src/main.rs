@@ -253,6 +253,16 @@ async fn main() {
         .route("/api/structures/mes-demandes", get(routes_structure::mes_demandes))
         .route("/api/structures/{id}/soumettre", post(routes_structure::soumettre))
         .route("/api/structures/{id}/abandonner", post(routes_structure::abandonner))
+        .route("/api/structures/{id}/pieces", get(routes_structure::lister_pieces))
+        .route(
+            "/api/structures/{id}/pieces/{type_piece}",
+            // Limite de 5 Mio sur cette seule route (§14) ; les autres
+            // gardent la limite par défaut d'axum (2 Mio).
+            post(routes_structure::deposer_piece).layer(axum::extract::DefaultBodyLimit::max(
+                laaficare_backend::piece_justificative::TAILLE_MAX_OCTETS,
+            )),
+        )
+        .route("/api/administrateurs/pieces/{id}/fichier", get(routes_administrateur::telecharger_piece))
         .route("/api/professionnels/membres", get(routes_membres::lister))
         .route("/api/professionnels/membres/{id}/desactiver", post(routes_membres::desactiver))
         .route("/api/patients/munaseb/droits", get(routes_espace_patient::droits))

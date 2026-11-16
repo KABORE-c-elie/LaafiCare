@@ -21,6 +21,7 @@ use crate::auth_professionnel::nature_sqlx;
 use crate::compte_professionnel::{self, ErreurComptePro};
 use crate::email::EmailSender;
 use crate::mot_de_passe::MotDePasseNonConforme;
+use crate::piece_justificative::TypePiece;
 use crate::telephone;
 use crate::verification_email;
 
@@ -60,7 +61,7 @@ impl TypeStructure {
         }
     }
 
-    fn depuis_base(valeur: &str) -> Option<Self> {
+    pub fn depuis_base(valeur: &str) -> Option<Self> {
         [
             TypeStructure::Clinique,
             TypeStructure::Hopital,
@@ -72,11 +73,28 @@ impl TypeStructure {
         .find(|t| t.en_base() == valeur)
     }
 
-    /// E2 : seule la MUNASEB, qui se soumet sans pièce (U6 b). Les autres
-    /// types attendent la liste de leurs pièces exigées (U6 a) et le
-    /// téléversement (reste de la 3.7).
-    fn disponible(self) -> bool {
-        self == TypeStructure::Munaseb
+    /// E2 : la MUNASEB, qui se soumet sans pièce (U6 b), et la pharmacie
+    /// (officine, décisions D3 et D4 du porteur, 2026-11-16). Les autres
+    /// types attendent la liste de leurs pièces exigées (U6 a).
+    pub fn disponible(self) -> bool {
+        matches!(self, TypeStructure::Munaseb | TypeStructure::Pharmacie)
+    }
+
+    /// Pièces exigées à la soumission, liste fermée dans le code (§14) :
+    /// - clinique : les deux autorisations du Ministère de la Santé (§14) ;
+    /// - pharmacie (officine) : l'**autorisation d'ouverture et
+    ///   d'exploitation de l'officine**, seul document nommé par un texte
+    ///   officiel trouvé (arrêté n° 2006-040/MS/CAB, article 4 b, dans
+    ///   `docs/Reglementation, loi et reference/`) ; liste à confirmer par
+    ///   la DGPML ou l'Ordre des pharmaciens (docs/points-ouverts.md) ;
+    /// - MUNASEB : aucune (U6 b) ; hôpital et laboratoire : inconnues, et
+    ///   le type n'est pas ouvert.
+    pub fn pieces_exigees(self) -> &'static [TypePiece] {
+        match self {
+            TypeStructure::Clinique => &[TypePiece::AutorisationCreation, TypePiece::AutorisationOuvertureExploitation],
+            TypeStructure::Pharmacie => &[TypePiece::AutorisationOuvertureExploitation],
+            TypeStructure::Munaseb | TypeStructure::Hopital | TypeStructure::Laboratoire => &[],
+        }
     }
 }
 
@@ -340,6 +358,10 @@ pub enum ErreurSoumission {
     CompteProfessionnelDesactive,
     #[error("Ce type de structure ne peut pas encore être soumis.")]
     TypeNonDisponible,
+    /// Pièces exigées absentes (§14 : « soumission, pièces exigées
+    /// vérifiées »).
+    #[error("Des pièces justificatives exigées manquent.")]
+    PiecesManquantes { pieces: Vec<&'static str> },
     #[error("erreur interne : {0}")]
     Interne(&'static str),
 }
@@ -380,8 +402,25 @@ pub async fn soumettre(pool: &PgPool, patient_compte_id: Uuid, structure_id: Uui
     if !email_verifie {
         return Err(ErreurSoumission::EmailNonVerifie);
     }
-    if !TypeStructure::depuis_base(&type_structure).is_some_and(TypeStructure::disponible) {
+    let Some(type_structure) = TypeStructure::depuis_base(&type_structure).filter(|t| t.disponible()) else {
         return Err(ErreurSoumission::TypeNonDisponible);
+    };
+    // Pièces exigées actives (sous le verrou de la structure : un dépôt
+    // simultané attend la fin de la soumission).
+    let deposees: Vec<String> =
+        sqlx::query_scalar("SELECT type_piece FROM piece_justificative WHERE structure_id = $1 AND active")
+            .bind(structure_id)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| interne("lecture des pièces", e))?;
+    let manquantes: Vec<&'static str> = type_structure
+        .pieces_exigees()
+        .iter()
+        .map(|p| p.as_str())
+        .filter(|p| !deposees.iter().any(|d| d == p))
+        .collect();
+    if !manquantes.is_empty() {
+        return Err(ErreurSoumission::PiecesManquantes { pieces: manquantes });
     }
     sqlx::query("UPDATE structure SET statut = 'en_attente' WHERE id = $1")
         .bind(structure_id)

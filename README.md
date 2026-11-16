@@ -149,7 +149,8 @@ Le projet a commencé par une phase de cadrage : un cahier des charges et des di
 - **Ce qui marche encore** : l'abandon d'une demande en brouillon ou refusée par son créateur ; la liste des membres d'un établissement et le retrait de l'accès d'un agent ou d'un autre responsable par un responsable (ses sessions sur cet établissement se ferment aussitôt, et un email le prévient).
 - **Espace patient MUNASEB** (étape 6) : le patient voit ses droits (couvert, en carence, expiré, suspendu, avec le solde de sa période), ses demandes de remboursement et leur détail (motif d'un rejet compris), et ses notifications, qu'il peut marquer comme lues. Il ne voit jamais que ses propres données.
 - **Contrats MUNASEB** (étape 5) : un agent enregistre l'adhésion d'un étudiant (NIP et date de naissance, numéro de carte, paiement en espèces ou par mobile money), retrouve un contrat par son numéro de carte, le renouvelle chaque année (nouveau numéro de carte, délai de grâce de 10 jours), et lit les valeurs de la mutuelle (cotisation, fiche, délai de grâce, carence, plafond), que seul le **responsable** de la MUNASEB peut changer, chaque changement étant gardé dans un historique. Après 5 adhésions sans patient en 15 minutes, un agent doit attendre avant de réessayer. Plus besoin de SQL pour créer un contrat.
-- **Ce qui n'est pas encore utilisable** : la suspension d'un contrat, les ayants droit et les tarifs selon le circuit de soins (en attente des réponses de la MUNASEB, voir [`docs/points-ouverts.md`](docs/points-ouverts.md)). Les autres types d'établissement attendent la liste de leurs pièces justificatives.
+- **Pharmacies** (itération ouverte le 2026-11-16) : un patient crée sa pharmacie, dépose son autorisation d'ouverture et d'exploitation (PDF, JPEG ou PNG, 5 Mo au plus), puis la soumet ; l'équipe LaafiCare consulte la pièce et valide ; le responsable invite ses pharmaciens.
+- **Ce qui n'est pas encore utilisable** : la suspension d'un contrat, les ayants droit et les tarifs selon le circuit de soins (en attente des réponses de la MUNASEB, voir [`docs/points-ouverts.md`](docs/points-ouverts.md)). Les hôpitaux, cliniques et laboratoires attendent la liste de leurs pièces justificatives.
 - **Les détails** : les tables et leurs règles dans [`docs/modele-donnees.md`](docs/modele-donnees.md), la double authentification dans [`docs/securite.md`](docs/securite.md), les routes prévues dans [`docs/api.md`](docs/api.md) (section 4).
 
 Les modules médicaux (dossier, ordonnances, pharmacie, laboratoire, suivi de grossesse) viendront ensuite. La liste détaillée des décisions encore ouvertes est dans [`docs/points-ouverts.md`](docs/points-ouverts.md).
@@ -310,6 +311,19 @@ Toutes les routes, leurs réponses et leurs erreurs sont décrites dans [`docs/a
 | 10. Retirer un accès | le responsable, son affectation `responsable` active : `GET …/api/professionnels/membres`, puis `POST …/api/professionnels/membres/<affectation_id>/desactiver` | aucun | 200 avec la liste (sans téléphone ni email), puis 204 ; un email simulé « accès retiré » s'affiche dans le terminal ; le jeton d'accès de l'agent reçoit ensuite 401 `jeton_invalide`. Retirer le dernier responsable donne 409 `dernier_responsable` |
 
 Abandonner une demande en brouillon ou refusée : `POST …/api/structures/<structure_id>/abandonner` avec le jeton patient du créateur (204) ; la personne peut ensuite en créer une nouvelle.
+
+### Ouvrir une pharmacie
+
+Même parcours que la MUNASEB ci-dessus (étapes 1 à 9), avec `"type": "pharmacie"` à la création, et une pièce à déposer **avant de soumettre** :
+
+| Étape | Demande | Corps | Réponse attendue |
+|---|---|---|---|
+| 1. Soumettre trop tôt | `POST …/api/structures/<structure_id>/soumettre` | aucun | 409 `pieces_manquantes`, avec `["autorisation_ouverture_exploitation"]` |
+| 2. Déposer l'autorisation | `POST …/api/structures/<structure_id>/pieces/autorisation_ouverture_exploitation?numero=2025-001&date_piece=2025-01-10` | dans Postman, **Body → binary**, un petit PDF **fictif** | 201 avec le type reconnu (`application/pdf`) et l'empreinte |
+| 3. Mauvais fichier | même demande avec un fichier texte | — | 415 `format_refuse` |
+| 4. Soumettre | même demande qu'à l'étape 1 | aucun | 204 |
+| 5. Vérifier la pièce (équipe) | `GET …/api/administrateurs/structures/<structure_id>`, puis `GET …/api/administrateurs/pieces/<piece_id>/fichier` | aucun | la pièce dans `pieces`, puis le fichier téléchargé |
+| 6. Valider, inviter | comme pour la MUNASEB, avec `"role": "pharmacien"` | — | 204, puis 201 |
 
 ### Enregistrer un contrat MUNASEB (agent)
 

@@ -231,6 +231,51 @@ pub struct ValiderRequete {
 
 /// `POST /api/administrateurs/structures/{id}/valider` -- corps
 /// `{"licence_expire_le": "AAAA-MM-JJ"}` ou `{}`. 204.
+/// `GET /api/administrateurs/pieces/{id}/fichier` -- jeton administrateur
+/// seulement : la **seule** route qui lit le contenu d'une pièce (§14).
+/// En-têtes, sources OWASP *File Upload Cheat Sheet* et RFC 6266 :
+/// - `Content-Type` : le type détecté au dépôt, jamais celui envoyé ;
+/// - `Content-Disposition: attachment`, avec un nom choisi par le serveur :
+///   le navigateur enregistre le fichier au lieu de l'afficher ;
+/// - `X-Content-Type-Options: nosniff` : le navigateur ne devine pas un
+///   autre type ;
+/// - `Cache-Control: no-store` : aucune copie gardée en cache (document
+///   d'une personne).
+pub async fn telecharger_piece(
+    _administrateur: AdministrateurAuthentifie,
+    State(state): State<AppState>,
+    CheminApi(piece_id): CheminApi<sqlx::types::Uuid>,
+) -> Response {
+    use axum::http::header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, HeaderValue, X_CONTENT_TYPE_OPTIONS};
+    match laaficare_backend::piece_justificative::contenu(&state.db, piece_id).await {
+        Ok(Some((type_mime, octets))) => {
+            let extension = match type_mime.as_str() {
+                "application/pdf" => "pdf",
+                "image/png" => "png",
+                _ => "jpg",
+            };
+            let disposition = format!("attachment; filename=\"piece-{piece_id}.{extension}\"");
+            let mut reponse = (StatusCode::OK, octets).into_response();
+            let entetes = reponse.headers_mut();
+            // Valeurs ASCII construites par le serveur : la conversion ne
+            // peut pas échouer ; repli sûr sinon.
+            entetes.insert(
+                CONTENT_TYPE,
+                HeaderValue::from_str(&type_mime).unwrap_or(HeaderValue::from_static("application/octet-stream")),
+            );
+            entetes.insert(
+                CONTENT_DISPOSITION,
+                HeaderValue::from_str(&disposition).unwrap_or(HeaderValue::from_static("attachment")),
+            );
+            entetes.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+            entetes.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            reponse
+        }
+        Ok(None) => reponse_erreur(StatusCode::NOT_FOUND, "piece_inconnue", "Pièce inconnue.").into_response(),
+        Err(_) => reponse_erreur_interne("téléchargement d'une pièce", "erreur de la base").into_response(),
+    }
+}
+
 pub async fn valider_structure(
     administrateur: AdministrateurAuthentifie,
     State(state): State<AppState>,
@@ -292,6 +337,64 @@ mod tests {
         }
         let reponse = reponse_erreur_decision(ErreurDecision::TransitionInvalide { statut_actuel: "validee".into() });
         assert_eq!(reponse.status(), StatusCode::CONFLICT);
+    }
+
+    /// Téléchargement d'une pièce (§14) : le type détecté au dépôt, en pièce
+    /// jointe, `nosniff`, `no-store` ; pièce inconnue en 404. L'extracteur
+    /// `AdministrateurAuthentifie` (A6) est testé par ailleurs ; ici, la
+    /// réponse seule.
+    #[sqlx::test]
+    #[ignore]
+    async fn telechargement_d_une_piece(pool: sqlx::PgPool) {
+        use axum::body::to_bytes;
+        use laaficare_backend::config::CleTotp;
+        use laaficare_backend::jwt::JwtService;
+        use laaficare_backend::sms::SmsSenderConsole;
+        use sqlx::types::Uuid;
+        use std::sync::Arc;
+
+        let state = AppState {
+            db: pool,
+            jwt: JwtService::new(&"a".repeat(32)),
+            sms: Arc::new(SmsSenderConsole),
+            cle_totp: Arc::new(CleTotp::depuis_octets([7; 32])),
+            email: Arc::new(laaficare_backend::email::EmailSenderConsole),
+            url_application_web: Arc::from("http://localhost:4200"),
+            contact_securite: Arc::from("securite@example.org"),
+            taches_reinitialisation: Arc::new(Default::default()),
+        };
+        let piece: Uuid = sqlx::query_scalar(
+            "WITH u AS (INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('OUEDRAOGO', 'Awa', '+22670510001') RETURNING id), \
+                  c AS (INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) SELECT id, 'professionnel', 'x' FROM u RETURNING id), \
+                  s AS (INSERT INTO structure (type_structure, nom, telephone, telephone_urgence, region, email, commune, province, \
+                                               latitude, longitude, createur_compte_id) \
+                        SELECT 'pharmacie', 'Pharmacie fictive', '+22670000000', '+22670000000', 'Région fictive', 'p@example.org', \
+                               'Commune fictive', 'Province fictive', 12.3714, -1.5197, id FROM c RETURNING id) \
+             INSERT INTO piece_justificative (structure_id, type_piece, numero, date_piece, type_mime, taille, sha256) \
+             SELECT id, 'autorisation_ouverture_exploitation', '2025-01', '2025-01-01', 'application/pdf', 6, sha256('%PDF-x') FROM s \
+             RETURNING id",
+        )
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO piece_contenu (piece_id, contenu) VALUES ($1, '%PDF-x')")
+            .bind(piece)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        let administrateur = || AdministrateurAuthentifie { compte_id: Uuid::max() };
+
+        let reponse = telecharger_piece(administrateur(), State(state.clone()), CheminApi(piece)).await;
+        assert_eq!(reponse.status(), StatusCode::OK);
+        let entetes = reponse.headers().clone();
+        assert_eq!(entetes["content-type"], "application/pdf");
+        assert_eq!(entetes["content-disposition"], format!("attachment; filename=\"piece-{piece}.pdf\"").as_str());
+        assert_eq!(entetes["x-content-type-options"], "nosniff");
+        assert_eq!(entetes["cache-control"], "no-store");
+        assert_eq!(to_bytes(reponse.into_body(), usize::MAX).await.unwrap().as_ref(), b"%PDF-x");
+
+        let inconnue = telecharger_piece(administrateur(), State(state), CheminApi(Uuid::max())).await;
+        assert_eq!(inconnue.status(), StatusCode::NOT_FOUND);
     }
 
     /// De bout en bout, avec une vraie session administrateur (TOTP actif) :

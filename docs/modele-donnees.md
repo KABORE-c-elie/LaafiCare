@@ -231,6 +231,8 @@ Règles garanties par la base :
 
 Le numéro d'autorisation est gardé **tel que saisi** et dans une **forme normalisée** pour les comparaisons : majuscules, sans espaces, tous les tirets ramenés au tiret simple, préfixe « N° » retiré. Le fichier lui-même (PDF, JPEG ou PNG, 5 Mo au plus) est rangé dans une table séparée, pour qu'aucune liste ne le lise par erreur.
 
+**Utilisées depuis le 2026-11-16** par les pharmacies, qui déposent leur **autorisation d'ouverture et d'exploitation** avant de soumettre leur demande. Le type du fichier est reconnu par ses premiers octets ; le nom envoyé n'est jamais gardé. Un nouveau dépôt du même type rend l'ancienne pièce inactive, sans l'effacer. Seule l'équipe LaafiCare télécharge un fichier. Fichier : [`piece_justificative.rs`](../backend/src/piece_justificative.rs).
+
 ### `autorisation_validee` : le registre des autorisations
 
 Une ligne par numéro d'autorisation validé. Elle garantit qu'**un même numéro ne peut servir qu'à un seul établissement validé**, sans qu'un simple brouillon puisse bloquer un vrai établissement.

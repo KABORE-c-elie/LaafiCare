@@ -48,13 +48,16 @@ pub const INVITATIONS_EN_ATTENTE_MAX: i64 = 50;
 pub const SMS_INVITATION_PAR_NUMERO_24H: i64 = 3;
 
 /// Rôles auxquels on peut inviter (I3). Liste fermée par type de structure
-/// dans `roles_permis` (section 14 : seule la ligne `munaseb` est utilisable
-/// dans cette itération).
+/// dans `roles_permis` (section 14) : lignes `munaseb` et, depuis le
+/// 2026-11-16, `pharmacie` (décisions D3 et D5 du porteur : responsable et
+/// pharmacien ; pas de préparateur en V1, rôle absent de la liste fermée de
+/// la migration 0012).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoleInvitation {
     Responsable,
     AgentAssuranceMunaseb,
+    Pharmacien,
 }
 
 impl RoleInvitation {
@@ -62,14 +65,16 @@ impl RoleInvitation {
         match self {
             RoleInvitation::Responsable => "responsable",
             RoleInvitation::AgentAssuranceMunaseb => "agent_assurance_munaseb",
+            RoleInvitation::Pharmacien => "pharmacien",
         }
     }
 
-    /// Libellé du SMS.
+    /// Libellé du SMS (alphabet GSM 7 bits, voir `texte_sms`).
     fn libelle(self) -> &'static str {
         match self {
             RoleInvitation::Responsable => "responsable",
             RoleInvitation::AgentAssuranceMunaseb => "agent MUNASEB",
+            RoleInvitation::Pharmacien => "pharmacien",
         }
     }
 }
@@ -77,6 +82,7 @@ impl RoleInvitation {
 fn roles_permis(type_structure: &str) -> &'static [RoleInvitation] {
     match type_structure {
         "munaseb" => &[RoleInvitation::Responsable, RoleInvitation::AgentAssuranceMunaseb],
+        "pharmacie" => &[RoleInvitation::Responsable, RoleInvitation::Pharmacien],
         _ => &[],
     }
 }
@@ -632,6 +638,43 @@ mod tests {
         assert!(!recus[0].1.contains("http"));
     }
 
+    /// Pharmacie validée (décisions D3 et D5, 2026-11-16) : le responsable
+    /// invite un pharmacien ou un autre responsable, jamais un agent
+    /// MUNASEB ; l'acceptation crée une affectation `pharmacien`.
+    #[sqlx::test]
+    #[ignore]
+    async fn invitation_d_un_pharmacien(pool: PgPool) {
+        let sms = SmsRecus::default();
+        let (structure_id, pro) = munaseb(&pool, "+22670200091").await;
+        sqlx::query("UPDATE structure SET type_structure = 'pharmacie', nom = 'Pharmacie (test)' WHERE id = $1")
+            .bind(structure_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let r = Responsable { type_structure: "pharmacie", ..responsable(structure_id, pro) };
+        assert!(matches!(
+            creer(&pool, &sms, r, "70200092", RoleInvitation::AgentAssuranceMunaseb).await,
+            Err(ErreurInvitation::RoleNonPermis)
+        ));
+        let invite = patient(&pool, "+22670200092").await;
+        let creee = creer(&pool, &sms, r, "70200092", RoleInvitation::Pharmacien).await.unwrap();
+        let texte = &sms.0.lock().unwrap()[0].1;
+        assert!(texte.contains("comme pharmacien"), "{texte}");
+        accepter(&pool, &EmailsRecus::default(), "http://localhost:4200", invite, creee.invitation_id, &saisie_nouveau("pharmacien@example.org"))
+            .await
+            .unwrap();
+        let role: String = sqlx::query_scalar(
+            "SELECT a.role FROM affectation a JOIN compte c ON c.id = a.compte_id \
+             JOIN compte p ON p.utilisateur_id = c.utilisateur_id WHERE p.id = $1 AND a.structure_id = $2",
+        )
+        .bind(invite)
+        .bind(structure_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(role, "pharmacien");
+    }
+
     #[sqlx::test]
     #[ignore]
     async fn refus_a_la_creation(pool: PgPool) {
@@ -1004,7 +1047,7 @@ mod tests {
     /// parties.
     #[test]
     fn sms_en_gsm7_et_en_deux_parties_au_plus() {
-        for role in [RoleInvitation::AgentAssuranceMunaseb, RoleInvitation::Responsable] {
+        for role in [RoleInvitation::AgentAssuranceMunaseb, RoleInvitation::Responsable, RoleInvitation::Pharmacien] {
             let fixe = texte_sms("", role, "28/10/2026");
             assert!(septets_gsm7(&fixe).is_some(), "{fixe}");
 
