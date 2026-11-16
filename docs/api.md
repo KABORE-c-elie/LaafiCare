@@ -232,8 +232,13 @@ Résumé :
 | POST | `/api/assurance-munaseb/remboursements/{id}/valider` | jeton en exercice, agent MUNASEB | fonctionne (section 2.3) |
 | POST | `/api/assurance-munaseb/remboursements/{id}/rejeter` | jeton en exercice, agent MUNASEB | fonctionne (section 2.3) |
 | POST | `/api/assurance-munaseb/remboursements/{id}/payer` | jeton en exercice, agent MUNASEB | fonctionne (section 2.3) |
+| GET, PUT | `/api/assurance-munaseb/parametres` | jeton en exercice, agent MUNASEB | fonctionne (section 2.14) |
+| GET | `/api/assurance-munaseb/parametres/historique` | jeton en exercice, agent MUNASEB | fonctionne (section 2.14) |
+| POST, GET | `/api/assurance-munaseb/contrats` | jeton en exercice, agent MUNASEB | fonctionne (section 2.14) ; GET avec `?numero_carte=` |
+| GET | `/api/assurance-munaseb/contrats/{id}` | jeton en exercice, agent MUNASEB | fonctionne (section 2.14) |
+| POST | `/api/assurance-munaseb/contrats/{id}/renouvellements` | jeton en exercice, agent MUNASEB | fonctionne (section 2.14) |
 
-> **Routes MUNASEB rebranchées (étape 3.9).** Un agent se connecte par la connexion professionnelle (section 2.4), puis active son affectation `agent_assurance_munaseb` (section 2.6). Les routes de remboursement n'acceptent qu'un jeton `laaficare:professionnel_en_exercice` : tout autre jeton est refusé en 401. Avec un jeton de la bonne sorte, elles répondent **403 `acces_refuse`** si l'affectation n'est pas celle d'un agent MUNASEB, est désactivée, ou si la MUNASEB n'est plus validée ou sous licence. **Pas encore testable dans Postman sans préparation** : aucune route ne crée d'affectation avant les étapes 3.7, 3.8 et 3.10 réduites ; d'ici là, une affectation de développement peut être posée en SQL.
+> **Routes MUNASEB rebranchées (étape 3.9).** Un agent se connecte par la connexion professionnelle (section 2.4), puis active son affectation `agent_assurance_munaseb` (section 2.6). Les routes de remboursement n'acceptent qu'un jeton `laaficare:professionnel_en_exercice` : tout autre jeton est refusé en 401. Avec un jeton de la bonne sorte, elles répondent **403 `acces_refuse`** si l'affectation n'est pas celle d'un agent MUNASEB, est désactivée, ou si la MUNASEB n'est plus validée ou sous licence. **Testable dans Postman de bout en bout** : la structure MUNASEB se crée (section 2.8), l'équipe la valide (section 2.9), le responsable invite un agent (section 2.10), et l'agent enregistre les contrats (section 2.14).
 
 ### 2.1 Infrastructure
 
@@ -553,6 +558,7 @@ Exemple : `GET /api/assurance-munaseb/remboursements?statut=en_attente&limite=20
 
 - `suivant` vaut `null` quand la page n'est pas pleine ; sinon, le passer dans `apres` pour la page suivante.
 - `montant_rembourse_fcfa` vaut `null` tant que la demande n'est pas validée. `patient_nom` et `patient_prenom` peuvent être `null`.
+- `numero_carte` (précisé le 2026-11-16, étape 5) : la carte de la **période de la demande**, puisque le numéro change chaque année ; pour une période enregistrée avant l'étape 5, la carte d'origine du contrat, comme avant.
 - L'agent ne voit **jamais** le NIP ni le téléphone du patient.
 - Une demande créée pendant le parcours des pages peut n'apparaître qu'au rechargement.
 - **Erreurs** : 400 `parametre_invalide` (limite hors bornes, statut inconnu, curseur qui n'est pas un UUID) ; 500 `erreur_interne`.
@@ -735,7 +741,7 @@ Identique à la route professionnelle (section 2.4) : en-tête `Authorization: B
 
 Après la connexion professionnelle, le jeton d'accès (`laaficare:professionnel_sans_affectation`) ne sert qu'à lister ses affectations et à en activer une. L'activation donne un jeton `laaficare:professionnel_en_exercice`, qui porte l'affectation (`aff`) et ouvre les routes métier de cette affectation. **Changer d'établissement ou de rôle** : rappeler l'activation avec le jeton en exercice, sans redonner le mot de passe.
 
-**Pas encore testable dans Postman sans préparation** : les affectations sont créées par les invitations (étape 3.10).
+Les affectations naissent de la création d'une structure (responsable, section 2.8) et des invitations acceptées (section 2.10).
 
 #### `GET /api/professionnels/affectations`
 
@@ -1150,6 +1156,8 @@ Jeton `laaficare:patient` seulement. **Le patient est toujours celui du jeton** 
 
 - Le solde est **indicatif** : c'est celui qu'utilise l'agent, recalculé au moment de chaque validation. Seuls les montants validés et payés le consomment.
 - La date du jour est celle du Burkina Faso.
+- `numero_carte` (précisé le 2026-11-16, étape 5) : le numéro change chaque année ; c'est celui de la **dernière période déjà commencée**. Pendant la carence d'une première adhésion, celui de la première carte. La carte d'une période qui n'a pas encore commencé n'est pas montrée.
+- `plafond_fcfa` : le plafond de la période en cours, figé à sa création (100 000 FCFA aujourd'hui).
 
 #### `GET /api/patients/munaseb/demandes?statut=&limite=&avant=`
 
@@ -1183,6 +1191,143 @@ Libellés conseillés : `en_attente` « Reçue », `en_cours` « En cours de tra
 
 - Sans corps. **204** : la notification est lue, même si elle l'était déjà (la requête peut être rejouée sans effet). La seconde route marque toutes les notifications de la personne.
 - 404 `notification_inconnue` : notification inexistante ou d'une autre personne.
+
+### 2.14 Agent MUNASEB : contrats et paramètres (étape 5)
+
+Toutes ces routes demandent un **jeton agent MUNASEB en exercice**, comme les remboursements (section 2.3) : 401 pour un autre jeton, 403 `acces_refuse` pour une affectation qui n'est pas celle d'un agent d'une MUNASEB validée et sous licence. Elles remplacent le contrat posé à la main en SQL.
+
+**Règles de calcul d'une période** (CLAUDE.md §12, réponses du porteur du 2026-10-22, **à confirmer par la MUNASEB**) :
+- la **date de paiement** est toujours la date du jour au Burkina, fixée par le serveur ; l'agent ne la saisit jamais ;
+- **première adhésion** : début = date de paiement + carence (1 mois) ; fin = date de paiement + 12 mois, **jour anniversaire compris** (adhésion le 09/04/2024 : couvert du 09/05/2024 au 09/04/2025) ;
+- **renouvellement payé au plus tard le dernier jour** : la nouvelle période commence le lendemain de la fin, sans carence, et finit 12 mois après la fin précédente ;
+- **renouvellement payé dans le délai de grâce** (10 jours après la fin) : couvert **à partir du jour du paiement**, sans carence ; les jours entre la fin et le paiement **ne sont pas couverts** ; la fin reste la date anniversaire suivante ;
+- **au-delà du délai de grâce** : comme une première adhésion (nouvelle carence) ;
+- au plus **une période d'avance** : pas de renouvellement pendant une carence, ni quand la période suivante est déjà payée.
+
+Le numéro de carte **change chaque année** : chaque période porte le sien, unique. Le plafond d'une période est **figé à sa création** (un changement de paramètre ne touche que les périodes suivantes). La **suspension** d'un contrat n'a pas de route : ses règles sont à demander à la MUNASEB.
+
+#### `GET /api/assurance-munaseb/parametres`
+
+- **Réponse 200** : la version en vigueur.
+
+```json
+{
+  "id": "…",
+  "cotisation_fcfa": 5000,
+  "fiche_fcfa": 100,
+  "delai_grace_jours": 10,
+  "carence_mois": 1,
+  "plafond_periode_fcfa": 100000,
+  "date_effet": "2026-11-16T09:16:59.418551Z",
+  "agent_nom": null,
+  "agent_prenom": null
+}
+```
+
+- `agent_nom`, `agent_prenom` : l'agent qui a posé cette version ; `null` pour les valeurs initiales.
+
+#### `PUT /api/assurance-munaseb/parametres`
+
+- **Corps** : les cinq valeurs, toutes obligatoires (`cotisation_fcfa`, `fiche_fcfa`, `delai_grace_jours`, `carence_mois`, `plafond_periode_fcfa`).
+- **Réponse 200** : la version en vigueur après l'écriture, même forme que ci-dessus. Des valeurs identiques aux valeurs en vigueur ne créent pas de nouvelle version (la même est renvoyée).
+- 422 `donnees_invalides` : montant négatif, délai de grâce hors de 0 à 60 jours, carence hors de 0 à 12 mois, plafond nul ou négatif (garde-fous contre une faute de frappe), ou champ manquant.
+- Une version ne se modifie ni ne s'efface jamais : l'historique garde l'ancienne et la nouvelle valeur de chaque changement.
+
+#### `GET /api/assurance-munaseb/parametres/historique?limite=&avant=`
+
+- **Réponse 200** : `{"versions": [ … ], "suivant": "…" | null}`, la plus récente d'abord, chaque version de la même forme que ci-dessus. `limite` de 1 à 100 (50 par défaut) ; `avant` = `suivant` de la page précédente.
+- 400 `parametre_invalide` : limite hors bornes, curseur qui n'est pas un UUID.
+
+#### `POST /api/assurance-munaseb/contrats`
+
+Adhésion d'un patient. Le patient est désigné par son **NIP** (montré par son application) **et sa date de naissance** (lue sur sa pièce d'identité) : les deux doivent correspondre.
+
+- **Corps** :
+
+```json
+{
+  "nip": "1000000000000008",
+  "date_naissance": "2000-01-01",
+  "numero_carte": "0552/2026",
+  "ufr": "UFR SEA",
+  "universite": "Université Joseph Ki-Zerbo",
+  "num_matricule": "MAT-0001",
+  "personne_a_prevenir": null,
+  "niveau_etudes": "Licence 2",
+  "antenne": null,
+  "paiement": {"mode": "mobile_money", "reference_transaction": "OM-123456", "date_declaree": "2026-11-16"}
+}
+```
+
+- Obligatoires : `nip`, `date_naissance`, `numero_carte` (50 caractères au plus), `ufr`, `universite` (100 au plus), `num_matricule` (50 au plus), `paiement.mode`. Facultatifs : `personne_a_prevenir` (200 au plus), `niveau_etudes`, `antenne` (100 au plus). Les espaces de début et de fin sont retirées ; un champ facultatif vide vaut `null`.
+- `paiement.mode` : `especes` ou `mobile_money`. `reference_transaction` est **obligatoire pour le mobile money et refusée pour les espèces** (100 caractères au plus ; une référence ne sert qu'une fois). `date_declaree` (facultative) : la date que l'agent lit, par exemple sur la transaction ; **pour information seulement**, jamais après aujourd'hui. Les montants payés ne sont pas saisis : ce sont la cotisation et la fiche en vigueur.
+- **Réponses** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 201 | — | le détail du contrat (route suivante) |
+| 422 | `nip_invalide` | NIP mal formé (16 chiffres, clé de Luhn) |
+| 404 | `patient_inconnu` | aucun patient pour ce NIP **et** cette date de naissance (les deux cas ne sont jamais distingués) |
+| 409 | `contrat_deja_existant` | ce patient a déjà un contrat (utiliser le renouvellement) |
+| 409 | `numero_carte_deja_utilise` | numéro de carte déjà pris (toutes années confondues) |
+| 409 | `reference_transaction_deja_utilisee` | référence mobile money déjà enregistrée |
+| 422 | `donnees_invalides` | champ vide, trop long, caractère de contrôle, référence manquante ou en trop, date déclarée future ; le message nomme le champ |
+
+#### `GET /api/assurance-munaseb/contrats?numero_carte=` et `GET /api/assurance-munaseb/contrats/{id}`
+
+La seule recherche de l'agent est le **numéro de carte** (de n'importe quelle année) : il n'existe pas de recherche par NIP.
+
+- **Réponse 200** :
+
+```json
+{
+  "id": "…",
+  "patient_nom": "OUEDRAOGO",
+  "patient_prenom": "Awa",
+  "ufr": "UFR SEA",
+  "universite": "Université Joseph Ki-Zerbo",
+  "num_matricule": "MAT-0001",
+  "personne_a_prevenir": null,
+  "statut": "actif",
+  "etat": "en_carence",
+  "date_creation": "2026-11-16T09:30:00Z",
+  "periodes": [
+    {
+      "id": "…",
+      "numero_carte": "0552/2026",
+      "date_paiement": "2026-11-16",
+      "debut": "2026-12-16",
+      "fin": "2027-11-16",
+      "antenne": null,
+      "niveau_etudes": "Licence 2",
+      "en_cours": false,
+      "plafond_fcfa": 100000,
+      "consomme_fcfa": 0,
+      "solde_fcfa": 100000,
+      "paiement": {
+        "mode": "mobile_money",
+        "montant_cotisation_fcfa": 5000,
+        "montant_fiche_fcfa": 100,
+        "reference_transaction": "OM-123456",
+        "date_declaree": "2026-11-16",
+        "date_enregistrement": "2026-11-16T09:30:00Z",
+        "agent_nom": "KABRE",
+        "agent_prenom": "Inoussa"
+      }
+    }
+  ]
+}
+```
+
+- `etat` : `couvert`, `en_carence`, `expire` ou `suspendu`, comme pour le patient (section 2.13).
+- `periodes` : la plus récente d'abord. Le solde est **indicatif**, recalculé à chaque validation. `paiement` vaut `null` et `numero_carte` peut valoir `null` pour une période enregistrée avant l'étape 5.
+- **Jamais renvoyés** : le NIP et le téléphone du patient.
+- 404 `contrat_inconnu` : aucun contrat pour ce numéro ou cet identifiant. 400 `parametre_invalide` sans `numero_carte` ; 400 `chemin_invalide`.
+
+#### `POST /api/assurance-munaseb/contrats/{id}/renouvellements`
+
+- **Corps** : `{"numero_carte": "0552/2027", "niveau_etudes": null, "antenne": null, "paiement": { … }}`, mêmes règles que l'adhésion. La nouvelle carte doit être différente de toutes les cartes déjà enregistrées.
+- **Réponses** : 201 et le détail du contrat ; 404 `contrat_inconnu` ; 409 `periode_future_deja_payee` (carence en cours, ou période suivante déjà payée) ; 409 `contrat_suspendu` (règles de suspension inconnues : le renouvellement reste bloqué) ; 409 `numero_carte_deja_utilise` ; 409 `reference_transaction_deja_utilisee` ; 422 `donnees_invalides`.
 
 ---
 
@@ -1223,6 +1368,12 @@ Libellés conseillés : `en_attente` « Reçue », `en_cours` « En cours de tra
 | `montant_invalide`, `nip_invalide`, `partenaire_suspendu`, `non_couvert`, `en_carence` | 422 | simuler-acte |
 | `patient_inconnu`, `partenaire_inconnu` | 404 | simuler-acte |
 | `reference_acte_deja_utilisee` | 409 | simuler-acte |
+| `nip_invalide` | 422 | adhésion à la MUNASEB (section 2.14) |
+| `patient_inconnu` | 404 | adhésion à la MUNASEB (NIP inconnu ou date de naissance différente) |
+| `contrat_inconnu` | 404 | détail, recherche et renouvellement d'un contrat |
+| `contrat_deja_existant`, `numero_carte_deja_utilise`, `reference_transaction_deja_utilisee` | 409 | adhésion, renouvellement |
+| `periode_future_deja_payee`, `contrat_suspendu` | 409 | renouvellement |
+| `donnees_invalides` | 422 | aussi : adhésion, renouvellement, modification des paramètres (le message nomme le champ) |
 | `demande_inconnue` | 404 | détail, transitions ; détail d'une demande du patient (inexistante ou d'un autre patient) |
 | `notification_inconnue` | 404 | notification lue (inexistante ou d'une autre personne) |
 | `transition_invalide` | 409 | transitions, soumission, abandon, validation et refus d'une structure, désactivation d'une affectation |
@@ -1275,7 +1426,8 @@ Le module existe déjà côté serveur ; les routes manquent.
 
 ### 4.7 Contrat MUNASEB côté agent (étape 5)
 
-- Adhésion (avec carence d'un mois), renouvellement, consultation des droits d'un adhérent, suspension (à concevoir).
+- ✅ Adhésion, renouvellement, détail et recherche par carte, paramètres : **codés**, section 2.14.
+- Restent, en attente des réponses de la MUNASEB (docs/points-ouverts.md) : suspension d'un contrat, ayants droit, tarifs par circuit.
 
 ### 4.8 Côté patient (étape 6)
 

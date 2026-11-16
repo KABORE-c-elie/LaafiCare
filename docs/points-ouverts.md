@@ -133,6 +133,16 @@ Contrat dans `docs/api.md`, section 2.13.
 - **Notifications** : badge avec `non_lues` ; ouvrir une notification la marque comme lue, puis ouvre la demande liée (`demande_id`). Sans push, les notifications sont rechargées à l'ouverture de l'application et quand on tire l'écran vers le bas.
 - **Hors connexion (règle du porteur, 2026-10-21)** : si l'application garde les droits et les demandes pour les afficher hors connexion, **ces données sont chiffrées sur le téléphone**, comme les rappels (base locale chiffrée, clé dans `flutter_secure_storage`) ; sinon, **rien n'est gardé**. L'écran affiche alors « mis à jour le … ».
 - **Jeton** : renouvelé avant l'appel quand il expire dans moins d'une minute, comme ailleurs.
+- **Vérification du 2026-11-16 avec les écrans mobiles déjà validés** : l'écran « Mutuelle » (reste du plafond, période, demandes récentes) se construit avec `GET /api/patients/munaseb/droits` et `GET /api/patients/munaseb/demandes?limite=3` ; le détail avec suivi en étapes, avec l'`historique` du détail ; les notifications lues et non lues, avec `lu` et `non_lues` ; l'écran sans mutuelle, avec `"etat": "aucun_contrat"`. **Aucune route nouvelle n'est nécessaire.** Depuis l'étape 5, `numero_carte` est celui de la carte de l'année en cours (section 2.13).
+
+### À faire dans l'application web (contrats MUNASEB, étape 5, 2026-11-16)
+
+Contrat dans `docs/api.md`, section 2.14.
+- **Adhésion** : demander le NIP (lu sur le QR code de l'application du patient) **et** la date de naissance (lue sur sa pièce d'identité). Un 404 `patient_inconnu` ne dit pas lequel des deux est faux : afficher « NIP ou date de naissance incorrect ».
+- **Recherche** : par numéro de carte seulement ; il n'existe pas de recherche par NIP ni par nom.
+- **Paiement** : le champ « référence de la transaction » n'apparaît que pour le mobile money. Les montants ne se saisissent pas : afficher ceux des paramètres en vigueur.
+- **Paramètres** : demander une confirmation avant d'enregistrer (le plafond et la carence touchent toutes les adhésions suivantes) ; montrer l'historique.
+- **Couleurs** : un contrat expiré ou suspendu ne s'affiche ni en rouge ni en orange (CLAUDE.md §6).
 
 ---
 
@@ -221,6 +231,17 @@ Les seuils sont fixés par les **professionnels concernés de chaque structure**
 - chaque résultat **garde le seuil utilisé au moment de la mesure** : un changement de seuil ne réécrit jamais un résultat passé ;
 - un seuil fixé par une **source officielle** (par exemple 140 mmHg pour la tension, dans le carnet de santé mère-enfant) peut être rendu **plus strict** par une structure, **jamais plus souple**.
 
+### Carte des structures de santé (proposition, 2026-11-16, aucune route écrite)
+
+Demande du porteur pour l'application patient. **Proposition, à valider avant d'écrire quoi que ce soit** :
+- **Quand** : après l'ouverture des autres types de structure (hôpital, clinique, pharmacie, laboratoire, « reste de la 3.7 », après le pilote). Aujourd'hui, seule la MUNASEB peut être validée : la carte serait vide.
+- **Route** : `GET /api/structures/carte?sud=&ouest=&nord=&est=&type=`, la zone affichée à l'écran (un rectangle de latitudes et longitudes), au plus 200 structures par réponse. Jeton patient exigé, pour limiter la collecte automatique.
+- **Ce qui est renvoyé** : seulement les structures **validées et sous licence** (jamais un brouillon, une demande en attente, une structure refusée ou suspendue) ; nom, type, téléphone, **numéro d'urgence**, commune, province, latitude et longitude. **Jamais** : le responsable, l'email, les membres, les pièces, la licence.
+- **Calcul de la distance** : sur le téléphone, à partir de sa position ; **la position du patient n'est jamais envoyée au serveur** (minimisation, loi n° 001-2021/AN).
+- **Hors connexion** : la dernière liste peut être gardée sur le téléphone (ce ne sont pas des données personnelles), avec « mis à jour le … ».
+- **Urgences** : le bouton d'appel du numéro d'urgence peut être en rouge (exception du porteur du 2026-10-26, CLAUDE.md §6).
+- **Questions** : un numéro de structure peut être le téléphone personnel d'un praticien seul (faut-il son accord pour l'afficher ?) ; faut-il les horaires et les services (garde, maternité) ; lien avec BF-06 (médicaments disponibles), qui viendra avec le module Pharmacie.
+
 ### Obtenir le NIP d'un patient qui ne peut pas ouvrir son application
 
 Un soignant a besoin du NIP pour ouvrir le dossier. Le patient peut être trop malade, avoir un téléphone verrouillé, déchargé ou perdu, ou ne pas avoir de smartphone.
@@ -255,8 +276,21 @@ Un soignant a besoin du NIP pour ouvrir le dossier. Le patient peut être trop m
 
 ### MUNASEB
 
-- Suspension d'un contrat : à concevoir (étape 5, après les réponses de la MUNASEB ; l'étape 6 passe avant, décision du porteur du 2026-10-21).
-- **Plafond en base plutôt qu'en constante** (`PLAFOND_ANNUEL_FCFA`, noté le 2026-10-21) : à décider à l'étape 5, avec la question à la MUNASEB sur un plafond qui change.
+- **Étape 5 faite le 2026-11-16** (migration 0028, `docs/api.md` §2.14), d'après le « Modèle retenu pour l'étape 5 » ci-dessous : paramètres en base et historisés, périodes avec numéro de carte, antenne, niveau d'études et plafond figé, délai de grâce (option A), paiement de la cotisation (espèces ou mobile money, sans API d'opérateur), routes de l'agent (adhésion, renouvellement, détail, recherche par carte, paramètres). **Pas codé**, faute de règle : la suspension, les ayants droit, les tarifs par circuit (voir les questions ci-dessous).
+- **Suspension d'un contrat : non codée.** Aucune règle n'est écrite dans nos sources. En attendant : pas de route ; un contrat `suspendu` (posé en SQL seulement) n'est pas couvert (`non_couvert` pour un acte, `suspendu` pour le patient) et **ne se renouvelle pas** (409 `contrat_suspendu`) : on bloque plutôt que de deviner si un paiement lève la suspension.
+- **Plafond en base plutôt qu'en constante** : fait le 2026-11-16 (`parametre_munaseb.plafond_periode_fcfa`). **Décision prise à l'étape 5, à confirmer** : le plafond est **figé sur chaque période à sa création** ; un changement ne touche que les périodes suivantes, comme un changement de tarif ne touche jamais une demande existante (CLAUDE.md §12). Même règle pour la cotisation et la fiche (figées sur chaque paiement) et pour la carence et le délai de grâce (lus au moment du paiement).
+- **Tarifs par type d'acte et par circuit : conçus (modèle retenu ci-dessous), pas codés à l'étape 5.** Raisons : la valeur de chaque couple (type d'acte, circuit) n'est confirmée par aucune source (consultation gratuite au service de la MUNASEB selon son offre, 80 % avec un bon d'après le bon de 2024, 100 % chez nous) ; les partenaires n'ont pas de circuit en base ; et le paiement direct est hors périmètre. Coder la structure avec des valeurs devinées irait contre la règle « rien ne s'invente ». Les tarifs actuels (`tarif_acte_munaseb`, une ligne par type d'acte) restent en service, et aucune route ne les modifie encore.
+- **Questions exactes à poser à la MUNASEB (étape 5, 2026-11-16)** :
+  1. **Suspension** : dans quels cas un contrat est-il suspendu (cotisation impayée, fraude, fin d'inscription à l'université, autre) ? Qui la décide ? Les actes faits avant la suspension restent-ils remboursés ? Comment est-elle levée ? Un adhérent suspendu peut-il renouveler ?
+  2. **Fin de couverture** : la couverture finit-elle bien le jour anniversaire de l'adhésion, ce jour compris (carte de 2024 : validité = adhésion + 1 an, effet = adhésion + 1 mois) ?
+  3. **Délai de grâce** : existe-t-il ? Combien de jours ? Les jours entre la fin et le paiement sont-ils couverts (aujourd'hui : non, option A) ?
+  4. **Renouvellement anticipé** : peut-on payer l'année suivante plusieurs mois avant la fin (aujourd'hui : oui, une seule année d'avance) ?
+  5. **Plafond** : 100 000 FCFA par an est-il toujours en vigueur ? Par adhérent, ou partagé avec les ayants droit ? Quand il change, s'applique-t-il à l'année en cours ou seulement aux adhésions suivantes (aujourd'hui : aux suivantes) ?
+  6. **Ayants droit** : qui est couvert en plus de l'étudiant (conjoint, enfants) ? Comment sont-ils inscrits ? Ont-ils leur propre numéro de carte ?
+  7. **Numéro de carte** : quel est son format exact (`0552/2024` sur la carte de 2024) ? Un numéro est-il jamais réattribué une autre année ?
+  8. **Cotisation et fiche** : montants actuels (5 000 et 100 FCFA en 2024) ? Changent-ils entre une première adhésion et un renouvellement ?
+  9. **Tarifs par circuit** : pour chaque type d'acte (consultation, examen, hospitalisation, pharmacie, laboratoire, lunetterie, et les types manquants), le taux et le plafond par acte au dépôt et au service de santé de la MUNASEB, chez un partenaire avec un bon, et en paiement direct.
+  10. **Mobile money** : quels opérateurs ? Quelle référence de transaction l'agent note-t-il ?
 - **Durée de conservation des notifications** (noté le 2026-10-21) : aujourd'hui, elles ne s'effacent jamais. À décider avec la purge de l'étape 7.
 - Types d'actes sans valeur dans les sources : dentaire et prothèses, accouchement et consultations prénatales, chirurgie, frais funéraires, radiologie.
 - Partenaires de la MUNASEB et structures : à rapprocher (un partenaire deviendra un lien entre la MUNASEB et une structure).
@@ -280,7 +314,7 @@ Un soignant a besoin du NIP pour ouvrir le dossier. Le patient peut être trop m
     7. **Paiement de la cotisation** : en espèces aujourd'hui ; LaafiCare doit aussi accepter le mobile money. **Pour le MVP**, l'agent enregistre le mode de paiement (`especes` ou `mobile_money`), la date, le montant et, pour le mobile money, la référence de la transaction. **Aucune intégration d'API d'opérateur avant le pilote.**
     - **Montants de la cotisation et de la fiche** (5 000 et 100 FCFA en 2024) : **en base, modifiables**, jamais en constante.
   - **Après le pilote** : intégration des API Orange Money et Moov Money pour le paiement de la cotisation.
-  - **Modèle retenu pour l'étape 5 (accord du porteur, 2026-10-22 ; rien à coder avant les réponses de la MUNASEB)** :
+  - **Modèle retenu pour l'étape 5 (accord du porteur, 2026-10-22 ; rien à coder avant les réponses de la MUNASEB)** — **codé le 2026-11-16 à la demande du porteur, sauf les tarifs par circuit** (voir plus haut) :
     - **Tarifs par type d'acte et par circuit** : une ligne de `tarif_acte_munaseb` par couple (type d'acte, circuit), les circuits étant `structure_munaseb` (dépôt et service de santé de la MUNASEB), `partenaire_bon` (structure conventionnée, avec un bon) et `paiement_direct`. Chaque ligne porte un **taux** (0 à 100) et un **plafond par acte** facultatif ; remboursement = min(coût × taux, arrondi ; plafond). Un forfait devient « 100 % dans la limite de N » (lunetterie : 15 000 ; hospitalisation avec un bon : 50 000). Aucune ligne pour un couple : acte non couvert dans ce circuit. La demande garde le circuit, le taux et le plafond appliqués, figés à sa création ; chaque modification de tarif est tracée (auteur, date, ancienne et nouvelle valeur). Le circuit d'un acte se déduit du partenaire. Une réponse de la MUNASEB ne demande alors qu'une mise à jour de valeurs.
     - **Paramètres MUNASEB en base**, modifiables et historisés : cotisation (5 000), fiche (100), délai de grâce (10 jours), plafond par période (100 000), durée de la carence (1 mois). La constante `PLAFOND_ANNUEL_FCFA` disparaît.
     - **Périodes** : date d'adhésion (paiement), date d'effet, date de fin (jour anniversaire de l'adhésion compris) ; **numéro de carte porté par la période** (unique), plus par le contrat ; antenne facultative ; niveau d'études (affiché avec l'UFR sur la carte, il change chaque année).
