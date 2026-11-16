@@ -32,6 +32,9 @@ use sqlx::types::Uuid;
 use crate::AppState;
 use crate::erreur_api::{CheminApi, ErreurApi, JsonApi, ReponseErreur, RequeteApi, reponse_erreur, reponse_erreur_interne};
 use crate::extracteur_jwt::{PersonnelPharmacie, ResponsablePharmacie};
+use laaficare_backend::benefice_pharmacie::{
+    self as benefice, AnnulationDepense, ChoixPeriode, Depense, ErreurBenefice, NouvelleDepense, Rapport,
+};
 use laaficare_backend::catalogue::{self, Medicament};
 use laaficare_backend::idempotence::{self, Cle, ErreurIdempotence};
 use laaficare_backend::stock_pharmacie::{
@@ -386,6 +389,87 @@ pub async fn regler(
     Ok(Json(corps))
 }
 
+// ---------------------------------------------------------------------
+// Dépenses et bénéfice net (responsable seulement ; ce n'est pas la
+// comptabilité officielle SYSCOHADA)
+// ---------------------------------------------------------------------
+
+fn mapper_erreur_benefice(erreur: ErreurBenefice) -> ReponseErreur {
+    use ErreurBenefice as E;
+    let (statut, code) = match &erreur {
+        E::DepenseInconnue => (StatusCode::NOT_FOUND, "depense_inconnue"),
+        E::DejaAnnulee => (StatusCode::CONFLICT, "deja_annule"),
+        E::AnnulationImpossible => (StatusCode::CONFLICT, "annulation_impossible"),
+        // Mêmes codes que pour le stock.
+        E::Idempotence(ErreurIdempotence::CleInvalide) => (StatusCode::BAD_REQUEST, "cle_idempotence_invalide"),
+        E::Idempotence(ErreurIdempotence::CleReutilisee) => {
+            (StatusCode::UNPROCESSABLE_ENTITY, "cle_idempotence_reutilisee")
+        }
+        E::DonneesInvalides(_) => (StatusCode::UNPROCESSABLE_ENTITY, "donnees_invalides"),
+        E::Interne(detail) => return reponse_erreur_interne("benefice pharmacie", detail),
+    };
+    reponse_erreur(statut, code, erreur.to_string())
+}
+
+/// `POST /api/pharmacie/depenses` : une dépense (201).
+pub async fn enregistrer_depense(
+    ResponsablePharmacie(responsable): ResponsablePharmacie,
+    State(state): State<AppState>,
+    entetes: HeaderMap,
+    JsonApi(corps): JsonApi<NouvelleDepense>,
+) -> Result<(StatusCode, Json<Depense>), ReponseErreur> {
+    let cle = cle_idempotence(&entetes)?;
+    let depense =
+        benefice::enregistrer_depense(&state.db, responsable, cle.as_ref(), &corps).await.map_err(mapper_erreur_benefice)?;
+    Ok((StatusCode::CREATED, Json(depense)))
+}
+
+#[derive(Debug, Serialize)]
+pub struct DepensesReponse {
+    pub depenses: Vec<Depense>,
+    pub suivant: Option<Uuid>,
+}
+
+/// `GET /api/pharmacie/depenses?limite=&avant=` : le journal des dépenses.
+pub async fn lister_depenses(
+    ResponsablePharmacie(responsable): ResponsablePharmacie,
+    State(state): State<AppState>,
+    RequeteApi(page): RequeteApi<PageAvant>,
+) -> Result<Json<DepensesReponse>, ReponseErreur> {
+    let limite = limite_valide(page.limite)?;
+    let depenses = benefice::lister_depenses(&state.db, responsable.structure_id, page.avant, limite)
+        .await
+        .map_err(interne("depenses"))?;
+    let suivant = if depenses.len() as i64 == limite { depenses.last().map(|d| d.id) } else { None };
+    Ok(Json(DepensesReponse { depenses, suivant }))
+}
+
+/// `POST /api/pharmacie/depenses/{id}/annuler` : l'écriture d'annulation
+/// (201).
+pub async fn annuler_depense(
+    ResponsablePharmacie(responsable): ResponsablePharmacie,
+    State(state): State<AppState>,
+    CheminApi(depense_id): CheminApi<Uuid>,
+    entetes: HeaderMap,
+    JsonApi(corps): JsonApi<AnnulationDepense>,
+) -> Result<(StatusCode, Json<Depense>), ReponseErreur> {
+    let cle = cle_idempotence(&entetes)?;
+    let depense = benefice::annuler_depense(&state.db, responsable, cle.as_ref(), depense_id, &corps)
+        .await
+        .map_err(mapper_erreur_benefice)?;
+    Ok((StatusCode::CREATED, Json(depense)))
+}
+
+/// `GET /api/pharmacie/rapport?periode=semaine|mois|annee&date=` ou
+/// `?du=&au=` : bénéfice net de la pharmacie sur la période.
+pub async fn rapport(
+    ResponsablePharmacie(responsable): ResponsablePharmacie,
+    State(state): State<AppState>,
+    RequeteApi(choix): RequeteApi<ChoixPeriode>,
+) -> Result<Json<Rapport>, ReponseErreur> {
+    benefice::rapport(&state.db, responsable.structure_id, &choix).await.map(Json).map_err(mapper_erreur_benefice)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -690,5 +774,94 @@ pub(crate) mod tests {
         assert_eq!(a.bientot_perimes.len(), 1);
         let Json(a) = alertes(personnel(&state, &jeton_autre).await.unwrap(), State(state.clone())).await.unwrap();
         assert!(!a.alerte_peremption_active && a.bientot_perimes.is_empty());
+    }
+
+    /// Dépenses et rapport : responsable seulement (403 pour un
+    /// pharmacien), une pharmacie ne voit ni n'annule les dépenses d'une
+    /// autre, période mal formée refusée.
+    #[sqlx::test]
+    #[ignore]
+    async fn depenses_et_rapport_par_la_route(pool: sqlx::PgPool) {
+        let state = etat_de_test(&pool);
+        let (jeton_resp, pharmacie) = en_exercice(&state, "+22670620001", "pharmacie", "validee", "responsable", None).await;
+        let (jeton_pharm, _) = en_exercice(&state, "+22670620002", "pharmacie", "validee", "pharmacien", Some(pharmacie)).await;
+        let (jeton_autre, _) = en_exercice(&state, "+22670620003", "pharmacie", "validee", "responsable", None).await;
+
+        // Le pharmacien n'atteint aucune de ces routes.
+        assert_eq!(responsable(&state, &jeton_pharm).await.err(), Some(StatusCode::FORBIDDEN));
+
+        let aujourdhui = chrono::Utc::now().date_naive();
+        let corps = NouvelleDepense {
+            date_depense: aujourdhui,
+            categorie: benefice::Categorie::Loyer,
+            montant_fcfa: 50_000,
+            libelle: "Loyer fictif".into(),
+        };
+        let (statut, Json(d)) = enregistrer_depense(
+            responsable(&state, &jeton_resp).await.unwrap(),
+            State(state.clone()),
+            entetes(Some("dep-1")),
+            JsonApi(corps.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(statut, StatusCode::CREATED);
+        let (s, Json(e)) = enregistrer_depense(
+            responsable(&state, &jeton_resp).await.unwrap(),
+            State(state.clone()),
+            entetes(Some("dep-1")),
+            JsonApi(NouvelleDepense { montant_fcfa: 1, ..corps.clone() }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!((s, e.code), (StatusCode::UNPROCESSABLE_ENTITY, "cle_idempotence_reutilisee"));
+
+        // L'autre pharmacie.
+        let (s, Json(e)) = annuler_depense(
+            responsable(&state, &jeton_autre).await.unwrap(),
+            State(state.clone()),
+            CheminApi(d.id),
+            entetes(None),
+            JsonApi(AnnulationDepense { motif: "Intrusion".into() }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!((s, e.code), (StatusCode::NOT_FOUND, "depense_inconnue"));
+        let Json(liste) = lister_depenses(
+            responsable(&state, &jeton_autre).await.unwrap(),
+            State(state.clone()),
+            RequeteApi(PageAvant { limite: None, avant: None }),
+        )
+        .await
+        .unwrap();
+        assert!(liste.depenses.is_empty());
+
+        // Rapports.
+        let semaine = ChoixPeriode { periode: Some(benefice::Periode::Semaine), ..Default::default() };
+        let Json(r) = rapport(responsable(&state, &jeton_resp).await.unwrap(), State(state.clone()), RequeteApi(semaine.clone()))
+            .await
+            .unwrap();
+        assert_eq!((r.depenses.total_fcfa, r.benefice_net_fcfa), (50_000, -50_000));
+        let Json(r) = rapport(responsable(&state, &jeton_autre).await.unwrap(), State(state.clone()), RequeteApi(semaine))
+            .await
+            .unwrap();
+        assert_eq!(r.depenses.total_fcfa, 0);
+        let (s, Json(e)) =
+            rapport(responsable(&state, &jeton_resp).await.unwrap(), State(state.clone()), RequeteApi(ChoixPeriode::default()))
+                .await
+                .unwrap_err();
+        assert_eq!((s, e.code), (StatusCode::UNPROCESSABLE_ENTITY, "donnees_invalides"));
+
+        // Annulation par le responsable.
+        let (s, Json(a)) = annuler_depense(
+            responsable(&state, &jeton_resp).await.unwrap(),
+            State(state.clone()),
+            CheminApi(d.id),
+            entetes(None),
+            JsonApi(AnnulationDepense { motif: "Erreur".into() }),
+        )
+        .await
+        .unwrap();
+        assert_eq!((s, a.montant_fcfa), (StatusCode::CREATED, -50_000));
     }
 }

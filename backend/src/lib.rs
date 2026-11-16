@@ -10,6 +10,7 @@ pub mod alerte_securite;
 pub mod auth_administrateur;
 pub mod auth_patient;
 pub mod auth_professionnel;
+pub mod benefice_pharmacie;
 pub mod catalogue;
 pub mod compte_professionnel;
 pub mod config;

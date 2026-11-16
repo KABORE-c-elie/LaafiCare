@@ -289,6 +289,12 @@ async fn main() {
         .route("/api/pharmacie/seuils/{medicament_id}", axum::routing::put(routes_pharmacie::fixer_seuils))
         .route("/api/pharmacie/reglages", axum::routing::put(routes_pharmacie::regler))
         .route("/api/pharmacie/alertes", get(routes_pharmacie::alertes))
+        .route(
+            "/api/pharmacie/depenses",
+            get(routes_pharmacie::lister_depenses).post(routes_pharmacie::enregistrer_depense),
+        )
+        .route("/api/pharmacie/depenses/{id}/annuler", post(routes_pharmacie::annuler_depense))
+        .route("/api/pharmacie/rapport", get(routes_pharmacie::rapport))
         .with_state(AppState {
             db: pool,
             jwt,

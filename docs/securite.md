@@ -206,6 +206,7 @@ Beaucoup de règles sont vérifiées deux fois : par le code, et par la base Pos
 - **Le catalogue** n'est écrit que par l'outil d'import de l'équipe, avec son propre rôle ; le serveur le lit seulement.
 - **Une requête renvoyée après une coupure ne crée rien deux fois** (en-tête `Idempotency-Key`, draft IETF) : la base garde, par pharmacie, chaque clé avec l'empreinte de sa requête ; la même clé avec une autre requête est refusée.
 - **Aucune donnée patient** n'est enregistrée avec une vente (D10).
+- **Les dépenses et le rapport du bénéfice net** ne sont lus et écrits que par le **responsable** de la pharmacie (403 pour un pharmacien) ; une dépense ne se modifie ni ne s'efface (migration 0032), l'auteur responsable est garanti par la base.
 
 **Le serveur n'a pas les droits pour défaire ces protections** (migration 0026, 2026-10-22). Il se connecte avec un rôle limité, `laaficare_serveur` : ni administrateur de la base, ni propriétaire des tables. Il ne peut donc ni désactiver un trigger, ni modifier ou effacer une trace, ni créer ou changer une table, ni écrire le journal des migrations. Les outils de l'équipe ont leur propre rôle, `laaficare_outils`, **seul autorisé à ouvrir la fenêtre de réenrôlement** d'un administrateur ; le serveur peut seulement la refermer, par une fonction prévue pour cela. Les migrations sont appliquées à part (`cargo run --bin migrer`), avec le rôle propriétaire. Un test vérifie ces refus et fait tourner un parcours complet du serveur avec son seul rôle ([`tests/droits_des_roles.rs`](../backend/tests/droits_des_roles.rs)).
 

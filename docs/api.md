@@ -2,7 +2,7 @@
 
 Ce document décrit les routes de l'API Rust/Axum telles qu'elles sont **codées aujourd'hui**, puis celles qui sont **seulement prévues**. Les applications Angular (web) et Flutter (mobile) s'appuient sur lui. Il est mis à jour avec chaque ajout ou modification d'une route.
 
-État au 2026-10-18, branche `dev`.
+État au 2026-11-16, branche `backend-pharmacie`.
 
 Toutes les valeurs des exemples sont fictives.
 
@@ -246,6 +246,9 @@ Résumé :
 | POST | `/api/pharmacie/entrees`, `/api/pharmacie/ventes`, `/api/pharmacie/ventes/{id}/annuler`, `/api/pharmacie/pertes`, `/api/pharmacie/inventaires`, `/api/pharmacie/mouvements/{id}/annuler` | même appelant ; en-tête `Idempotency-Key` facultatif | fonctionne (section 2.15) |
 | PUT | `/api/pharmacie/seuils/{medicament_id}` | même appelant | fonctionne (section 2.15) |
 | PUT | `/api/pharmacie/prix/{medicament_id}`, `/api/pharmacie/reglages` | jeton en exercice, **responsable** d'une pharmacie seulement | fonctionne (section 2.15) |
+| POST, GET | `/api/pharmacie/depenses` | jeton en exercice, **responsable** d'une pharmacie seulement ; POST avec `Idempotency-Key` facultatif | fonctionne (section 2.16) |
+| POST | `/api/pharmacie/depenses/{id}/annuler` | même appelant | fonctionne (section 2.16) |
+| GET | `/api/pharmacie/rapport` | même appelant | fonctionne (section 2.16) |
 
 > **Routes MUNASEB rebranchées (étape 3.9).** Un agent se connecte par la connexion professionnelle (section 2.4), puis active son affectation `agent_assurance_munaseb` (section 2.6). Les routes de remboursement n'acceptent qu'un jeton `laaficare:professionnel_en_exercice` : tout autre jeton est refusé en 401. Avec un jeton de la bonne sorte, elles répondent **403 `acces_refuse`** si l'affectation n'est pas celle d'un agent MUNASEB, est désactivée, ou si la MUNASEB n'est plus validée ou sous licence. **Testable dans Postman de bout en bout** : la structure MUNASEB se crée (section 2.8), l'équipe la valide (section 2.9), le responsable invite un agent (section 2.10), et l'agent enregistre les contrats (section 2.14).
 
@@ -1476,6 +1479,70 @@ Refus :
 - `bientot_perimes` reste **vide tant que le responsable n'a pas réglé le délai** (D9 : aucune valeur par défaut).
 - `perimes_en_stock` : lots périmés encore en stock, à sortir en perte ; toujours affichés.
 
+### 2.16 Pharmacie : dépenses et bénéfice net (2026-11-16)
+
+> **Ce n'est pas la comptabilité officielle (SYSCOHADA).** C'est un tableau de gestion pour le responsable de la pharmacie, en FCFA entiers. **Aucun calcul d'impôt** : les impôts et taxes sont une dépense saisie (catégorie `impots_taxes`).
+
+**Responsable de la pharmacie seulement** (jeton en exercice, affectation `responsable` d'une pharmacie). Un pharmacien reçoit **403 `acces_refuse`**. Une dépense d'une autre pharmacie répond 404, comme une dépense qui n'existe pas.
+
+#### `POST /api/pharmacie/depenses`
+
+- **Corps** : `{"date_depense": "2026-11-16", "categorie": "loyer", "montant_fcfa": 50000, "libelle": "Loyer de novembre"}`.
+- `categorie` : `loyer`, `salaires`, `electricite`, `eau`, `transport`, `impots_taxes`, `entretien`, `autres`.
+- `date_depense` : jamais dans le futur (date du Burkina). `montant_fcfa` : entier positif. `libelle` : 1 à 200 caractères.
+- En-tête `Idempotency-Key` facultatif (section 2.15).
+- **Réponses** : 201 et la dépense `{"id", "date_depense", "categorie", "montant_fcfa", "libelle", "annule_depense_id", "motif_annulation", "annulee_par", "date_creation", "auteur_nom", "auteur_prenom"}` ; 422 `donnees_invalides`.
+
+**Une dépense ne se modifie ni ne s'efface jamais.** Une erreur se corrige par une annulation.
+
+#### `POST /api/pharmacie/depenses/{id}/annuler`
+
+- **Corps** : `{"motif": "Saisie en double"}` (obligatoire, 1 000 caractères au plus). En-tête `Idempotency-Key` facultatif.
+- Crée une écriture au **montant opposé**, avec la **même date** et la **même catégorie** : la dépense disparaît du rapport de sa période.
+- **Réponses** : 201 et l'annulation ; 404 `depense_inconnue` ; 409 `deja_annule` ; 409 `annulation_impossible` (une annulation ne s'annule pas).
+
+#### `GET /api/pharmacie/depenses?limite=&avant=`
+
+Le journal des dépenses, la plus récemment saisie d'abord, annulations comprises : `{"depenses": […], "suivant": …}`.
+
+#### `GET /api/pharmacie/rapport`
+
+Deux façons de choisir la période (dates du Burkina, comprises) :
+
+- `?periode=semaine` (du lundi au dimanche), `?periode=mois` ou `?periode=annee`, avec `&date=AAAA-MM-JJ` facultatif (la période qui contient cette date ; aujourd'hui par défaut) ;
+- ou `?du=AAAA-MM-JJ&au=AAAA-MM-JJ`.
+
+Autre chose (rien, les deux à la fois, `au` avant `du`, plus de 3 660 jours) : 422 `donnees_invalides`.
+
+```json
+{
+  "du": "2026-11-16", "au": "2026-11-22",
+  "ventes_fcfa": 600,
+  "cout_achat_vendu_fcfa": 300,
+  "marge_brute_fcfa": 300,
+  "pertes": {"peremption_fcfa": 200, "casse_fcfa": 100, "autre_fcfa": 0, "ecarts_inventaire_fcfa": -20, "total_fcfa": 280},
+  "depenses": {"par_categorie": [{"categorie": "loyer", "montant_fcfa": 50000}, …], "total_fcfa": 50000},
+  "benefice_net_fcfa": -49980,
+  "valeur_stock_fin_fcfa": 1320,
+  "dont_perime_fcfa": 100
+}
+```
+
+Comment chaque nombre est calculé :
+
+- **ventes** : les lignes de vente au prix de vente figé, moins les ventes annulées ;
+- **coût d'achat des produits vendus** : les mêmes lignes au prix d'achat de leur lot ;
+- **marge brute** = ventes − coût d'achat des produits vendus ;
+- **pertes**, au prix d'achat du lot : péremption, casse, autre, et **écarts d'inventaire** (un manque est une perte ; un excédent la diminue, d'où un nombre qui peut être négatif) ;
+- **dépenses** : le journal, par catégorie (les huit, même à 0) ;
+- **bénéfice net** = marge brute − pertes − dépenses ;
+- **valeur du stock restant** à la fin du dernier jour, au prix d'achat, **dont** les lots déjà périmés à cette date.
+
+À savoir :
+
+- un mouvement compte **à sa date** : une vente annulée le mois suivant diminue les ventes du mois suivant ;
+- les **achats** (entrées en stock) ne sont pas des dépenses : leur coût compte quand le produit est vendu ou perdu ; le reste est dans la valeur du stock.
+
 ---
 
 ## 3. Codes d'erreur : index
@@ -1531,7 +1598,8 @@ Refus :
 | `transition_invalide` | 409 | transitions, soumission, abandon, validation et refus d'une structure, désactivation d'une affectation |
 | `motif_vide`, `motif_trop_long` | 422 | rejet d'une demande de remboursement, refus d'une structure |
 | `medicament_inconnu`, `lot_inconnu`, `vente_inconnue`, `mouvement_inconnu` | 404 | pharmacie (section 2.15 ; aussi pour un objet d'une autre pharmacie) |
-| `stock_insuffisant`, `prix_non_defini`, `lot_perime`, `deja_annule`, `annulation_impossible` | 409 | pharmacie (avec `medicament_id`, et `quantite_disponible` pour le stock) |
+| `stock_insuffisant`, `prix_non_defini`, `lot_perime`, `deja_annule`, `annulation_impossible` | 409 | pharmacie (avec `medicament_id`, et `quantite_disponible` pour le stock) ; `deja_annule` et `annulation_impossible` aussi pour les dépenses |
+| `depense_inconnue` | 404 | annulation d'une dépense (section 2.16 ; aussi pour une dépense d'une autre pharmacie) |
 | `cle_idempotence_invalide` | 400 | créations de la pharmacie (en-tête `Idempotency-Key`) |
 | `cle_idempotence_reutilisee` | 422 | créations de la pharmacie (même clé, autre requête) |
 | `erreur_interne` | 500 | toutes |

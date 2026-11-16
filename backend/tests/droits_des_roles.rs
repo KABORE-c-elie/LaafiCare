@@ -108,6 +108,9 @@ async fn ce_que_chaque_role_peut_faire(pool: PgPool) {
         "DELETE FROM seuil_stock WHERE false",
         "DELETE FROM reglage_pharmacie WHERE false",
         "TRUNCATE mouvement_stock",
+        // Dépenses (migration 0032) : même règle.
+        "UPDATE depense_pharmacie SET libelle = libelle WHERE false",
+        "DELETE FROM depense_pharmacie WHERE false",
     ] {
         refuse(&mut conn, sql).await;
     }
@@ -488,4 +491,25 @@ async fn parcours_pharmacie_avec_le_role_du_serveur(proprietaire: PgPool) {
     assert_eq!(stock::etat(&serveur, structure_id, None, 50).await.unwrap()[0].quantite_disponible, 9);
     assert_eq!(stock::journal(&serveur, structure_id, None, 50).await.unwrap().len(), 6);
     assert!(stock::equivalents(&serveur, structure_id, x).await.unwrap().is_some());
+
+    // Dépenses et rapport (migration 0032).
+    use laaficare_backend::benefice_pharmacie::{self as benefice, AnnulationDepense, Categorie, ChoixPeriode, NouvelleDepense};
+    let aujourdhui = chrono::Utc::now().date_naive();
+    let depense = benefice::enregistrer_depense(
+        &serveur,
+        titulaire,
+        Some(&Cle::lire("depense-1").unwrap()),
+        &NouvelleDepense { date_depense: aujourdhui, categorie: Categorie::Loyer, montant_fcfa: 1_000, libelle: "Loyer fictif".into() },
+    )
+    .await
+    .unwrap();
+    benefice::annuler_depense(&serveur, titulaire, None, depense.id, &AnnulationDepense { motif: "Erreur".into() }).await.unwrap();
+    let rapport = benefice::rapport(
+        &serveur,
+        structure_id,
+        &ChoixPeriode { du: Some(aujourdhui), au: Some(aujourdhui), ..Default::default() },
+    )
+    .await
+    .unwrap();
+    assert_eq!((rapport.ventes_fcfa, rapport.depenses.total_fcfa, rapport.valeur_stock_fin_fcfa), (0, 0, 900));
 }

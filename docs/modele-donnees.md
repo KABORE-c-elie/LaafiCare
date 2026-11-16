@@ -321,6 +321,10 @@ Pharmacie, auteur, date, case « sur ordonnance papier ». **Aucune donnée pati
 - Seuils minimal et maximal d'alerte, par médicament ; modifiables, jamais effacés.
 - Délai d'alerte de péremption de la pharmacie, réglé par le **responsable** (garanti par la base) ; vide = alerte désactivée (D9).
 
+### `depense_pharmacie` : les dépenses
+
+Une ligne par dépense : date (jamais future), catégorie (`loyer`, `salaires`, `electricite`, `eau`, `transport`, `impots_taxes`, `entretien`, `autres`), montant en FCFA entiers, libellé, auteur. L'auteur est **le responsable** de la pharmacie, garanti par la base. Jamais modifiée ni effacée : une **annulation** est une nouvelle ligne au montant opposé, même date et même catégorie, avec un motif, une seule par dépense, dans la même pharmacie. Sert au rapport du bénéfice net (`docs/api.md`, section 2.16), qui n'est pas la comptabilité officielle. Fichier : [`benefice_pharmacie.rs`](../backend/src/benefice_pharmacie.rs). Migration 0032.
+
 ### `operation_idempotente` : les clés d'idempotence
 
 Une ligne par clé `Idempotency-Key` reçue : pharmacie, clé, opération, empreinte SHA-256 de la requête, objet créé. Sert à renvoyer le même objet quand une requête est renvoyée après une coupure. Jamais modifiée ni effacée.
@@ -362,5 +366,6 @@ Une ligne par clé `Idempotency-Key` reçue : pharmacie, clé, opération, empre
 | 0029 | Paramètres MUNASEB modifiés par le seul responsable de la structure (colonnes de l'auteur renommées) ; trace des adhésions sans patient (`echec_adhesion_munaseb`), pour la limite d'échecs par agent |
 | 0030 | Catalogue national des médicaments (`import_catalogue`, `dci`, `medicament`, `medicament_dci`) : jamais modifié ni effacé ; lu par le serveur, rempli par le seul outil d'import |
 | 0031 | Stock des pharmacies : lots, ventes, journal des mouvements (jamais négatif, jamais modifié), prix de vente historisés, seuils, réglages, clés d'idempotence |
+| 0032 | Dépenses des pharmacies (`depense_pharmacie`), par le seul responsable, jamais modifiées : une correction est une annulation tracée |
 
 Une migration déjà appliquée ne change plus jamais : toute évolution passe par une nouvelle migration. Un test vérifie aussi qu'aucun caractère invisible ne s'y glisse ([`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs)).
