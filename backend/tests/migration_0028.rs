@@ -65,9 +65,11 @@ async fn periodes_existantes_gardees(pool: PgPool) {
         ]
     );
 
-    // Valeurs initiales des paramètres, une seule version sans auteur.
+    // Valeurs initiales des paramètres, une seule version sans auteur
+    // (colonne renommée `auteur_affectation_id` par la migration 0029, que
+    // `run` applique aussi).
     let parametres: (i32, i32, i16, i16, i32, Option<Uuid>) = sqlx::query_as(
-        "SELECT cotisation_fcfa, fiche_fcfa, delai_grace_jours, carence_mois, plafond_periode_fcfa, agent_affectation_id \
+        "SELECT cotisation_fcfa, fiche_fcfa, delai_grace_jours, carence_mois, plafond_periode_fcfa, auteur_affectation_id \
          FROM parametre_munaseb",
     )
     .fetch_one(&pool)

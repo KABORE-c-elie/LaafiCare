@@ -57,6 +57,23 @@ const MAX_TEXTE_COURT: usize = 100;
 const MAX_MATRICULE: usize = 50;
 const MAX_PERSONNE_A_PREVENIR: usize = 200;
 
+// Limite d'échecs d'adhésion par agent (demande du porteur du 2026-11-16 ;
+// migration 0029). Une adhésion désigne le patient par son NIP et sa date
+// de naissance : sans limite, un agent (ou un jeton d'agent volé) pourrait
+// essayer des couples en masse pour savoir quels NIP existent, et chez
+// qui. Sources : OWASP API Security Top 10 2023, API4:2023 (Unrestricted
+// Resource Consumption : limiter le nombre d'appels par client sur une
+// période) ; OWASP Authentication Cheat Sheet, « Protect Against Automated
+// Attacks » (limiter les essais, compter les échecs). Aucune des deux ne
+// donne de valeur : on reprend celle que le projet applique déjà aux essais
+// qui devinent un secret, 5 échecs en 15 minutes (verrouillage BF-01, §11),
+// en fenêtre glissante comme les envois de code SMS (O2) : un succès ne
+// remet pas le compte à zéro, sinon on alternerait essais et adhésions
+// réelles. Un agent honnête qui fait une faute de frappe a quatre essais de
+// marge, et attend au plus 15 minutes.
+pub const ECHECS_ADHESION_MAX: i64 = 5;
+pub const FENETRE_ECHECS_ADHESION_MINUTES: i32 = 15;
+
 #[derive(Debug, thiserror::Error)]
 pub enum ErreurContratAssuranceMunaseb {
     #[error("Ce numéro de carte est déjà utilisé.")]
@@ -99,6 +116,12 @@ pub enum ErreurContratAssuranceMunaseb {
 
     #[error("Cette référence de transaction est déjà utilisée pour une autre cotisation.")]
     ReferenceTransactionDejaUtilisee,
+
+    /// Trop d'échecs d'adhésion récents pour cet agent
+    /// (`ECHECS_ADHESION_MAX` dans la fenêtre) ; `reessayer_dans_secs` :
+    /// en-tête `Retry-After` de la réponse 429 (RFC 6585 §4).
+    #[error("Trop d'essais sans résultat. Réessayez plus tard.")]
+    TropDEchecs { reessayer_dans_secs: u64 },
 
     /// Le message ne cite que le nom du champ, jamais la valeur saisie.
     #[error("{0}")]
@@ -190,8 +213,10 @@ pub struct VersionParametres {
     #[sqlx(flatten)]
     pub valeurs: Parametres,
     pub date_effet: DateTime<Utc>,
-    pub agent_nom: Option<String>,
-    pub agent_prenom: Option<String>,
+    /// Le responsable de la MUNASEB qui a posé cette version (migration
+    /// 0029) ; absent pour les valeurs initiales.
+    pub auteur_nom: Option<String>,
+    pub auteur_prenom: Option<String>,
 }
 
 // Macro plutôt que `const` + `format!` : sqlx 0.9 n'accepte que des
@@ -199,9 +224,9 @@ pub struct VersionParametres {
 macro_rules! select_version {
     () => {
         "SELECT pm.id, pm.cotisation_fcfa, pm.fiche_fcfa, pm.delai_grace_jours, pm.carence_mois, \
-         pm.plafond_periode_fcfa, pm.date_effet, u.nom AS agent_nom, u.prenom AS agent_prenom \
+         pm.plafond_periode_fcfa, pm.date_effet, u.nom AS auteur_nom, u.prenom AS auteur_prenom \
          FROM parametre_munaseb pm \
-         LEFT JOIN affectation a ON a.id = pm.agent_affectation_id \
+         LEFT JOIN affectation a ON a.id = pm.auteur_affectation_id \
          LEFT JOIN compte ca ON ca.id = a.compte_id \
          LEFT JOIN utilisateur u ON u.id = ca.utilisateur_id"
     };
@@ -218,8 +243,13 @@ where
         .await
 }
 
-/// Nouvelle version des paramètres, enregistrée avec l'affectation de
-/// l'agent. Les versions précédentes ne changent jamais (triggers de la
+/// Nouvelle version des paramètres, enregistrée avec l'affectation de son
+/// auteur, le **responsable** de la structure MUNASEB (décision du porteur
+/// du 2026-11-16 : ces valeurs touchent l'argent de toutes les adhésions
+/// suivantes ; les agents ne font que les lire). La base n'accepte que ce
+/// rôle comme auteur (migration 0029) ; l'appelant passe l'affectation que
+/// l'extracteur `ResponsableMunaseb` a contrôlée. Les versions précédentes
+/// ne changent jamais (triggers de la
 /// 0028) : l'historique donne l'ancienne et la nouvelle valeur de chaque
 /// modification. Des valeurs identiques aux valeurs en vigueur n'ajoutent
 /// aucune version (renvoyer deux fois la même requête ne crée pas de bruit
@@ -231,7 +261,7 @@ where
 /// chaque paiement).
 pub async fn modifier_parametres(
     pool: &PgPool,
-    agent: AffectationAgent,
+    responsable: AffectationAgent,
     nouveaux: Parametres,
 ) -> Result<VersionParametres, Erreur> {
     nouveaux.controler()?;
@@ -242,16 +272,16 @@ pub async fn modifier_parametres(
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO parametre_munaseb \
          (cotisation_fcfa, fiche_fcfa, delai_grace_jours, carence_mois, plafond_periode_fcfa, \
-          agent_affectation_id, agent_structure_id, agent_role) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'agent_assurance_munaseb') RETURNING id",
+          auteur_affectation_id, auteur_structure_id, auteur_role) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'responsable') RETURNING id",
     )
     .bind(nouveaux.cotisation_fcfa)
     .bind(nouveaux.fiche_fcfa)
     .bind(nouveaux.delai_grace_jours)
     .bind(nouveaux.carence_mois)
     .bind(nouveaux.plafond_periode_fcfa)
-    .bind(agent.affectation_id)
-    .bind(agent.structure_id)
+    .bind(responsable.affectation_id)
+    .bind(responsable.structure_id)
     .fetch_one(pool)
     .await?;
     Ok(sqlx::query_as(concat!(select_version!(), " WHERE pm.id = $1")).bind(id).fetch_one(pool).await?)
@@ -616,6 +646,21 @@ async fn enregistrer_periode(
 /// contrat, et la route ne permet pas de vérifier si un NIP existe (OWASP
 /// API3:2023, ne rien exposer de plus que nécessaire). Il n'existe aucune
 /// recherche de patient par NIP pour l'agent.
+///
+/// **Limite d'échecs** (`ECHECS_ADHESION_MAX`, migration 0029) : chaque
+/// couple NIP et date qui ne désigne aucun patient est tracé avec
+/// l'affectation de l'agent ; à la limite, toute adhésion de cet agent est
+/// refusée (`TropDEchecs`) **avant** la recherche du patient, même avec un
+/// couple correct, jusqu'à ce que le plus ancien échec sorte de la fenêtre.
+/// Un NIP mal formé (clé de Luhn) n'est pas compté : il est refusé sans
+/// lire la base et n'apprend rien sur un patient. L'affectation est
+/// verrouillée en tête de transaction (comme l'identité pour les codes SMS,
+/// `otp::generer_et_enregistrer`) : des adhésions simultanées du même agent
+/// passent l'une après l'autre et ne dépassent jamais la limite ensemble.
+/// Ordre des verrous : l'affectation, puis les insertions ; aucune autre
+/// opération ne verrouille une affectation puis un contrat (la
+/// désactivation verrouille structure → affectation → sessions) : aucun
+/// cycle n'est possible.
 pub async fn adherer(pool: &PgPool, agent: AffectationAgent, adhesion: &Adhesion) -> Result<Uuid, Erreur> {
     // Contrôles sans base d'abord (même ordre que `creer_depuis_acte`).
     if !nip::valider(&adhesion.nip) {
@@ -635,13 +680,49 @@ pub async fn adherer(pool: &PgPool, agent: AffectationAgent, adhesion: &Adhesion
 
     let mut tx = pool.begin().await?;
 
+    sqlx::query("SELECT id FROM affectation WHERE id = $1 FOR UPDATE")
+        .bind(agent.affectation_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    // Échecs dans la fenêtre, et secondes avant que le plus ancien en sorte
+    // (horloge de PostgreSQL, comme pour les codes SMS). `now()` est l'heure
+    // de début de la transaction : la même pour le comptage et la trace.
+    let (echecs, attente): (i64, Option<i64>) = sqlx::query_as(
+        "SELECT count(*), \
+                ceil(extract(epoch FROM min(date_echec) + make_interval(mins => $2) - now()))::bigint \
+         FROM echec_adhesion_munaseb \
+         WHERE agent_affectation_id = $1 AND date_echec > now() - make_interval(mins => $2)",
+    )
+    .bind(agent.affectation_id)
+    .bind(FENETRE_ECHECS_ADHESION_MINUTES)
+    .fetch_one(&mut *tx)
+    .await?;
+    if echecs >= ECHECS_ADHESION_MAX {
+        // Au moins 1 s : un échec pile à la limite de la fenêtre compte encore.
+        return Err(Erreur::TropDEchecs { reessayer_dans_secs: attente.unwrap_or(1).max(1) as u64 });
+    }
+
     let patient_id: Option<Uuid> =
         sqlx::query_scalar("SELECT id FROM patient WHERE nip = $1 AND date_naissance = $2")
             .bind(&adhesion.nip)
             .bind(adhesion.date_naissance)
             .fetch_optional(&mut *tx)
             .await?;
-    let patient_id = patient_id.ok_or(Erreur::PatientInconnu)?;
+    let Some(patient_id) = patient_id else {
+        // L'échec est tracé et validé en base avant la réponse : sinon
+        // l'annulation de la transaction l'effacerait et la limite ne
+        // compterait rien.
+        sqlx::query(
+            "INSERT INTO echec_adhesion_munaseb (agent_affectation_id, agent_structure_id, agent_role) \
+             VALUES ($1, $2, 'agent_assurance_munaseb')",
+        )
+        .bind(agent.affectation_id)
+        .bind(agent.structure_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        return Err(Erreur::PatientInconnu);
+    };
 
     let deja: bool =
         sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM contrat_assurance_munaseb WHERE patient_id = $1)")
@@ -1155,6 +1236,34 @@ mod tests {
         AffectationAgent { affectation_id, structure_id }
     }
 
+    /// Affectation `responsable` dans la même structure qu'une affectation
+    /// existante (la base n'admet qu'une MUNASEB validée), ou un second
+    /// agent avec `role` = `agent_assurance_munaseb`.
+    async fn collegue(pool: &PgPool, telephone: &str, de: AffectationAgent, role: &str) -> AffectationAgent {
+        let u: Uuid =
+            sqlx::query_scalar("INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('ZONGO', 'Mariam', $1) RETURNING id")
+                .bind(telephone)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let compte: Uuid = sqlx::query_scalar(
+            "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'professionnel', 'x') RETURNING id",
+        )
+        .bind(u)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let affectation_id: Uuid =
+            sqlx::query_scalar("INSERT INTO affectation (compte_id, structure_id, role) VALUES ($1, $2, $3) RETURNING id")
+                .bind(compte)
+                .bind(de.structure_id)
+                .bind(role)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        AffectationAgent { affectation_id, structure_id: de.structure_id }
+    }
+
     fn especes() -> NouveauPaiement {
         NouveauPaiement { mode: ModePaiement::Especes, reference_transaction: None, date_declaree: None }
     }
@@ -1399,13 +1508,15 @@ mod tests {
     }
 
     /// Paramètres : valeurs initiales, refus hors bornes, requête identique
-    /// sans nouvelle version, nouvelle version avec l'agent, historique
-    /// paginé, effet sur les périodes et les paiements suivants seulement,
-    /// lignes jamais modifiées.
+    /// sans nouvelle version, nouvelle version avec le responsable,
+    /// historique paginé, effet sur les périodes et les paiements suivants
+    /// seulement, lignes jamais modifiées ; la base refuse un agent comme
+    /// auteur (migration 0029).
     #[sqlx::test]
     #[ignore]
     async fn parametres_modifies_et_historises(pool: PgPool) {
         let ag = agent(&pool, "+22670430001").await;
+        let resp = collegue(&pool, "+22670430009", ag, "responsable").await;
         let initiaux = parametres_en_vigueur(&pool).await.unwrap();
         let valeurs = Parametres {
             cotisation_fcfa: 5000,
@@ -1415,22 +1526,39 @@ mod tests {
             plafond_periode_fcfa: 100_000,
         };
         assert_eq!(initiaux.valeurs, valeurs);
-        assert_eq!(initiaux.agent_nom, None, "posés par la migration");
+        assert_eq!(initiaux.auteur_nom, None, "posés par la migration");
 
         // Période créée avant la modification.
         let (_, nip_avant) = patient(&pool, "+22670430002", "900000000043002").await;
         let avant = adherer(&pool, ag, &adhesion(&nip_avant, "P-1/2026", especes())).await.unwrap();
 
         assert!(matches!(
-            modifier_parametres(&pool, ag, Parametres { carence_mois: 13, ..valeurs }).await,
+            modifier_parametres(&pool, resp, Parametres { carence_mois: 13, ..valeurs }).await,
             Err(Erreur::DonneesInvalides(_))
         ));
-        assert_eq!(modifier_parametres(&pool, ag, valeurs).await.unwrap().id, initiaux.id, "rien ne change");
+        assert_eq!(modifier_parametres(&pool, resp, valeurs).await.unwrap().id, initiaux.id, "rien ne change");
         assert_eq!(compter(&pool, "parametre_munaseb").await, 1);
 
+        // Garantie de la base : une version écrite au nom d'un agent est
+        // refusée (rôle de l'auteur contrôlé par la 0029, clé MATCH FULL).
+        let refus = sqlx::query(
+            "INSERT INTO parametre_munaseb (cotisation_fcfa, fiche_fcfa, delai_grace_jours, carence_mois, plafond_periode_fcfa, \
+                                            auteur_affectation_id, auteur_structure_id, auteur_role) \
+             VALUES (1, 1, 1, 1, 1, $1, $2, 'agent_assurance_munaseb')",
+        )
+        .bind(ag.affectation_id)
+        .bind(ag.structure_id)
+        .execute(&pool)
+        .await
+        .unwrap_err();
+        assert_eq!(
+            refus.as_database_error().and_then(|e| e.constraint()),
+            Some("parametre_munaseb_auteur_responsable")
+        );
+
         let nouveaux = Parametres { cotisation_fcfa: 6000, carence_mois: 0, plafond_periode_fcfa: 120_000, ..valeurs };
-        let version = modifier_parametres(&pool, ag, nouveaux).await.unwrap();
-        assert_eq!((version.valeurs, version.agent_prenom.as_deref()), (nouveaux, Some("Inoussa")));
+        let version = modifier_parametres(&pool, resp, nouveaux).await.unwrap();
+        assert_eq!((version.valeurs, version.auteur_prenom.as_deref()), (nouveaux, Some("Mariam")));
         assert_eq!(parametres_en_vigueur(&pool).await.unwrap().id, version.id);
 
         let tout = historique_parametres(&pool, None, 10).await.unwrap();
@@ -1463,6 +1591,120 @@ mod tests {
             let erreur = sqlx::query(requete).execute(&pool).await.unwrap_err();
             assert!(erreur.to_string().contains("jamais modifiees"), "{requete} : {erreur}");
         }
+    }
+
+    /// Limite d'échecs d'adhésion (migration 0029) :
+    /// - chaque couple NIP et date sans patient est tracé avec l'affectation
+    ///   de l'agent, sans le NIP ni la date ; un NIP mal formé ne compte pas ;
+    /// - au 5e échec dans les 15 minutes, l'adhésion suivante est refusée
+    ///   avant la recherche du patient, même avec un couple correct, avec
+    ///   un délai d'attente ; un autre agent n'est pas touché ;
+    /// - un échec sorti de la fenêtre ne compte plus ;
+    /// - les traces ne se modifient ni ne s'effacent.
+    #[sqlx::test]
+    #[ignore]
+    async fn limite_d_echecs_d_adhesion(pool: PgPool) {
+        let ag = agent(&pool, "+22670480001").await;
+        let autre = collegue(&pool, "+22670480002", ag, "agent_assurance_munaseb").await;
+        let (_, nip) = patient(&pool, "+22670480003", "900000000048003").await;
+        let mauvaise_date = || {
+            let mut a = adhesion(&nip, "L-1/2026", especes());
+            a.date_naissance = d(1999, 12, 31);
+            a
+        };
+        let echecs_de = |affectation: Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM echec_adhesion_munaseb WHERE agent_affectation_id = $1")
+                    .bind(affectation)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+            }
+        };
+
+        // Un NIP mal formé ne compte pas.
+        assert!(matches!(adherer(&pool, ag, &adhesion("123", "L-1/2026", especes())).await, Err(Erreur::NipInvalide)));
+        assert_eq!(echecs_de(ag.affectation_id).await, 0);
+
+        for _ in 0..ECHECS_ADHESION_MAX {
+            assert!(matches!(adherer(&pool, ag, &mauvaise_date()).await, Err(Erreur::PatientInconnu)));
+        }
+        assert_eq!(echecs_de(ag.affectation_id).await, ECHECS_ADHESION_MAX, "chaque échec tracé");
+
+        // Limite atteinte : refusé même avec le bon couple, rien n'est écrit.
+        match adherer(&pool, ag, &adhesion(&nip, "L-1/2026", especes())).await {
+            Err(Erreur::TropDEchecs { reessayer_dans_secs }) => {
+                assert!((1..=15 * 60).contains(&reessayer_dans_secs), "{reessayer_dans_secs}")
+            }
+            autre => panic!("TropDEchecs attendu, obtenu {autre:?}"),
+        }
+        assert_eq!(compter(&pool, "contrat_assurance_munaseb").await, 0);
+        assert_eq!(echecs_de(ag.affectation_id).await, ECHECS_ADHESION_MAX, "le refus n'ajoute pas d'échec");
+
+        // Un autre agent de la même MUNASEB n'est pas touché.
+        adherer(&pool, autre, &adhesion(&nip, "L-1/2026", especes())).await.unwrap();
+        assert_eq!(echecs_de(autre.affectation_id).await, 0);
+
+        // Un échec de plus de 15 minutes ne compte plus : un agent dont 4
+        // échecs sont récents et 1 ancien peut encore essayer.
+        let ag2 = collegue(&pool, "+22670480004", ag, "agent_assurance_munaseb").await;
+        sqlx::query(
+            "INSERT INTO echec_adhesion_munaseb (agent_affectation_id, agent_structure_id, agent_role, date_echec) \
+             SELECT $1, $2, 'agent_assurance_munaseb', now() - interval '16 minutes' \
+             UNION ALL SELECT $1, $2, 'agent_assurance_munaseb', now() - interval '1 minute' FROM generate_series(1, 4)",
+        )
+        .bind(ag2.affectation_id)
+        .bind(ag2.structure_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(matches!(adherer(&pool, ag2, &mauvaise_date()).await, Err(Erreur::PatientInconnu)));
+        assert!(matches!(adherer(&pool, ag2, &mauvaise_date()).await, Err(Erreur::TropDEchecs { .. })));
+
+        // La trace ne garde que qui et quand ; jamais modifiée ni effacée.
+        let colonnes: Vec<String> = sqlx::query_scalar(
+            "SELECT column_name::text FROM information_schema.columns WHERE table_name = 'echec_adhesion_munaseb' ORDER BY ordinal_position",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(colonnes, ["id", "agent_affectation_id", "agent_structure_id", "agent_role", "date_echec"]);
+        for requete in ["UPDATE echec_adhesion_munaseb SET date_echec = now()", "DELETE FROM echec_adhesion_munaseb", "TRUNCATE echec_adhesion_munaseb"] {
+            let erreur = sqlx::query(requete).execute(&pool).await.unwrap_err();
+            assert!(erreur.to_string().contains("jamais modifiees"), "{requete} : {erreur}");
+        }
+    }
+
+    /// Adhésions simultanées du même agent avec des couples faux : le verrou
+    /// de l'affectation les fait passer l'une après l'autre ; jamais plus de
+    /// `ECHECS_ADHESION_MAX` échecs tracés, les autres reçoivent `TropDEchecs`.
+    #[sqlx::test]
+    #[ignore]
+    async fn echecs_simultanes_sans_depasser_la_limite(pool: PgPool) {
+        let ag = agent(&pool, "+22670490001").await;
+        let (_, nip) = patient(&pool, "+22670490002", "900000000049002").await;
+        let mut taches = Vec::new();
+        for _ in 0..10 {
+            let (pool, nip) = (pool.clone(), nip.clone());
+            taches.push(tokio::spawn(async move {
+                let mut a = adhesion(&nip, "M-1/2026", especes());
+                a.date_naissance = d(1999, 12, 31);
+                adherer(&pool, ag, &a).await
+            }));
+        }
+        let mut inconnus = 0;
+        let mut limites = 0;
+        for tache in taches {
+            match tache.await.unwrap() {
+                Err(Erreur::PatientInconnu) => inconnus += 1,
+                Err(Erreur::TropDEchecs { .. }) => limites += 1,
+                autre => panic!("{autre:?}"),
+            }
+        }
+        assert_eq!((inconnus, limites), (ECHECS_ADHESION_MAX, 10 - ECHECS_ADHESION_MAX));
+        let traces: i64 = sqlx::query_scalar("SELECT count(*) FROM echec_adhesion_munaseb").fetch_one(&pool).await.unwrap();
+        assert_eq!(traces, ECHECS_ADHESION_MAX);
     }
 
     /// Garanties de la base (migration 0028), sans passer par le code :

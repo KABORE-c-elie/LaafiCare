@@ -424,6 +424,49 @@ impl FromRequestParts<AppState> for AgentMunaseb {
     }
 }
 
+/// Responsable de la structure MUNASEB en exercice (demande du porteur du
+/// 2026-11-16), pour la modification des paramètres de la mutuelle
+/// (cotisation, plafond, carence…) : mêmes contrôles que `AgentMunaseb`,
+/// mais le rôle doit être `responsable`. Sinon : 403 `acces_refuse` (un
+/// agent compris). Même raisonnement sur la structure que `AgentMunaseb` :
+/// une seule MUNASEB peut être validée.
+#[derive(Debug)]
+pub struct ResponsableMunaseb(pub AffectationAgent);
+
+impl FromRequestParts<AppState> for ResponsableMunaseb {
+    type Rejection = RefusAuthentification;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        let ProfessionnelEnExercice(exercice) = ProfessionnelEnExercice::from_request_parts(parts, state).await?;
+        if exercice.role != "responsable" || exercice.type_structure != "munaseb" {
+            return Err(RefusAuthentification::Interdit);
+        }
+        Ok(ResponsableMunaseb(AffectationAgent {
+            affectation_id: exercice.affectation_id,
+            structure_id: exercice.structure_id,
+        }))
+    }
+}
+
+/// Agent **ou** responsable de la MUNASEB en exercice, pour la lecture des
+/// paramètres et de leur historique : l'agent en a besoin pour les
+/// adhésions, le responsable pour les modifier en connaissance de cause.
+/// Tout autre rôle ou type de structure : 403 `acces_refuse`.
+#[derive(Debug)]
+pub struct MembreMunaseb;
+
+impl FromRequestParts<AppState> for MembreMunaseb {
+    type Rejection = RefusAuthentification;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        let ProfessionnelEnExercice(exercice) = ProfessionnelEnExercice::from_request_parts(parts, state).await?;
+        if !(exercice.role == ROLE_AGENT || exercice.role == "responsable") || exercice.type_structure != "munaseb" {
+            return Err(RefusAuthentification::Interdit);
+        }
+        Ok(MembreMunaseb)
+    }
+}
+
 /// N'importe quel compte connecté, pour `POST /api/sessions/deconnexion-partout`
 /// (étape 3.9, D8) : jeton d'accès patient, professionnel (avec ou sans
 /// affectation) ou administrateur, chacun vérifié avec sa propre audience.

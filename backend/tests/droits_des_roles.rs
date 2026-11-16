@@ -85,6 +85,9 @@ async fn ce_que_chaque_role_peut_faire(pool: PgPool) {
     refuse(&mut conn, "UPDATE paiement_cotisation_munaseb SET mode = mode WHERE false").await;
     refuse(&mut conn, "DELETE FROM paiement_cotisation_munaseb WHERE false").await;
     refuse(&mut conn, "TRUNCATE paiement_cotisation_munaseb").await;
+    // Échecs d'adhésion (migration 0029) : même règle.
+    refuse(&mut conn, "UPDATE echec_adhesion_munaseb SET date_echec = date_echec WHERE false").await;
+    refuse(&mut conn, "DELETE FROM echec_adhesion_munaseb WHERE false").await;
     permis(&mut conn, "SELECT plafond_munaseb_en_vigueur()").await;
 
     permis(&mut conn, "SELECT count(*) FROM _sqlx_migrations").await;
@@ -292,9 +295,12 @@ async fn parcours_du_serveur_avec_son_role(proprietaire: PgPool) {
     // renouvellement du contrat ci-dessus (dans les temps), adhésion d'un
     // second patient, détail et recherche par carte.
     let en_vigueur = contrat_munaseb::parametres_en_vigueur(&serveur).await.unwrap().valeurs;
-    let version = contrat_munaseb::modifier_parametres(&serveur, agent, Parametres { fiche_fcfa: 150, ..en_vigueur })
-        .await
-        .unwrap();
+    // Le responsable de la MUNASEB modifie les paramètres (migration 0029).
+    let responsable_munaseb = AffectationAgent { affectation_id: affectations[0], structure_id: munaseb };
+    let version =
+        contrat_munaseb::modifier_parametres(&serveur, responsable_munaseb, Parametres { fiche_fcfa: 150, ..en_vigueur })
+            .await
+            .unwrap();
     assert_eq!(version.valeurs.fiche_fcfa, 150);
     assert_eq!(contrat_munaseb::historique_parametres(&serveur, None, 10).await.unwrap().len(), 2);
     let especes = || NouveauPaiement { mode: ModePaiement::Especes, reference_transaction: None, date_declaree: None };
@@ -338,6 +344,26 @@ async fn parcours_du_serveur_avec_son_role(proprietaire: PgPool) {
     .await
     .unwrap();
     assert_eq!(contrat_munaseb::contrat_par_carte(&serveur, "0002/2026").await.unwrap(), Some(second));
+    // Une adhésion sans patient : verrou de l'affectation et trace de
+    // l'échec, avec le rôle du serveur.
+    let echec = contrat_munaseb::adherer(
+        &serveur,
+        agent,
+        &Adhesion {
+            nip: (0..=9).map(|c| format!("900000000046999{c}")).find(|n| laaficare_backend::nip::valider(n)).unwrap(),
+            date_naissance: NaiveDate::from_ymd_opt(2001, 2, 3).unwrap(),
+            numero_carte: "0003/2026".into(),
+            ufr: "UFR fictive".into(),
+            universite: "Université fictive".into(),
+            num_matricule: "MAT-FICTIF-3".into(),
+            personne_a_prevenir: None,
+            niveau_etudes: None,
+            antenne: None,
+            paiement: especes(),
+        },
+    )
+    .await;
+    assert!(matches!(echec, Err(contrat_munaseb::ErreurContratAssuranceMunaseb::PatientInconnu)));
     let detail = contrat_munaseb::detail_contrat(&serveur, contrat).await.unwrap().unwrap();
     assert_eq!(detail.periodes.len(), 2);
 
