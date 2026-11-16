@@ -19,4 +19,27 @@
 #
 # À retirer dès qu'une version corrigée de rsa existe ou si une clé RSA entre
 # dans le projet. Détail : docs/points-ouverts.md.
-ignore = ["RUSTSEC-2023-0071"]
+#
+# RUSTSEC-2026-0387 (crate `crypto-bigint` 0.5.5, temps de calcul variable
+# dans des opérations censées être à temps constant) — exception ajoutée le
+# 2026-11-16 au bilan de l'étape 7, **à confirmer par le porteur**.
+#
+# La version corrigée (>= 0.7.6) n'est pas compatible : `crypto-bigint` 0.5
+# arrive seulement par `elliptic-curve` 0.13, `p256` et `p384`, que la
+# fonctionnalité `rust_crypto` de `jsonwebtoken` 11.1.0 impose (algorithmes
+# ES256 et ES384, `cargo tree -i crypto-bigint`). Même raison que pour `rsa`
+# ci-dessus : aucune clé à courbe elliptique n'existe dans le projet, seul
+# HS256 est accepté (`src/jwt.rs`, test `jwt::tests::hs256_seulement`) ; ce
+# code n'est jamais exécuté. À retirer avec une version de `jsonwebtoken`
+# qui dépend d'une version corrigée.
+#
+# RUSTSEC-2026-0459 (crate `libsqlite3-sys` 0.37.0, faille de SQLite) —
+# exception ajoutée le 2026-11-16, **à confirmer par le porteur**.
+#
+# La crate figure dans Cargo.lock parce que `sqlx` 0.9.0 la déclare (par
+# `sqlx-sqlite`, épinglée en `=0.9.0`), mais elle n'est **ni compilée ni
+# liée** : le projet n'active que la fonctionnalité `postgres` de sqlx, et
+# `cargo tree -i libsqlite3-sys -e all --target all` ne trouve aucun chemin.
+# La version corrigée (>= 0.39.0) est refusée par `sqlx-sqlite` 0.9.0. À
+# retirer avec une version de sqlx qui en dépend.
+ignore = ["RUSTSEC-2023-0071", "RUSTSEC-2026-0387", "RUSTSEC-2026-0459"]

@@ -697,6 +697,9 @@ pub struct ResumeDemande {
     // Nullables en base (migration 0004 : compte en cours de création).
     pub patient_nom: Option<String>,
     pub patient_prenom: Option<String>,
+    /// Carte de la période de la demande (le numéro change chaque année,
+    /// migration 0028) ; celle du contrat pour une période d'avant la 0028
+    /// qui n'a pas de numéro propre.
     pub numero_carte: String,
 }
 
@@ -708,7 +711,7 @@ macro_rules! select_resume {
     () => {
         "SELECT d.id, d.statut, d.type_acte, d.date_acte, d.montant_acte_fcfa, \
      d.montant_demande_fcfa, d.montant_rembourse_fcfa, d.date_demande, pa.nom AS partenaire, \
-     u.nom AS patient_nom, u.prenom AS patient_prenom, c.numero_carte \
+     u.nom AS patient_nom, u.prenom AS patient_prenom, COALESCE(pe.numero_carte, c.numero_carte) AS numero_carte \
      FROM demande_remboursement_munaseb d \
      JOIN partenaire_sante_munaseb pa ON pa.id = d.partenaire_id \
      JOIN periode_adhesion_munaseb pe ON pe.id = d.periode_id \
@@ -818,8 +821,11 @@ pub async fn detail_demande(pool: &PgPool, demande_id: Uuid) -> Result<Option<De
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contrat_assurance_munaseb::PLAFOND_ANNUEL_FCFA;
     use chrono::Utc;
+
+    /// Plafond d'une période posée en SQL : valeur initiale du paramètre
+    /// (migration 0028), reprise de l'ancienne constante.
+    const PLAFOND_ANNUEL_FCFA: i32 = 100_000;
 
     #[test]
     fn taux_arrondi_a_l_entier_le_plus_proche() {
@@ -1006,8 +1012,8 @@ mod tests {
             .await
             .unwrap();
             sqlx::query(
-                "INSERT INTO periode_adhesion_munaseb (contrat_id, date_paiement, date_debut, date_fin) \
-                 VALUES ($1, $2, $3, $4)",
+                "INSERT INTO periode_adhesion_munaseb (contrat_id, date_paiement, date_debut, date_fin, numero_carte) \
+                 SELECT $1, $2, $3, $4, numero_carte FROM contrat_assurance_munaseb WHERE id = $1",
             )
             .bind(contrat_id)
             .bind(paiement)
@@ -1277,8 +1283,9 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO periode_adhesion_munaseb (contrat_id, date_paiement, date_debut, date_fin) \
-             VALUES ($1, CURRENT_DATE - 30, CURRENT_DATE - 30, CURRENT_DATE + 300)",
+            "INSERT INTO periode_adhesion_munaseb (contrat_id, date_paiement, date_debut, date_fin, numero_carte) \
+             SELECT $1, CURRENT_DATE - 30, CURRENT_DATE - 30, CURRENT_DATE + 300, numero_carte \
+             FROM contrat_assurance_munaseb WHERE id = $1",
         )
         .bind(contrat_id)
         .execute(pool)

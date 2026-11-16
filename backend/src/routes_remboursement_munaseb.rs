@@ -309,8 +309,8 @@ mod tests {
         .await
         .unwrap();
         let periode: Uuid = sqlx::query_scalar(
-            "INSERT INTO periode_adhesion_munaseb (contrat_id, date_paiement, date_debut, date_fin) \
-             VALUES ($1, '2026-01-01', '2026-01-01', '2026-12-31') RETURNING id",
+            "INSERT INTO periode_adhesion_munaseb (contrat_id, date_paiement, date_debut, date_fin, numero_carte) \
+             VALUES ($1, '2026-01-01', '2026-01-01', '2026-12-31', 'TEST-D5') RETURNING id",
         )
         .bind(contrat)
         .fetch_one(db)

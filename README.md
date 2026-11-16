@@ -134,7 +134,7 @@ Le projet a commencé par une phase de cadrage : un cahier des charges et des di
 | Diagrammes | cas d'utilisation, diagramme de classes et modèle relationnel à jour ([`docs/diagrammes/`](docs/diagrammes/)) ; les diagrammes de séquence ne sont pas encore dans le dépôt |
 | Maquettes | chaque application a son propre thème, défini dans son dossier |
 | **Serveur : patients** | **fonctionne** : inscription par SMS, connexion, mot de passe oublié, verrouillage, NIP, limites du code SMS, profil du patient connecté (`GET /api/patients/moi`), sessions (jeton de 15 min, renouvellement, déconnexion d'un appareil ou de tous) |
-| **Serveur : MUNASEB** | contrats et périodes d'adhésion, demandes de remboursement de bout en bout (création, prise en charge, validation, rejet, paiement), notifications, historique. **Routes des agents rebranchées** (étape 3.9) : un agent se connecte comme professionnel, active son affectation d'agent MUNASEB, et chacune de ses décisions est enregistrée avec cette affectation. **Testables dans Postman après les étapes 3.7, 3.8 et 3.10 réduites à la MUNASEB** (création et validation de la structure MUNASEB, invitation d'un agent) ; d'ici là, seulement avec un agent posé à la main en SQL dans la base de développement. |
+| **Serveur : MUNASEB** | contrats et périodes d'adhésion, demandes de remboursement de bout en bout (création, prise en charge, validation, rejet, paiement), notifications, historique. **Routes des agents rebranchées** (étape 3.9) : un agent se connecte comme professionnel, active son affectation d'agent MUNASEB, et chacune de ses décisions est enregistrée avec cette affectation. **Testables dans Postman de bout en bout** (création et validation de la structure MUNASEB, invitation d'un agent, puis contrats). **Contrats côté agent** (étape 5) : adhésion, renouvellement, recherche par numéro de carte, paramètres de la mutuelle avec historique. |
 | Serveur : affectations | **écrites** : liste des affectations d'un professionnel, activation (choisir l'établissement et le rôle dans lesquels il travaille), changement d'établissement sans redonner le mot de passe ; à chaque demande, le serveur vérifie que l'affectation est active et l'établissement validé, sous licence |
 | **Serveur : backoffice** | **création d'un établissement MUNASEB** (étape 3.7, réduite) : un patient crée la structure, devient son responsable, crée au passage son compte professionnel, fait vérifier son email par un lien, puis soumet sa demande ; suivi de ses demandes. **Décisions de l'équipe** (étape 3.8, réduite) : liste et détail des demandes, validation avec une licence (sans fin, ou jusqu'à une date), refus avec motif ; un administrateur ne décide jamais sur sa propre structure. **Invitations** (étape 3.10, réduite) : le responsable invite un agent par son numéro (SMS), la personne accepte ou refuse depuis son compte patient ; annulation, expiration après 7 jours |
 | Serveur : connexion professionnelle | **fonctionne** (`POST /api/professionnels/connexion`, puis `POST /api/professionnels/connexion/second-facteur` quand le second facteur est actif) : email et mot de passe, email obligatoirement vérifié, code TOTP ou code de secours, jeton intermédiaire à usage unique, session de 12 h au plus. Un compte professionnel naît quand un patient crée son établissement ; son email se vérifie par un lien (renvoyable une fois par minute). **Mot de passe oublié** (étape 3.12) : un lien valable 30 minutes, envoyé à l'email vérifié, pour les professionnels et les administrateurs ; toutes les sessions sont fermées après le changement, et une alerte part par email. |
@@ -148,7 +148,8 @@ Le projet a commencé par une phase de cadrage : un cahier des charges et des di
 - **Ce qui marche aussi** : le parcours complet de la MUNASEB, de la création à l'agent qui traite les remboursements (structure créée, validée, agent invité, invitation acceptée, email vérifié, connexion, affectation activée).
 - **Ce qui marche encore** : l'abandon d'une demande en brouillon ou refusée par son créateur ; la liste des membres d'un établissement et le retrait de l'accès d'un agent ou d'un autre responsable par un responsable (ses sessions sur cet établissement se ferment aussitôt, et un email le prévient).
 - **Espace patient MUNASEB** (étape 6) : le patient voit ses droits (couvert, en carence, expiré, suspendu, avec le solde de sa période), ses demandes de remboursement et leur détail (motif d'un rejet compris), et ses notifications, qu'il peut marquer comme lues. Il ne voit jamais que ses propres données.
-- **Ce qui n'est pas encore utilisable** : les routes du contrat MUNASEB (étape 5, en attente des réponses de la MUNASEB) ; un contrat se crée encore en SQL. Les autres types d'établissement attendent la liste de leurs pièces justificatives.
+- **Contrats MUNASEB** (étape 5) : un agent enregistre l'adhésion d'un étudiant (NIP et date de naissance, numéro de carte, paiement en espèces ou par mobile money), retrouve un contrat par son numéro de carte, le renouvelle chaque année (nouveau numéro de carte, délai de grâce de 10 jours), et lit les valeurs de la mutuelle (cotisation, fiche, délai de grâce, carence, plafond), que seul le **responsable** de la MUNASEB peut changer, chaque changement étant gardé dans un historique. Après 5 adhésions sans patient en 15 minutes, un agent doit attendre avant de réessayer. Plus besoin de SQL pour créer un contrat.
+- **Ce qui n'est pas encore utilisable** : la suspension d'un contrat, les ayants droit et les tarifs selon le circuit de soins (en attente des réponses de la MUNASEB, voir [`docs/points-ouverts.md`](docs/points-ouverts.md)). Les autres types d'établissement attendent la liste de leurs pièces justificatives.
 - **Les détails** : les tables et leurs règles dans [`docs/modele-donnees.md`](docs/modele-donnees.md), la double authentification dans [`docs/securite.md`](docs/securite.md), les routes prévues dans [`docs/api.md`](docs/api.md) (section 4).
 
 Les modules médicaux (dossier, ordonnances, pharmacie, laboratoire, suivi de grossesse) viendront ensuite. La liste détaillée des décisions encore ouvertes est dans [`docs/points-ouverts.md`](docs/points-ouverts.md).
@@ -310,13 +311,30 @@ Toutes les routes, leurs réponses et leurs erreurs sont décrites dans [`docs/a
 
 Abandonner une demande en brouillon ou refusée : `POST …/api/structures/<structure_id>/abandonner` avec le jeton patient du créateur (204) ; la personne peut ensuite en créer une nouvelle.
 
+### Enregistrer un contrat MUNASEB (agent)
+
+L'agent invité à l'étape 9 ci-dessus se connecte (`POST …/api/professionnels/connexion`), active son affectation `agent_assurance_munaseb`, puis, avec ce `jeton_acces` (exemples complets : `docs/api.md`, 2.14) :
+
+| Étape | Demande | Corps | Réponse attendue |
+|---|---|---|---|
+| 1. Voir les valeurs de la mutuelle | `GET …/api/assurance-munaseb/parametres` | aucun | 200 : cotisation 5 000, fiche 100, délai de grâce 10 jours, carence 1 mois, plafond 100 000 |
+| 2. Adhésion | `POST …/api/assurance-munaseb/contrats` | le NIP d'un compte patient **fictif** (`GET …/api/patients/moi` le donne), sa date de naissance, un numéro de carte (ex. `0001/2026`), l'UFR, l'université, le matricule, et `"paiement": {"mode": "especes"}` | 201 avec le contrat, `"etat": "en_carence"` : la couverture commence dans un mois |
+| 3. Mauvaise date de naissance | même demande avec une autre date | — | 404 `patient_inconnu` (jamais « NIP inconnu » ni « date fausse » séparément) |
+| 4. Retrouver par la carte | `GET …/api/assurance-munaseb/contrats?numero_carte=0001/2026` | aucun | 200, le même contrat, sans NIP ni téléphone |
+| 5. Renouveler trop tôt | `POST …/api/assurance-munaseb/contrats/<id>/renouvellements` | `{"numero_carte": "0001/2027", "paiement": {"mode": "mobile_money", "reference_transaction": "OM-0001"}}` | 409 `periode_future_deja_payee` pendant la carence |
+| 6. Changer une valeur (agent) | `PUT …/api/assurance-munaseb/parametres` | les cinq valeurs, l'une changée | 403 `acces_refuse` : seul le responsable modifie les valeurs |
+| 7. Changer une valeur (responsable) | le responsable de l'étape 8 ci-dessus, son affectation `responsable` active : même demande | les cinq valeurs, l'une changée | 200 ; `GET …/parametres/historique` montre l'ancienne et la nouvelle version, avec le nom du responsable |
+| 8. Trop d'essais | 5 adhésions avec une date de naissance fausse, puis une 6ᵉ | — | 404 `patient_inconnu` cinq fois, puis 429 `trop_de_demandes` avec l'en-tête `Retry-After` (secondes), même avec la bonne date, pendant 15 minutes au plus |
+
+Pour tester un adhérent **déjà couvert** (demande de remboursement avec `simuler-acte`), la base de développement accepte encore une période posée en SQL, à condition de lui donner un numéro de carte (`numero_carte`) : la route d'adhésion commence toujours par un mois de carence.
+
 ### Voir ses droits et ses demandes (espace patient MUNASEB)
 
 Avec le `jeton_acces` d'un compte patient (en-tête `Authorization: Bearer <jeton_acces>`) :
 
 | Demande | Réponse attendue |
 |---|---|
-| `GET …/api/patients/munaseb/droits` | 200, `"etat": "aucun_contrat"` tant que le patient n'a pas de contrat (un contrat ne se crée encore qu'en SQL dans la base de développement, avec une période d'adhésion qui contient la date du jour) ; ensuite `"etat": "couvert"` avec le plafond, la somme consommée et le solde |
+| `GET …/api/patients/munaseb/droits` | 200, `"etat": "aucun_contrat"` tant que le patient n'a pas de contrat ; `"etat": "en_carence"` juste après l'adhésion par un agent (voir ci-dessus) ; ensuite `"etat": "couvert"` avec le plafond, la somme consommée et le solde |
 | `GET …/api/patients/munaseb/demandes` | 200, les demandes du patient, les plus récentes d'abord (après une demande créée par un agent avec `simuler-acte` et le NIP du patient) |
 | `GET …/api/patients/munaseb/demandes/<id>` | 200 avec le détail ; 404 `demande_inconnue` pour la demande d'un autre patient |
 | `GET …/api/patients/notifications` | 200, avec `non_lues` |

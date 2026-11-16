@@ -32,6 +32,10 @@ erDiagram
     patient ||--o| contrat_assurance_munaseb : "adhère"
     contrat_assurance_munaseb ||--o{ periode_adhesion_munaseb : "couvre"
     periode_adhesion_munaseb ||--o{ demande_remboursement_munaseb : "rattache"
+    periode_adhesion_munaseb ||--o| paiement_cotisation_munaseb : "payée par"
+    affectation ||--o{ paiement_cotisation_munaseb : "enregistre"
+    affectation ||--o{ parametre_munaseb : "modifie (responsable)"
+    affectation ||--o{ echec_adhesion_munaseb : "échoue"
     partenaire_sante_munaseb ||--o{ demande_remboursement_munaseb : "émet"
     demande_remboursement_munaseb ||--o{ historique_statut_demande : "trace"
     utilisateur ||--o{ notification : "reçoit"
@@ -115,19 +119,33 @@ MUNASEB est la mutuelle des étudiants du Burkina Faso. Son module est le premie
 
 ### `contrat_assurance_munaseb` : l'adhésion d'un patient
 
-Numéro de carte (unique), université, UFR, matricule, personne à prévenir, et **statut** (`actif` ou `suspendu`). Un patient a au plus un contrat.
+Numéro de la première carte (unique), université, UFR, matricule, personne à prévenir, et **statut** (`actif` ou `suspendu`). Un patient a au plus un contrat. Un agent MUNASEB l'enregistre (étape 5) ; la **suspension** n'a pas encore de règle ni de route (à demander à la MUNASEB).
 
 ### `periode_adhesion_munaseb` : les périodes couvertes
 
-Chaque année payée est une **période** distincte, jamais écrasée.
+Chaque année payée est une **période** distincte, jamais écrasée. Règles en vigueur depuis l'étape 5 (réponses du porteur du 2026-10-22, à confirmer par la MUNASEB) :
 
-- **Première adhésion** : la couverture commence **un mois après le paiement** (*carence*), puis dure 12 mois.
-- **Renouvellement à temps** : la nouvelle période commence le lendemain de la fin de la précédente, sans carence.
-- **Renouvellement en retard** : de nouveau un mois de carence ; les jours non couverts ne le sont pas rétroactivement.
+- **Première adhésion** : la couverture commence **un mois après le paiement** (*carence*) et finit le **jour anniversaire du paiement, compris** (11 mois de couverture réelle, comme sur la carte MUNASEB de 2024).
+- **Renouvellement à temps** : la nouvelle période commence le lendemain de la fin de la précédente, sans carence, et finit un an après cette fin.
+- **Renouvellement dans le délai de grâce** (10 jours après la fin) : couvert à partir du jour du paiement, sans carence ; les jours entre la fin et le paiement ne sont pas couverts ; la fin reste la date anniversaire suivante.
+- **Renouvellement au-delà du délai de grâce** : comme une première adhésion, avec carence ; les jours non couverts ne le sont pas rétroactivement.
 - La date de paiement est celle du jour, fixée par le serveur, jamais saisie.
+- Depuis la migration 0028, chaque période porte aussi **son numéro de carte** (il change chaque année, unique), l'**antenne** et le **niveau d'études** (facultatifs), et **son plafond**, figé à sa création.
 
-Règle garantie par la base : **deux périodes d'un même contrat ne se chevauchent jamais**.
-Fichier : [`contrat_assurance_munaseb.rs`](../backend/src/contrat_assurance_munaseb.rs). Migration 0009.
+Règles garanties par la base : **deux périodes d'un même contrat ne se chevauchent jamais** ; une nouvelle période a toujours un numéro de carte, jamais déjà pris.
+Fichier : [`contrat_assurance_munaseb.rs`](../backend/src/contrat_assurance_munaseb.rs). Migrations 0009 et 0028.
+
+### `paiement_cotisation_munaseb` : le paiement de chaque période
+
+Une ligne par période enregistrée par un agent : mode (`especes` ou `mobile_money`), montants de la cotisation et de la fiche (ceux en vigueur, figés), référence de la transaction (obligatoire pour le mobile money, une seule fois), date déclarée par l'agent (pour information, jamais future), et l'**affectation de l'agent**. Jamais modifiée ni supprimée. Migration 0028.
+
+### `parametre_munaseb` : les valeurs de la mutuelle
+
+Cotisation (5 000 FCFA), fiche (100 FCFA), délai de grâce (10 jours), durée de la carence (1 mois) et plafond par période (100 000 FCFA), **en base**, modifiables par le **responsable** de la MUNASEB seulement (les agents les lisent). Chaque modification ajoute une **version** avec le responsable qui l'a faite (la base refuse tout autre rôle comme auteur) ; aucune version ne se modifie ni ne s'efface, ce qui donne l'historique complet. Un changement ne touche que les périodes et paiements suivants. Migrations 0028 et 0029.
+
+### `echec_adhesion_munaseb` : les adhésions sans patient
+
+Une ligne par adhésion dont le NIP et la date de naissance ne désignent aucun patient : l'affectation de l'agent et la date, **jamais le NIP ni la date essayés**. Elle sert à la limite : au 5ᵉ échec d'un même agent en 15 minutes, ses adhésions sont refusées le temps que le plus ancien échec sorte de la fenêtre. Jamais modifiée ni supprimée. Migration 0029.
 
 ### `tarif_acte_munaseb` : ce que rembourse la mutuelle
 
@@ -141,7 +159,7 @@ Une ligne par type d'acte, avec **soit un taux, soit un forfait** (jamais les de
 | laboratoire | 80 % |
 | lunetterie | forfait de 15 000 FCFA |
 
-Le **plafond** est de **100 000 FCFA par période d'adhésion**. Seules les demandes validées ou payées le consomment.
+Le **plafond** est celui de la **période d'adhésion** (100 000 FCFA aujourd'hui, paramètre `plafond_periode_fcfa`, figé sur chaque période à sa création). Seules les demandes validées ou payées le consomment.
 
 ### `partenaire_sante_munaseb` : les établissements partenaires
 
@@ -302,5 +320,7 @@ Règles garanties par la base : **jamais modifiées ni supprimées** ; seulement
 | 0025 | Motif de fermeture de session `desactivation_affectation` : un accès retiré par un responsable ferme aussitôt les sessions ouvertes sur cette affectation |
 | 0026 | Droits des rôles du serveur et des outils : le serveur lit et écrit les données sans pouvoir changer les tables ni les traces ; seuls les outils ouvrent la fenêtre de réenrôlement (fonction `vider_fenetre_reenrolement` pour la refermer) |
 | 0027 | Trace des interventions de l'équipe sur un compte compromis (`intervention_compte` : retrait d'une affectation, blocage, réactivation), jamais modifiée ni supprimée, jamais sur ses propres comptes ; écrite par le seul rôle des outils |
+| 0028 | Contrat MUNASEB tenu par les agents : paramètres de la mutuelle en base et historisés (`parametre_munaseb`), numéro de carte, antenne, niveau d'études et plafond sur chaque période, paiement de la cotisation (`paiement_cotisation_munaseb`) ; traces jamais modifiées |
+| 0029 | Paramètres MUNASEB modifiés par le seul responsable de la structure (colonnes de l'auteur renommées) ; trace des adhésions sans patient (`echec_adhesion_munaseb`), pour la limite d'échecs par agent |
 
 Une migration déjà appliquée ne change plus jamais : toute évolution passe par une nouvelle migration. Un test vérifie aussi qu'aucun caractère invisible ne s'y glisse ([`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs)).

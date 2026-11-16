@@ -108,21 +108,33 @@ impl DroitsPatient {
 /// dans PostgreSQL, D9).
 pub async fn droits(pool: &PgPool, compte_id: Uuid) -> Result<DroitsPatient, ErreurEspacePatient> {
     let patient_id = patient_du_compte(pool, compte_id).await?;
-    let contrat: Option<(Uuid, String, String)> =
-        sqlx::query_as("SELECT id, numero_carte, statut FROM contrat_assurance_munaseb WHERE patient_id = $1")
-            .bind(patient_id)
-            .fetch_optional(pool)
-            .await?;
+    let jour = aujourdhui_au_burkina(pool).await?;
+    // Numéro de carte (il change chaque année, migration 0028) : celui de la
+    // dernière période déjà commencée qui en porte un ; à défaut (première
+    // carence, ou périodes d'avant la 0028), la carte d'origine du contrat.
+    // La carte d'une période qui n'a pas commencé n'est pas encore valable.
+    let contrat: Option<(Uuid, String, String)> = sqlx::query_as(
+        "SELECT c.id, COALESCE( \
+             (SELECT pe.numero_carte FROM periode_adhesion_munaseb pe \
+              WHERE pe.contrat_id = c.id AND pe.numero_carte IS NOT NULL AND pe.date_debut <= $2 \
+              ORDER BY pe.date_debut DESC LIMIT 1), \
+             c.numero_carte), \
+                c.statut \
+         FROM contrat_assurance_munaseb c WHERE c.patient_id = $1",
+    )
+    .bind(patient_id)
+    .bind(jour)
+    .fetch_optional(pool)
+    .await?;
     let Some((contrat_id, numero_carte, statut)) = contrat else {
         return Ok(DroitsPatient::vide(EtatDroits::AucunContrat, None));
     };
-    // Aucun motif ni règle de suspension n'existe encore (étape 5) : rien
-    // d'autre que l'état.
+    // Aucun motif ni règle de suspension n'existe encore (à demander à la
+    // MUNASEB, docs/points-ouverts.md) : rien d'autre que l'état.
     if statut != "actif" {
         return Ok(DroitsPatient::vide(EtatDroits::Suspendu, Some(numero_carte)));
     }
 
-    let jour = aujourdhui_au_burkina(pool).await?;
     let en_cours: Option<(Uuid, NaiveDate, NaiveDate)> = sqlx::query_as(
         "SELECT id, date_debut, date_fin FROM periode_adhesion_munaseb \
          WHERE contrat_id = $1 AND $2 BETWEEN date_debut AND date_fin",
@@ -345,12 +357,17 @@ mod tests {
         .unwrap()
     }
 
-    /// Période posée en base (le contrat se crée encore en SQL, étape 5),
-    /// décalée en jours par rapport à aujourd'hui.
+    /// Période posée en base, décalée en jours par rapport à aujourd'hui (des
+    /// dates passées que la route d'adhésion ne permet pas de créer). Numéro
+    /// de carte (obligatoire depuis la 0028) : celui du contrat pour la
+    /// première période, suivi de « -1 », « -2 »… pour les suivantes.
     async fn periode(pool: &PgPool, contrat_id: Uuid, debut: i32, fin: i32) {
         sqlx::query(
-            "INSERT INTO periode_adhesion_munaseb (contrat_id, date_paiement, date_debut, date_fin) \
-             VALUES ($1, CURRENT_DATE + $2 - 40, CURRENT_DATE + $2, CURRENT_DATE + $3)",
+            "INSERT INTO periode_adhesion_munaseb (contrat_id, date_paiement, date_debut, date_fin, numero_carte) \
+             SELECT $1, CURRENT_DATE + $2 - 40, CURRENT_DATE + $2, CURRENT_DATE + $3, \
+                    c.numero_carte || COALESCE('-' || NULLIF((SELECT count(*) FROM periode_adhesion_munaseb \
+                                                             WHERE contrat_id = $1), 0)::text, '') \
+             FROM contrat_assurance_munaseb c WHERE c.id = $1",
         )
         .bind(contrat_id)
         .bind(debut)
@@ -439,6 +456,9 @@ mod tests {
         assert_eq!(d.etat, EtatDroits::Couvert);
         assert_eq!((d.plafond_fcfa, d.consomme_fcfa, d.solde_fcfa), (Some(100_000), Some(0), Some(100_000)));
         assert!(d.periode_en_cours.is_some() && d.periode_suivante.is_some());
+        // La carte de la période suivante (« …-1 ») n'est pas encore
+        // valable : le patient voit celle de la période en cours.
+        assert_eq!(d.numero_carte.as_deref(), Some("CARTE-FICTIVE-2"));
         let json = serde_json::to_string(&d).unwrap();
         for interdit in ["fictive", "MAT-FICTIF", "Personne"] {
             assert!(!json.contains(interdit), "{interdit} dans {json}");
