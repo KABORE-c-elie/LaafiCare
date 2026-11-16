@@ -12,7 +12,8 @@
 //! - un parcours réel du serveur, exécuté avec ce rôle : inscription d'un
 //!   patient, connexion, renouvellement, création et abandon d'une
 //!   structure, demande de remboursement de bout en bout, espace patient,
-//!   retrait d'un accès. Une table oubliée dans les droits ferait échouer
+//!   contrat côté agent (paramètres, renouvellement, adhésion), retrait
+//!   d'un accès. Une table oubliée dans les droits ferait échouer
 //!   ce test, alors que le reste de la suite tourne avec le rôle
 //!   propriétaire.
 //!
@@ -23,6 +24,9 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::types::Uuid;
 use sqlx::{Executor, PgPool};
 
+use laaficare_backend::contrat_assurance_munaseb::{
+    self as contrat_munaseb, Adhesion, ModePaiement, NouveauPaiement, Parametres, Renouvellement,
+};
 use laaficare_backend::demande_remboursement_munaseb::{self as remboursement, Acte, AffectationAgent, TypeActeMunaseb};
 use laaficare_backend::email::EmailSenderConsole;
 use laaficare_backend::jwt::JwtService;
@@ -74,6 +78,14 @@ async fn ce_que_chaque_role_peut_faire(pool: PgPool) {
     )
     .await;
     permis(&mut conn, "SELECT count(*) FROM intervention_compte").await;
+    // Paramètres et paiements MUNASEB (migration 0028) : le serveur les
+    // lit et les ajoute, jamais ne les modifie ni ne les efface.
+    refuse(&mut conn, "UPDATE parametre_munaseb SET fiche_fcfa = fiche_fcfa WHERE false").await;
+    refuse(&mut conn, "DELETE FROM parametre_munaseb WHERE false").await;
+    refuse(&mut conn, "UPDATE paiement_cotisation_munaseb SET mode = mode WHERE false").await;
+    refuse(&mut conn, "DELETE FROM paiement_cotisation_munaseb WHERE false").await;
+    refuse(&mut conn, "TRUNCATE paiement_cotisation_munaseb").await;
+    permis(&mut conn, "SELECT plafond_munaseb_en_vigueur()").await;
 
     permis(&mut conn, "SELECT count(*) FROM _sqlx_migrations").await;
     permis(&mut conn, "UPDATE compte SET statut = statut, version_jeton = version_jeton WHERE false").await;
@@ -240,8 +252,8 @@ async fn parcours_du_serveur_avec_son_role(proprietaire: PgPool) {
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO periode_adhesion_munaseb (contrat_id, date_paiement, date_debut, date_fin) \
-         VALUES ($1, CURRENT_DATE - 30, CURRENT_DATE - 30, CURRENT_DATE + 300)",
+        "INSERT INTO periode_adhesion_munaseb (contrat_id, date_paiement, date_debut, date_fin, numero_carte) \
+         VALUES ($1, CURRENT_DATE - 30, CURRENT_DATE - 30, CURRENT_DATE + 300, '0001/2026')",
     )
     .bind(contrat)
     .execute(&proprietaire)
@@ -275,6 +287,59 @@ async fn parcours_du_serveur_avec_son_role(proprietaire: PgPool) {
     assert!(non_lues > 0);
     assert!(notification::marquer_lue(&serveur, compte_patient, notifications[0].id).await.unwrap());
     notification::marquer_toutes_lues(&serveur, compte_patient).await.unwrap();
+
+    // Contrat côté agent (étape 5, migration 0028) : paramètres,
+    // renouvellement du contrat ci-dessus (dans les temps), adhésion d'un
+    // second patient, détail et recherche par carte.
+    let en_vigueur = contrat_munaseb::parametres_en_vigueur(&serveur).await.unwrap().valeurs;
+    let version = contrat_munaseb::modifier_parametres(&serveur, agent, Parametres { fiche_fcfa: 150, ..en_vigueur })
+        .await
+        .unwrap();
+    assert_eq!(version.valeurs.fiche_fcfa, 150);
+    assert_eq!(contrat_munaseb::historique_parametres(&serveur, None, 10).await.unwrap().len(), 2);
+    let especes = || NouveauPaiement { mode: ModePaiement::Especes, reference_transaction: None, date_declaree: None };
+    contrat_munaseb::renouveler(
+        &serveur,
+        agent,
+        contrat,
+        &Renouvellement { numero_carte: "0001/2027".into(), niveau_etudes: None, antenne: None, paiement: especes() },
+    )
+    .await
+    .unwrap();
+    let nip2 = (0..=9).map(|c| format!("900000000046001{c}")).find(|n| laaficare_backend::nip::valider(n)).unwrap();
+    sqlx::query(
+        "WITH u AS (INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('SAWADOGO', 'Issa', '+22670460001') RETURNING id) \
+         INSERT INTO patient (utilisateur_id, nip, date_naissance, lieu_naissance) SELECT id, $1, '2001-02-03', 'Koudougou' FROM u",
+    )
+    .bind(&nip2)
+    .execute(&proprietaire)
+    .await
+    .unwrap();
+    let second = contrat_munaseb::adherer(
+        &serveur,
+        agent,
+        &Adhesion {
+            nip: nip2,
+            date_naissance: NaiveDate::from_ymd_opt(2001, 2, 3).unwrap(),
+            numero_carte: "0002/2026".into(),
+            ufr: "UFR fictive".into(),
+            universite: "Université fictive".into(),
+            num_matricule: "MAT-FICTIF-2".into(),
+            personne_a_prevenir: None,
+            niveau_etudes: None,
+            antenne: None,
+            paiement: NouveauPaiement {
+                mode: ModePaiement::MobileMoney,
+                reference_transaction: Some("OM-FICTIF-1".into()),
+                date_declaree: None,
+            },
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(contrat_munaseb::contrat_par_carte(&serveur, "0002/2026").await.unwrap(), Some(second));
+    let detail = contrat_munaseb::detail_contrat(&serveur, contrat).await.unwrap().unwrap();
+    assert_eq!(detail.periodes.len(), 2);
 
     // Retrait de l'accès de l'agent (affectation close, sessions fermées).
     session::ouvrir(&serveur, agent_compte, Some(agent.affectation_id)).await.unwrap();

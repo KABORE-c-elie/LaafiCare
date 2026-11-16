@@ -214,8 +214,9 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO periode_adhesion_munaseb (contrat_id, date_paiement, date_debut, date_fin) \
-             VALUES ($1, CURRENT_DATE - 30, CURRENT_DATE - 30, CURRENT_DATE + 300)",
+            "INSERT INTO periode_adhesion_munaseb (contrat_id, date_paiement, date_debut, date_fin, numero_carte) \
+             SELECT $1, CURRENT_DATE - 30, CURRENT_DATE - 30, CURRENT_DATE + 300, numero_carte \
+             FROM contrat_assurance_munaseb WHERE id = $1",
         )
         .bind(contrat)
         .execute(pool)
