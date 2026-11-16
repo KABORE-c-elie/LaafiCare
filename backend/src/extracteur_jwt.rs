@@ -483,8 +483,12 @@ pub struct PersonnelPharmacie(pub AffectationPharmacie);
 impl FromRequestParts<AppState> for PersonnelPharmacie {
     type Rejection = RefusAuthentification;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let ProfessionnelEnExercice(exercice) = ProfessionnelEnExercice::from_request_parts(parts, state).await?;
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let ProfessionnelEnExercice(exercice) =
+            ProfessionnelEnExercice::from_request_parts(parts, state).await?;
         let role = match exercice.role.as_str() {
             "pharmacien" => RolePharmacie::Pharmacien,
             "responsable" => RolePharmacie::Responsable,
@@ -510,8 +514,12 @@ pub struct ResponsablePharmacie(pub AffectationPharmacie);
 impl FromRequestParts<AppState> for ResponsablePharmacie {
     type Rejection = RefusAuthentification;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let PersonnelPharmacie(affectation) = PersonnelPharmacie::from_request_parts(parts, state).await?;
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let PersonnelPharmacie(affectation) =
+            PersonnelPharmacie::from_request_parts(parts, state).await?;
         if affectation.role != RolePharmacie::Responsable {
             return Err(RefusAuthentification::Interdit);
         }

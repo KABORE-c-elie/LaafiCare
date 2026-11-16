@@ -114,8 +114,16 @@ async fn ce_que_chaque_role_peut_faire(pool: PgPool) {
     ] {
         refuse(&mut conn, sql).await;
     }
-    permis(&mut conn, "UPDATE seuil_stock SET seuil_min = seuil_min WHERE false").await;
-    permis(&mut conn, "UPDATE reglage_pharmacie SET modifie_le = modifie_le WHERE false").await;
+    permis(
+        &mut conn,
+        "UPDATE seuil_stock SET seuil_min = seuil_min WHERE false",
+    )
+    .await;
+    permis(
+        &mut conn,
+        "UPDATE reglage_pharmacie SET modifie_le = modifie_le WHERE false",
+    )
+    .await;
 
     permis(&mut conn, "SELECT count(*) FROM _sqlx_migrations").await;
     permis(&mut conn, "UPDATE compte SET statut = statut, version_jeton = version_jeton WHERE false").await;
@@ -133,7 +141,11 @@ async fn ce_que_chaque_role_peut_faire(pool: PgPool) {
     .await;
     refuse(&mut conn, "DELETE FROM intervention_compte WHERE false").await;
     // L'outil d'import ajoute au catalogue, sans jamais le modifier.
-    permis(&mut conn, "INSERT INTO dci (nom, cle) SELECT nom, cle FROM dci WHERE false").await;
+    permis(
+        &mut conn,
+        "INSERT INTO dci (nom, cle) SELECT nom, cle FROM dci WHERE false",
+    )
+    .await;
     refuse(&mut conn, "UPDATE medicament SET forme = forme WHERE false").await;
     refuse(&mut conn, "DELETE FROM historique_statut_demande WHERE false").await;
     refuse(&mut conn, "ALTER TABLE historique_statut_demande DISABLE TRIGGER ALL").await;
@@ -413,8 +425,9 @@ async fn parcours_du_serveur_avec_son_role(proprietaire: PgPool) {
 async fn parcours_pharmacie_avec_le_role_du_serveur(proprietaire: PgPool) {
     use laaficare_backend::idempotence::Cle;
     use laaficare_backend::stock_pharmacie::{
-        self as stock, AffectationPharmacie, Annulation, LigneDemandee, LigneInventaire, MotifPerte, NouvelInventaire,
-        NouvelleEntree, NouvellePerte, NouvelleVente, Reglages, RolePharmacie, Seuils,
+        self as stock, AffectationPharmacie, Annulation, LigneDemandee, LigneInventaire,
+        MotifPerte, NouvelInventaire, NouvelleEntree, NouvellePerte, NouvelleVente, Reglages,
+        RolePharmacie, Seuils,
     };
 
     let admin: Uuid = sqlx::query_scalar(
@@ -424,9 +437,20 @@ async fn parcours_pharmacie_avec_le_role_du_serveur(proprietaire: PgPool) {
     .fetch_one(&proprietaire)
     .await
     .unwrap();
-    let fichier = "denomination;dci;forme;dosage\nProduit X fictif;Molécule-A fictive;comprimé;500 mg\n";
-    laaficare_backend::catalogue::importer(&proprietaire, admin, "Liste fictive", fichier.as_bytes()).await.unwrap();
-    let x: Uuid = sqlx::query_scalar("SELECT id FROM medicament").fetch_one(&proprietaire).await.unwrap();
+    let fichier =
+        "denomination;dci;forme;dosage\nProduit X fictif;Molécule-A fictive;comprimé;500 mg\n";
+    laaficare_backend::catalogue::importer(
+        &proprietaire,
+        admin,
+        "Liste fictive",
+        fichier.as_bytes(),
+    )
+    .await
+    .unwrap();
+    let x: Uuid = sqlx::query_scalar("SELECT id FROM medicament")
+        .fetch_one(&proprietaire)
+        .await
+        .unwrap();
     let compte: Uuid = sqlx::query_scalar(
         "WITH u AS (INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('SANOU', 'Ali', '+22670049998') RETURNING id) \
          INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) SELECT id, 'professionnel', 'x' FROM u RETURNING id",
@@ -451,65 +475,196 @@ async fn parcours_pharmacie_avec_le_role_du_serveur(proprietaire: PgPool) {
             .fetch_one(&proprietaire)
             .await
             .unwrap();
-    let titulaire = AffectationPharmacie { affectation_id, structure_id, role: RolePharmacie::Responsable };
+    let titulaire = AffectationPharmacie {
+        affectation_id,
+        structure_id,
+        role: RolePharmacie::Responsable,
+    };
 
     let serveur = pool_du_serveur(&proprietaire).await;
-    stock::fixer_prix(&serveur, titulaire, x, 200).await.unwrap();
+    stock::fixer_prix(&serveur, titulaire, x, 200)
+        .await
+        .unwrap();
     let cle = Cle::lire("cle-1").unwrap();
     let entree = NouvelleEntree {
         medicament_id: x,
         numero_lot: "LOT-1".into(),
-        date_expiration: chrono::Utc::now().date_naive() + chrono::Duration::days(60),
+        date_expiration: Some(chrono::Utc::now().date_naive() + chrono::Duration::days(60)),
+        mois_expiration: None,
         quantite: 10,
         prix_achat_unitaire_fcfa: 100,
         fournisseur: "Grossiste fictif".into(),
     };
-    let lot = stock::entrer(&serveur, titulaire, Some(&cle), &entree).await.unwrap();
-    assert_eq!(stock::entrer(&serveur, titulaire, Some(&cle), &entree).await.unwrap().id, lot.id);
+    let lot = stock::entrer(&serveur, titulaire, Some(&cle), &entree)
+        .await
+        .unwrap();
+    assert_eq!(
+        stock::entrer(&serveur, titulaire, Some(&cle), &entree)
+            .await
+            .unwrap()
+            .id,
+        lot.id
+    );
     let vente = NouvelleVente {
         sur_ordonnance_papier: true,
-        lignes: vec![LigneDemandee { medicament_id: x, quantite: 2, lot_id: None }],
+        lignes: vec![LigneDemandee {
+            medicament_id: x,
+            quantite: 2,
+            lot_id: None,
+        }],
     };
-    let v = stock::vendre(&serveur, titulaire, None, &vente).await.unwrap();
-    stock::annuler_vente(&serveur, titulaire, None, v.id, &Annulation { motif: "Erreur".into() }).await.unwrap();
+    let v = stock::vendre(&serveur, titulaire, None, &vente)
+        .await
+        .unwrap();
+    stock::annuler_vente(
+        &serveur,
+        titulaire,
+        None,
+        v.id,
+        &Annulation {
+            motif: "Erreur".into(),
+        },
+    )
+    .await
+    .unwrap();
     let perte = stock::declarer_perte(
         &serveur,
         titulaire,
         None,
-        &NouvellePerte { lot_id: lot.id, quantite: 1, motif: MotifPerte::Casse, commentaire: None },
+        &NouvellePerte {
+            lot_id: lot.id,
+            quantite: 1,
+            motif: MotifPerte::Casse,
+            commentaire: None,
+        },
     )
     .await
     .unwrap();
-    stock::annuler_mouvement(&serveur, titulaire, None, perte.id, &Annulation { motif: "Erreur".into() }).await.unwrap();
-    let inventaire = NouvelInventaire { lignes: vec![LigneInventaire { lot_id: lot.id, quantite_comptee: 9 }] };
-    assert_eq!(stock::inventorier(&serveur, titulaire, None, &inventaire).await.unwrap().ecarts.len(), 1);
-    stock::fixer_seuils(&serveur, titulaire, x, &Seuils { seuil_min: 5, seuil_max: None }).await.unwrap();
-    stock::fixer_seuils(&serveur, titulaire, x, &Seuils { seuil_min: 20, seuil_max: None }).await.unwrap();
-    stock::regler(&serveur, titulaire, &Reglages { delai_alerte_peremption_jours: Some(90) }).await.unwrap();
+    stock::annuler_mouvement(
+        &serveur,
+        titulaire,
+        None,
+        perte.id,
+        &Annulation {
+            motif: "Erreur".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let inventaire = NouvelInventaire {
+        lignes: vec![LigneInventaire {
+            lot_id: lot.id,
+            quantite_comptee: 9,
+        }],
+    };
+    assert_eq!(
+        stock::inventorier(&serveur, titulaire, None, &inventaire)
+            .await
+            .unwrap()
+            .ecarts
+            .len(),
+        1
+    );
+    stock::fixer_seuils(
+        &serveur,
+        titulaire,
+        x,
+        &Seuils {
+            seuil_min: 5,
+            seuil_max: None,
+        },
+    )
+    .await
+    .unwrap();
+    stock::fixer_seuils(
+        &serveur,
+        titulaire,
+        x,
+        &Seuils {
+            seuil_min: 20,
+            seuil_max: None,
+        },
+    )
+    .await
+    .unwrap();
+    stock::regler(
+        &serveur,
+        titulaire,
+        &Reglages {
+            delai_alerte_peremption_jours: Some(90),
+        },
+    )
+    .await
+    .unwrap();
     let alertes = stock::alertes(&serveur, structure_id).await.unwrap();
-    assert_eq!((alertes.sous_seuil_min.len(), alertes.bientot_perimes.len()), (1, 1));
-    assert_eq!(stock::etat(&serveur, structure_id, None, 50).await.unwrap()[0].quantite_disponible, 9);
-    assert_eq!(stock::journal(&serveur, structure_id, None, 50).await.unwrap().len(), 6);
-    assert!(stock::equivalents(&serveur, structure_id, x).await.unwrap().is_some());
+    assert_eq!(
+        (alertes.sous_seuil_min.len(), alertes.bientot_perimes.len()),
+        (1, 1)
+    );
+    assert_eq!(
+        stock::etat(&serveur, structure_id, None, 50).await.unwrap()[0].quantite_disponible,
+        9
+    );
+    assert_eq!(
+        stock::journal(&serveur, structure_id, None, 50)
+            .await
+            .unwrap()
+            .len(),
+        6
+    );
+    assert!(
+        stock::equivalents(&serveur, structure_id, x)
+            .await
+            .unwrap()
+            .is_some()
+    );
 
     // Dépenses et rapport (migration 0032).
-    use laaficare_backend::benefice_pharmacie::{self as benefice, AnnulationDepense, Categorie, ChoixPeriode, NouvelleDepense};
+    use laaficare_backend::benefice_pharmacie::{
+        self as benefice, AnnulationDepense, Categorie, ChoixPeriode, NouvelleDepense,
+    };
     let aujourdhui = chrono::Utc::now().date_naive();
     let depense = benefice::enregistrer_depense(
         &serveur,
         titulaire,
         Some(&Cle::lire("depense-1").unwrap()),
-        &NouvelleDepense { date_depense: aujourdhui, categorie: Categorie::Loyer, montant_fcfa: 1_000, libelle: "Loyer fictif".into() },
+        &NouvelleDepense {
+            date_depense: aujourdhui,
+            categorie: Categorie::Loyer,
+            montant_fcfa: 1_000,
+            libelle: "Loyer fictif".into(),
+        },
     )
     .await
     .unwrap();
-    benefice::annuler_depense(&serveur, titulaire, None, depense.id, &AnnulationDepense { motif: "Erreur".into() }).await.unwrap();
+    benefice::annuler_depense(
+        &serveur,
+        titulaire,
+        None,
+        depense.id,
+        &AnnulationDepense {
+            motif: "Erreur".into(),
+        },
+    )
+    .await
+    .unwrap();
     let rapport = benefice::rapport(
         &serveur,
         structure_id,
-        &ChoixPeriode { du: Some(aujourdhui), au: Some(aujourdhui), ..Default::default() },
+        &ChoixPeriode {
+            du: Some(aujourdhui),
+            au: Some(aujourdhui),
+            ..Default::default()
+        },
     )
     .await
     .unwrap();
-    assert_eq!((rapport.ventes_fcfa, rapport.depenses.total_fcfa, rapport.valeur_stock_fin_fcfa), (0, 0, 900));
+    assert_eq!(
+        (
+            rapport.ventes_fcfa,
+            rapport.depenses.total_fcfa,
+            rapport.valeur_stock_fin_fcfa
+        ),
+        (0, 0, 900)
+    );
 }

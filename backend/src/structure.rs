@@ -91,7 +91,10 @@ impl TypeStructure {
     ///   le type n'est pas ouvert.
     pub fn pieces_exigees(self) -> &'static [TypePiece] {
         match self {
-            TypeStructure::Clinique => &[TypePiece::AutorisationCreation, TypePiece::AutorisationOuvertureExploitation],
+            TypeStructure::Clinique => &[
+                TypePiece::AutorisationCreation,
+                TypePiece::AutorisationOuvertureExploitation,
+            ],
             TypeStructure::Pharmacie => &[TypePiece::AutorisationOuvertureExploitation],
             TypeStructure::Munaseb | TypeStructure::Hopital | TypeStructure::Laboratoire => &[],
         }
@@ -402,17 +405,20 @@ pub async fn soumettre(pool: &PgPool, patient_compte_id: Uuid, structure_id: Uui
     if !email_verifie {
         return Err(ErreurSoumission::EmailNonVerifie);
     }
-    let Some(type_structure) = TypeStructure::depuis_base(&type_structure).filter(|t| t.disponible()) else {
+    let Some(type_structure) =
+        TypeStructure::depuis_base(&type_structure).filter(|t| t.disponible())
+    else {
         return Err(ErreurSoumission::TypeNonDisponible);
     };
     // Pièces exigées actives (sous le verrou de la structure : un dépôt
     // simultané attend la fin de la soumission).
-    let deposees: Vec<String> =
-        sqlx::query_scalar("SELECT type_piece FROM piece_justificative WHERE structure_id = $1 AND active")
-            .bind(structure_id)
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(|e| interne("lecture des pièces", e))?;
+    let deposees: Vec<String> = sqlx::query_scalar(
+        "SELECT type_piece FROM piece_justificative WHERE structure_id = $1 AND active",
+    )
+    .bind(structure_id)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|e| interne("lecture des pièces", e))?;
     let manquantes: Vec<&'static str> = type_structure
         .pieces_exigees()
         .iter()

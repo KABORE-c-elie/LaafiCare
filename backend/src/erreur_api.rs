@@ -76,7 +76,10 @@ impl ErreurApi {
 
     /// Erreur avec des champs complémentaires rares.
     pub fn avec(code: &'static str, erreur: impl Into<String>, complement: Complement) -> Self {
-        ErreurApi { complement: Some(Box::new(complement)), ..ErreurApi::simple(code, erreur) }
+        ErreurApi {
+            complement: Some(Box::new(complement)),
+            ..ErreurApi::simple(code, erreur)
+        }
     }
 }
 

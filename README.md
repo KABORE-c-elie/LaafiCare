@@ -327,12 +327,28 @@ Même parcours que la MUNASEB ci-dessus (étapes 1 à 9), avec `"type": "pharmac
 
 ### Tenir le stock d'une pharmacie
 
-Il faut d'abord **un catalogue de test**, avec des médicaments **fictifs**. Écrire un petit fichier texte (UTF-8), par exemple `catalogue-fictif.txt` :
+Il faut d'abord **un catalogue de test**, avec des médicaments **fictifs**. L'outil `importer_catalogue` lit un **fichier CSV**, jamais un PDF : la liste officielle (un PDF) est recopiée dans un tableur, relue, puis enregistrée au format CSV.
+
+**Format exact du fichier CSV** :
+
+| Règle | Détail |
+|---|---|
+| Encodage | UTF-8 (dans un tableur : « CSV UTF-8 ») |
+| Séparateur | point-virgule `;` (celui des tableurs réglés en français) ; une virgule est refusée |
+| Guillemets | aucun : une ligne avec `"` est refusée, avec son numéro |
+| Première ligne | exactement `denomination;dci;forme;dosage` |
+| Colonnes | `denomination` : nom du médicament (200 caractères au plus) ; `dci` : la molécule, ou plusieurs séparées par `+` pour une association (200 au plus chacune) ; `forme` : comprimé, sirop… (100 au plus) ; `dosage` : 500 mg, 1 g… (100 au plus) |
+| Lignes | une par médicament, 20 000 au plus ; les lignes vides sont ignorées |
+| Doublons | une ligne déjà présente (même nom, forme et dosage, sans tenir compte des majuscules ni des espaces en trop) est ignorée |
+| Résultat | tout ou rien : à la première ligne invalide, rien n'est importé et l'outil donne le numéro de la ligne |
+
+Exemple, `catalogue-fictif.csv` :
 
 ```
 denomination;dci;forme;dosage
 Produit X fictif;Molécule-A fictive;comprimé;500 mg
 Produit Y fictif;Molécule-A fictive;comprimé;500 mg
+Produit W fictif;Molécule-A fictive;comprimé;1 g
 ```
 
 puis, depuis `backend/`, lancer `cargo run --bin importer_catalogue` : l'outil demande l'email, le mot de passe et un code d'un administrateur, le chemin du fichier, la source (écrire « Liste fictive de test »), puis confirme. **Ne jamais importer de vraie liste avant le dépôt du fichier officiel** dans `docs/Reglementation, loi et reference/`.
@@ -341,7 +357,7 @@ Ensuite, le pharmacien (ou le responsable) se connecte, active son affectation d
 
 | Étape | Demande | Corps | Réponse attendue |
 |---|---|---|---|
-| 1. Trouver le médicament | `GET …/api/pharmacie/medicaments?q=produit` | aucun | 200, les deux produits avec leur `id` |
+| 1. Trouver le médicament | `GET …/api/pharmacie/medicaments?q=produit` | aucun | 200, les trois produits avec leur `id` |
 | 2. Vendre sans prix | `POST …/api/pharmacie/ventes` | `{"sur_ordonnance_papier": false, "lignes": [{"medicament_id": "<id X>", "quantite": 1}]}` | 409 `prix_non_defini` |
 | 3. Fixer le prix (pharmacien) | `PUT …/api/pharmacie/prix/<id X>` | `{"prix_unitaire_fcfa": 250}` | 403 `acces_refuse` : seul le responsable fixe les prix |
 | 4. Fixer le prix (responsable) | même demande avec le jeton du responsable | même corps | 200 |
@@ -350,7 +366,8 @@ Ensuite, le pharmacien (ou le responsable) se connecte, active son affectation d
 | 7. Vendre | même demande qu'à l'étape 2 | même corps | 201, la vente, `total_fcfa` 250 |
 | 8. Voir le stock | `GET …/api/pharmacie/stock` | aucun | 200, `quantite_disponible` 9 |
 | 9. Voir le journal | `GET …/api/pharmacie/mouvements` | aucun | 200, l'entrée et la vente, avec le nom de l'auteur |
-| 10. Médicaments de même molécule | `GET …/api/pharmacie/medicaments/<id X>/equivalents` | aucun | 200, le produit Y |
+| 10. Médicaments de même molécule | `GET …/api/pharmacie/medicaments/<id X>/equivalents` | aucun | 200 : d'abord le produit Y (`"correspondance": "meme_dci_meme_dosage_meme_forme"`), puis le produit W, marqué `"meme_dci_dosage_ou_forme_different"` et `"meme_dosage": false` (1 g au lieu de 500 mg) |
+| 10 bis. Boîte au mois seul | `POST …/api/pharmacie/entrees` avec `"mois_expiration": "<AAAA-MM, dans 3 mois>"` au lieu de `date_expiration` | — | 201 : `date_expiration` est le dernier jour du mois **précédent**, `mois_expiration_imprime` le mois de la boîte |
 | 11. Alertes | `PUT …/api/pharmacie/seuils/<id X>` avec `{"seuil_min": 20, "seuil_max": null}`, puis `GET …/api/pharmacie/alertes` | — | 204, puis le produit X dans `sous_seuil_min` |
 | 12. Dépense (pharmacien) | `POST …/api/pharmacie/depenses` | `{"date_depense": "<aujourd'hui>", "categorie": "loyer", "montant_fcfa": 50000, "libelle": "Loyer fictif"}` | 403 `acces_refuse` : réservé au responsable |
 | 13. Dépense (responsable) | même demande avec le jeton du responsable | même corps | 201 |

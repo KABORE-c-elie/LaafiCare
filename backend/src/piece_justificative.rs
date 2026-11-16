@@ -155,7 +155,10 @@ pub async fn deposer(
     }
     let type_mime = detecter_type(contenu).ok_or(ErreurPiece::FormatRefuse)?;
     let numero = numero.trim();
-    if numero.is_empty() || numero.chars().count() > NUMERO_MAX || numero.chars().any(char::is_control) {
+    if numero.is_empty()
+        || numero.chars().count() > NUMERO_MAX
+        || numero.chars().any(char::is_control)
+    {
         return Err(ErreurPiece::DonneesInvalides(format!(
             "numero : obligatoire, {NUMERO_MAX} caractères au plus, sans caractère de contrôle."
         )));
@@ -180,7 +183,9 @@ pub async fn deposer(
     .await?;
     let (statut, type_structure, date_future) = ligne.ok_or(ErreurPiece::StructureInconnue)?;
     if statut != "brouillon" {
-        return Err(ErreurPiece::TransitionInvalide { statut_actuel: statut });
+        return Err(ErreurPiece::TransitionInvalide {
+            statut_actuel: statut,
+        });
     }
     let prevue = TypeStructure::depuis_base(&type_structure)
         .is_some_and(|t| t.pieces_exigees().contains(&type_piece));
@@ -189,7 +194,9 @@ pub async fn deposer(
     }
     // Une autorisation n'est jamais datée de demain (date du Burkina, D9).
     if date_future {
-        return Err(ErreurPiece::DonneesInvalides("date_piece : ne peut pas être postérieure à aujourd'hui.".into()));
+        return Err(ErreurPiece::DonneesInvalides(
+            "date_piece : ne peut pas être postérieure à aujourd'hui.".into(),
+        ));
     }
 
     // Remplacement pendant le brouillon : l'ancienne pièce reste, inactive.
@@ -225,7 +232,10 @@ pub async fn deposer(
         .await?;
     tx.commit().await?;
 
-    Ok(sqlx::query_as(concat!(select_piece!(), " WHERE p.id = $1")).bind(id).fetch_one(pool).await?)
+    Ok(sqlx::query_as(concat!(select_piece!(), " WHERE p.id = $1"))
+        .bind(id)
+        .fetch_one(pool)
+        .await?)
 }
 
 /// Pièces d'une demande, pour son créateur (actives seulement) ; `None` si
@@ -260,7 +270,10 @@ pub async fn lister_pour_createur(
 
 /// Toutes les pièces d'une structure (anciennes comprises), pour l'équipe,
 /// avec l'avertissement des numéros en double.
-pub async fn lister_pour_administrateur(pool: &PgPool, structure_id: Uuid) -> Result<Vec<PieceAdministrateur>, sqlx::Error> {
+pub async fn lister_pour_administrateur(
+    pool: &PgPool,
+    structure_id: Uuid,
+) -> Result<Vec<PieceAdministrateur>, sqlx::Error> {
     let pieces: Vec<Piece> = sqlx::query_as(concat!(
         select_piece!(),
         " WHERE p.structure_id = $1 ORDER BY p.type_piece, p.date_depot DESC, p.id DESC"
@@ -280,14 +293,20 @@ pub async fn lister_pour_administrateur(pool: &PgPool, structure_id: Uuid) -> Re
         .bind(piece.id)
         .fetch_all(pool)
         .await?;
-        resultat.push(PieceAdministrateur { piece, meme_numero_dans });
+        resultat.push(PieceAdministrateur {
+            piece,
+            meme_numero_dans,
+        });
     }
     Ok(resultat)
 }
 
 /// Contenu d'une pièce, pour la seule route de téléchargement de l'équipe :
 /// (type MIME détecté au dépôt, octets). `None` si elle n'existe pas.
-pub async fn contenu(pool: &PgPool, piece_id: Uuid) -> Result<Option<(String, Vec<u8>)>, sqlx::Error> {
+pub async fn contenu(
+    pool: &PgPool,
+    piece_id: Uuid,
+) -> Result<Option<(String, Vec<u8>)>, sqlx::Error> {
     sqlx::query_as(
         "SELECT p.type_mime, c.contenu FROM piece_justificative p JOIN piece_contenu c ON c.piece_id = p.id WHERE p.id = $1",
     )
@@ -303,10 +322,19 @@ mod tests {
     #[test]
     fn type_par_les_premiers_octets() {
         assert_eq!(detecter_type(b"%PDF-1.7\n..."), Some("application/pdf"));
-        assert_eq!(detecter_type(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0]), Some("image/png"));
+        assert_eq!(
+            detecter_type(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0]),
+            Some("image/png")
+        );
         assert_eq!(detecter_type(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("image/jpeg"));
         // SVG, HTML, exécutable, PNG tronqué : refusés.
-        for refuse in [&b"<svg xmlns"[..], b"<html>", b"MZ\x90\x00", &[0x89, 0x50, 0x4E, 0x47][..], b""] {
+        for refuse in [
+            &b"<svg xmlns"[..],
+            b"<html>",
+            b"MZ\x90\x00",
+            &[0x89, 0x50, 0x4E, 0x47][..],
+            b"",
+        ] {
             assert_eq!(detecter_type(refuse), None);
         }
     }
@@ -370,7 +398,11 @@ mod tests {
         .await
         .unwrap();
         let (_, corps) = emails.0.lock().unwrap()[0].clone();
-        assert!(verification_email::verifier(pool, &jeton_du_lien(&corps)).await.unwrap());
+        assert!(
+            verification_email::verifier(pool, &jeton_du_lien(&corps))
+                .await
+                .unwrap()
+        );
         (patient, creee.structure_id)
     }
 
@@ -387,47 +419,139 @@ mod tests {
     #[sqlx::test]
     #[ignore]
     async fn pharmacie_pieces_soumission_et_validation(pool: PgPool) {
-        let (createur, pharmacie) = pharmacie_en_brouillon(&pool, "+22670500001", "titulaire@example.org").await;
+        let (createur, pharmacie) =
+            pharmacie_en_brouillon(&pool, "+22670500001", "titulaire@example.org").await;
 
         // Sans pièce : soumission refusée, avec la liste des manquantes.
         match structure::soumettre(&pool, createur, pharmacie).await {
-            Err(ErreurSoumission::PiecesManquantes { pieces }) => assert_eq!(pieces, ["autorisation_ouverture_exploitation"]),
+            Err(ErreurSoumission::PiecesManquantes { pieces }) => {
+                assert_eq!(pieces, ["autorisation_ouverture_exploitation"])
+            }
             autre => panic!("PiecesManquantes attendu, obtenu {autre:?}"),
         }
 
         let ouverture = TypePiece::AutorisationOuvertureExploitation;
-        let deposer_ = |compte: Uuid, type_piece: TypePiece, numero: &'static str, jour: &'static str, contenu: Vec<u8>| {
+        let deposer_ = |compte: Uuid,
+                        type_piece: TypePiece,
+                        numero: &'static str,
+                        jour: &'static str,
+                        contenu: Vec<u8>| {
             let pool = pool.clone();
-            async move { deposer(&pool, compte, pharmacie, type_piece, numero, date(jour), &contenu).await }
+            async move {
+                deposer(
+                    &pool,
+                    compte,
+                    pharmacie,
+                    type_piece,
+                    numero,
+                    date(jour),
+                    &contenu,
+                )
+                .await
+            }
         };
-        assert!(matches!(deposer_(createur, ouverture, "2025-01", "2025-01-10", b"<svg/>".to_vec()).await, Err(ErreurPiece::FormatRefuse)));
-        assert!(matches!(deposer_(createur, ouverture, "2025-01", "2025-01-10", Vec::new()).await, Err(ErreurPiece::FichierVide)));
-        let trop_grand = [PDF, &vec![0u8; TAILLE_MAX_OCTETS]].concat();
-        assert!(matches!(deposer_(createur, ouverture, "2025-01", "2025-01-10", trop_grand).await, Err(ErreurPiece::FichierTropGrand)));
         assert!(matches!(
-            deposer_(createur, TypePiece::AutorisationCreation, "2025-01", "2025-01-10", PDF.to_vec()).await,
+            deposer_(
+                createur,
+                ouverture,
+                "2025-01",
+                "2025-01-10",
+                b"<svg/>".to_vec()
+            )
+            .await,
+            Err(ErreurPiece::FormatRefuse)
+        ));
+        assert!(matches!(
+            deposer_(createur, ouverture, "2025-01", "2025-01-10", Vec::new()).await,
+            Err(ErreurPiece::FichierVide)
+        ));
+        let trop_grand = [PDF, &vec![0u8; TAILLE_MAX_OCTETS]].concat();
+        assert!(matches!(
+            deposer_(createur, ouverture, "2025-01", "2025-01-10", trop_grand).await,
+            Err(ErreurPiece::FichierTropGrand)
+        ));
+        assert!(matches!(
+            deposer_(
+                createur,
+                TypePiece::AutorisationCreation,
+                "2025-01",
+                "2025-01-10",
+                PDF.to_vec()
+            )
+            .await,
             Err(ErreurPiece::PieceNonPrevue)
         ));
-        assert!(matches!(deposer_(createur, ouverture, "  ", "2025-01-10", PDF.to_vec()).await, Err(ErreurPiece::DonneesInvalides(_))));
-        assert!(matches!(deposer_(createur, ouverture, "N°", "2025-01-10", PDF.to_vec()).await, Err(ErreurPiece::DonneesInvalides(_))));
-        assert!(matches!(deposer_(createur, ouverture, "2025-01", "2999-01-01", PDF.to_vec()).await, Err(ErreurPiece::DonneesInvalides(_))));
+        assert!(matches!(
+            deposer_(createur, ouverture, "  ", "2025-01-10", PDF.to_vec()).await,
+            Err(ErreurPiece::DonneesInvalides(_))
+        ));
+        assert!(matches!(
+            deposer_(createur, ouverture, "N°", "2025-01-10", PDF.to_vec()).await,
+            Err(ErreurPiece::DonneesInvalides(_))
+        ));
+        assert!(matches!(
+            deposer_(createur, ouverture, "2025-01", "2999-01-01", PDF.to_vec()).await,
+            Err(ErreurPiece::DonneesInvalides(_))
+        ));
         let intrus = identite(&pool, "+22670500002", "patient").await;
-        assert!(matches!(deposer_(intrus, ouverture, "2025-01", "2025-01-10", PDF.to_vec()).await, Err(ErreurPiece::StructureInconnue)));
-        assert!(lister_pour_createur(&pool, intrus, pharmacie).await.unwrap().is_none());
+        assert!(matches!(
+            deposer_(intrus, ouverture, "2025-01", "2025-01-10", PDF.to_vec()).await,
+            Err(ErreurPiece::StructureInconnue)
+        ));
+        assert!(
+            lister_pour_createur(&pool, intrus, pharmacie)
+                .await
+                .unwrap()
+                .is_none()
+        );
 
         // Dépôt, puis remplacement : l'ancienne pièce reste, inactive.
-        let premiere = deposer_(createur, ouverture, "N° 2025-001/MS", "2025-01-10", PDF.to_vec()).await.unwrap();
-        assert_eq!((premiere.type_mime.as_str(), premiere.taille as usize), ("application/pdf", PDF.len()));
+        let premiere = deposer_(
+            createur,
+            ouverture,
+            "N° 2025-001/MS",
+            "2025-01-10",
+            PDF.to_vec(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (premiere.type_mime.as_str(), premiere.taille as usize),
+            ("application/pdf", PDF.len())
+        );
         assert_eq!(premiere.sha256.len(), 64);
-        let png = [&[0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A][..], b"fictif"].concat();
-        let seconde = deposer_(createur, ouverture, "2025-001/MS", "2025-01-10", png.clone()).await.unwrap();
-        let actives = lister_pour_createur(&pool, createur, pharmacie).await.unwrap().unwrap();
-        assert_eq!(actives.iter().map(|p| p.id).collect::<Vec<_>>(), [seconde.id]);
+        let png = [
+            &[0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A][..],
+            b"fictif",
+        ]
+        .concat();
+        let seconde = deposer_(
+            createur,
+            ouverture,
+            "2025-001/MS",
+            "2025-01-10",
+            png.clone(),
+        )
+        .await
+        .unwrap();
+        let actives = lister_pour_createur(&pool, createur, pharmacie)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            actives.iter().map(|p| p.id).collect::<Vec<_>>(),
+            [seconde.id]
+        );
         let toutes = lister_pour_administrateur(&pool, pharmacie).await.unwrap();
         assert_eq!(toutes.len(), 2);
-        assert_eq!(contenu(&pool, seconde.id).await.unwrap(), Some(("image/png".to_string(), png)));
+        assert_eq!(
+            contenu(&pool, seconde.id).await.unwrap(),
+            Some(("image/png".to_string(), png))
+        );
 
-        structure::soumettre(&pool, createur, pharmacie).await.unwrap();
+        structure::soumettre(&pool, createur, pharmacie)
+            .await
+            .unwrap();
         assert!(matches!(
             deposer_(createur, ouverture, "2025-002", "2025-01-10", PDF.to_vec()).await,
             Err(ErreurPiece::TransitionInvalide { statut_actuel }) if statut_actuel == "en_attente"
@@ -435,28 +559,60 @@ mod tests {
 
         // Validation par l'équipe : le registre reçoit la pièce active.
         let administrateur = identite(&pool, "+22670500003", "administrateur_laaficare").await;
-        decision_structure::valider(&pool, &EmailsRecus::default(), administrateur, pharmacie, None).await.unwrap();
-        let registre: String =
-            sqlx::query_scalar("SELECT numero_normalise FROM autorisation_validee WHERE structure_id = $1")
-                .bind(pharmacie)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        decision_structure::valider(
+            &pool,
+            &EmailsRecus::default(),
+            administrateur,
+            pharmacie,
+            None,
+        )
+        .await
+        .unwrap();
+        let registre: String = sqlx::query_scalar(
+            "SELECT numero_normalise FROM autorisation_validee WHERE structure_id = $1",
+        )
+        .bind(pharmacie)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(registre, "2025-001/MS");
 
         // Une autre pharmacie avec le même numéro (écrit autrement) :
         // signalée à l'équipe, refusée à la validation.
-        let (autre_createur, autre) = pharmacie_en_brouillon(&pool, "+22670500004", "autre@example.org").await;
-        deposer(&pool, autre_createur, autre, ouverture, "N°2025-001/ms", date("2025-02-01"), PDF).await.unwrap();
-        structure::soumettre(&pool, autre_createur, autre).await.unwrap();
+        let (autre_createur, autre) =
+            pharmacie_en_brouillon(&pool, "+22670500004", "autre@example.org").await;
+        deposer(
+            &pool,
+            autre_createur,
+            autre,
+            ouverture,
+            "N°2025-001/ms",
+            date("2025-02-01"),
+            PDF,
+        )
+        .await
+        .unwrap();
+        structure::soumettre(&pool, autre_createur, autre)
+            .await
+            .unwrap();
         let vues = lister_pour_administrateur(&pool, autre).await.unwrap();
         assert_eq!(vues[0].meme_numero_dans, [pharmacie]);
         assert!(matches!(
-            decision_structure::valider(&pool, &EmailsRecus::default(), administrateur, autre, None).await,
+            decision_structure::valider(
+                &pool,
+                &EmailsRecus::default(),
+                administrateur,
+                autre,
+                None
+            )
+            .await,
             Err(ErreurDecision::AutorisationDejaValidee)
         ));
         // Le détail vu par l'équipe porte les pièces, sans leur contenu.
-        let detail = decision_structure::detail(&pool, autre).await.unwrap().unwrap();
+        let detail = decision_structure::detail(&pool, autre)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(detail.pieces.len(), 1);
         assert!(!serde_json::to_string(&detail).unwrap().contains("fictif"));
     }

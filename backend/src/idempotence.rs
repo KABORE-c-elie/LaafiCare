@@ -42,7 +42,10 @@ pub enum ErreurIdempotence {
 impl Cle {
     pub fn lire(valeur: &str) -> Result<Cle, ErreurIdempotence> {
         let valeur = valeur.trim();
-        let valeur = valeur.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(valeur);
+        let valeur = valeur
+            .strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .unwrap_or(valeur);
         if (1..=255).contains(&valeur.len()) && valeur.bytes().all(|o| (0x21..=0x7E).contains(&o)) {
             Ok(Cle(valeur.to_string()))
         } else {
@@ -89,7 +92,11 @@ pub async fn reserver(
 ) -> Result<Result<Reservation, ErreurIdempotence>, sqlx::Error> {
     let id: Uuid = match resultat {
         Some(id) => id,
-        None => sqlx::query_scalar("SELECT uuidv7()").fetch_one(&mut **tx).await?,
+        None => {
+            sqlx::query_scalar("SELECT uuidv7()")
+                .fetch_one(&mut **tx)
+                .await?
+        }
     };
     let Some(cle) = cle else {
         return Ok(Ok(Reservation::Nouvelle(id)));
@@ -128,10 +135,23 @@ mod tests {
 
     #[test]
     fn lecture_des_cles() {
-        assert_eq!(Cle::lire(" 8e03978e-40d5-43e8-bc93-6894a57f9324 ").unwrap().as_str(), "8e03978e-40d5-43e8-bc93-6894a57f9324");
-        assert_eq!(Cle::lire("\"abc\"").unwrap().as_str(), "abc", "forme chaîne du draft");
+        assert_eq!(
+            Cle::lire(" 8e03978e-40d5-43e8-bc93-6894a57f9324 ")
+                .unwrap()
+                .as_str(),
+            "8e03978e-40d5-43e8-bc93-6894a57f9324"
+        );
+        assert_eq!(
+            Cle::lire("\"abc\"").unwrap().as_str(),
+            "abc",
+            "forme chaîne du draft"
+        );
         for mauvaise in ["", "  ", "a b", "é", &"x".repeat(256), "\"\""] {
-            assert_eq!(Cle::lire(mauvaise), Err(ErreurIdempotence::CleInvalide), "{mauvaise:?}");
+            assert_eq!(
+                Cle::lire(mauvaise),
+                Err(ErreurIdempotence::CleInvalide),
+                "{mauvaise:?}"
+            );
         }
     }
 

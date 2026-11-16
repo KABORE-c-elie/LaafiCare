@@ -305,7 +305,7 @@ Un **seul catalogue pour tout le pays**, partagé par toutes les pharmacies (D6)
 
 ### `lot_stock` : un lot reçu par une pharmacie
 
-Numéro de lot, date d'expiration, **prix d'achat unitaire**, fournisseur, médicament, pharmacie. La quantité n'est pas une colonne : c'est la somme des mouvements du lot. Jamais modifié ni effacé.
+Numéro de lot, date d'expiration (dernier jour utilisable, compris), **prix d'achat unitaire**, fournisseur, médicament, pharmacie. La quantité n'est pas une colonne : c'est la somme des mouvements du lot. Jamais modifié ni effacé. Quand la boîte n'indique que le mois (« EXP 06/2027 »), `expiration_mois_seul` vaut vrai et la date enregistrée est le dernier jour du mois **précédent** (31/05/2027) : règle la plus prudente, faute de source officielle burkinabè (migration 0033 ; la base vérifie que la date est bien une fin de mois).
 
 ### `mouvement_stock` : le journal
 
@@ -367,5 +367,6 @@ Une ligne par clé `Idempotency-Key` reçue : pharmacie, clé, opération, empre
 | 0030 | Catalogue national des médicaments (`import_catalogue`, `dci`, `medicament`, `medicament_dci`) : jamais modifié ni effacé ; lu par le serveur, rempli par le seul outil d'import |
 | 0031 | Stock des pharmacies : lots, ventes, journal des mouvements (jamais négatif, jamais modifié), prix de vente historisés, seuils, réglages, clés d'idempotence |
 | 0032 | Dépenses des pharmacies (`depense_pharmacie`), par le seul responsable, jamais modifiées : une correction est une annulation tracée |
+| 0033 | Lot saisi au mois seul (`lot_stock.expiration_mois_seul`) : la date enregistrée est alors la veille du mois imprimé (règle prudente) |
 
 Une migration déjà appliquée ne change plus jamais : toute évolution passe par une nouvelle migration. Un test vérifie aussi qu'aucun caractère invisible ne s'y glisse ([`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs)).

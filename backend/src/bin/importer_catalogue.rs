@@ -29,15 +29,27 @@ async fn executer() -> Result<(), String> {
     let contexte = console::demarrer().await?;
     let operateur = console::authentifier_operateur(&contexte).await?;
 
-    let chemin = console::lire_ligne("Chemin du fichier à importer : ").map_err(|e| e.to_string())?;
-    let fichier = std::fs::read(chemin.trim()).map_err(|e| format!("Lecture du fichier impossible : {e}"))?;
+    let chemin =
+        console::lire_ligne("Chemin du fichier à importer : ").map_err(|e| e.to_string())?;
+    let fichier =
+        std::fs::read(chemin.trim()).map_err(|e| format!("Lecture du fichier impossible : {e}"))?;
     // Lecture d'essai : montre ce qui sera importé avant toute écriture.
-    let texte = std::str::from_utf8(&fichier).map_err(|_| catalogue::ErreurCatalogue::PasUtf8.to_string())?;
+    let texte = std::str::from_utf8(&fichier)
+        .map_err(|_| catalogue::ErreurCatalogue::PasUtf8.to_string())?;
     let lignes = catalogue::lire_fichier(texte).map_err(|e| e.to_string())?;
-    println!("{} médicament(s) lu(s). Premier : {} ({}, {}).", lignes.len(), lignes[0].denomination, lignes[0].forme, lignes[0].dosage);
+    println!(
+        "{} médicament(s) lu(s). Premier : {} ({}, {}).",
+        lignes.len(),
+        lignes[0].denomination,
+        lignes[0].forme,
+        lignes[0].dosage
+    );
 
-    let source = console::lire_ligne("Source officielle (titre, édition, texte de référence) : ").map_err(|e| e.to_string())?;
-    if !console::confirmer("Importer ce fichier dans le catalogue ? Rien ne pourra être effacé.").map_err(|e| e.to_string())? {
+    let source = console::lire_ligne("Source officielle (titre, édition, texte de référence) : ")
+        .map_err(|e| e.to_string())?;
+    if !console::confirmer("Importer ce fichier dans le catalogue ? Rien ne pourra être effacé.")
+        .map_err(|e| e.to_string())?
+    {
         return Err("Arrêt, rien n'a été importé.".into());
     }
     let bilan = catalogue::importer(&contexte.pool, operateur.compte_id(), &source, &fichier)

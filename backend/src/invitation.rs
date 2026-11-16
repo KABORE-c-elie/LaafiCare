@@ -651,18 +651,37 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let r = Responsable { type_structure: "pharmacie", ..responsable(structure_id, pro) };
+        let r = Responsable {
+            type_structure: "pharmacie",
+            ..responsable(structure_id, pro)
+        };
         assert!(matches!(
-            creer(&pool, &sms, r, "70200092", RoleInvitation::AgentAssuranceMunaseb).await,
+            creer(
+                &pool,
+                &sms,
+                r,
+                "70200092",
+                RoleInvitation::AgentAssuranceMunaseb
+            )
+            .await,
             Err(ErreurInvitation::RoleNonPermis)
         ));
         let invite = patient(&pool, "+22670200092").await;
-        let creee = creer(&pool, &sms, r, "70200092", RoleInvitation::Pharmacien).await.unwrap();
-        let texte = &sms.0.lock().unwrap()[0].1;
-        assert!(texte.contains("comme pharmacien"), "{texte}");
-        accepter(&pool, &EmailsRecus::default(), "http://localhost:4200", invite, creee.invitation_id, &saisie_nouveau("pharmacien@example.org"))
+        let creee = creer(&pool, &sms, r, "70200092", RoleInvitation::Pharmacien)
             .await
             .unwrap();
+        let texte = &sms.0.lock().unwrap()[0].1;
+        assert!(texte.contains("comme pharmacien"), "{texte}");
+        accepter(
+            &pool,
+            &EmailsRecus::default(),
+            "http://localhost:4200",
+            invite,
+            creee.invitation_id,
+            &saisie_nouveau("pharmacien@example.org"),
+        )
+        .await
+        .unwrap();
         let role: String = sqlx::query_scalar(
             "SELECT a.role FROM affectation a JOIN compte c ON c.id = a.compte_id \
              JOIN compte p ON p.utilisateur_id = c.utilisateur_id WHERE p.id = $1 AND a.structure_id = $2",
@@ -1047,7 +1066,11 @@ mod tests {
     /// parties.
     #[test]
     fn sms_en_gsm7_et_en_deux_parties_au_plus() {
-        for role in [RoleInvitation::AgentAssuranceMunaseb, RoleInvitation::Responsable, RoleInvitation::Pharmacien] {
+        for role in [
+            RoleInvitation::AgentAssuranceMunaseb,
+            RoleInvitation::Responsable,
+            RoleInvitation::Pharmacien,
+        ] {
             let fixe = texte_sms("", role, "28/10/2026");
             assert!(septets_gsm7(&fixe).is_some(), "{fixe}");
 

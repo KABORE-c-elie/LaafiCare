@@ -88,12 +88,17 @@ pub enum ErreurStock {
     #[error("Ce lot est périmé : il ne se vend plus.")]
     LotPerime,
     #[error("Stock insuffisant.")]
-    StockInsuffisant { medicament_id: Option<Uuid>, quantite_disponible: i64 },
+    StockInsuffisant {
+        medicament_id: Option<Uuid>,
+        quantite_disponible: i64,
+    },
     #[error("Aucun prix de vente n'est fixé pour ce médicament : le responsable doit le fixer.")]
     PrixNonDefini { medicament_id: Uuid },
     #[error("Déjà annulé.")]
     DejaAnnule,
-    #[error("Ce mouvement ne s'annule pas ainsi (une vente s'annule en entier, une annulation ne s'annule pas).")]
+    #[error(
+        "Ce mouvement ne s'annule pas ainsi (une vente s'annule en entier, une annulation ne s'annule pas)."
+    )]
     AnnulationImpossible,
     #[error("{0}")]
     Idempotence(#[from] ErreurIdempotence),
@@ -109,9 +114,10 @@ impl From<sqlx::Error> for ErreurStock {
         // Garanties de la base traduites en erreurs nommées (migration
         // 0031) : stock négatif, annulation en double.
         match erreur.as_database_error().and_then(|e| e.constraint()) {
-            Some("mouvement_stock_jamais_negatif") => {
-                ErreurStock::StockInsuffisant { medicament_id: None, quantite_disponible: 0 }
-            }
+            Some("mouvement_stock_jamais_negatif") => ErreurStock::StockInsuffisant {
+                medicament_id: None,
+                quantite_disponible: 0,
+            },
             Some("mouvement_stock_annule_mouvement_id_key") => ErreurStock::DejaAnnule,
             _ => ErreurStock::Interne(erreur.to_string()),
         }
@@ -127,12 +133,18 @@ fn invalide(message: impl Into<String>) -> Erreur {
 fn texte(valeur: &str, champ: &str, max: usize) -> Result<String, Erreur> {
     let valeur = valeur.trim();
     if valeur.is_empty() || valeur.chars().count() > max || valeur.chars().any(char::is_control) {
-        return Err(invalide(format!("{champ} : obligatoire, {max} caractères au plus, sans caractère de contrôle.")));
+        return Err(invalide(format!(
+            "{champ} : obligatoire, {max} caractères au plus, sans caractère de contrôle."
+        )));
     }
     Ok(valeur.to_string())
 }
 
-fn texte_facultatif(valeur: Option<&str>, champ: &str, max: usize) -> Result<Option<String>, Erreur> {
+fn texte_facultatif(
+    valeur: Option<&str>,
+    champ: &str,
+    max: usize,
+) -> Result<Option<String>, Erreur> {
     match valeur.map(str::trim) {
         None | Some("") => Ok(None),
         Some(v) => texte(v, champ, max).map(Some),
@@ -155,17 +167,28 @@ fn prix(valeur: i64, champ: &str) -> Result<i32, Erreur> {
     }
 }
 
-async fn medicament_existe<'e, E: sqlx::PgExecutor<'e>>(executeur: E, medicament_id: Uuid) -> Result<(), Erreur> {
+async fn medicament_existe<'e, E: sqlx::PgExecutor<'e>>(
+    executeur: E,
+    medicament_id: Uuid,
+) -> Result<(), Erreur> {
     let existe: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM medicament WHERE id = $1)")
         .bind(medicament_id)
         .fetch_one(executeur)
         .await?;
-    if existe { Ok(()) } else { Err(Erreur::MedicamentInconnu) }
+    if existe {
+        Ok(())
+    } else {
+        Err(Erreur::MedicamentInconnu)
+    }
 }
 
 /// Date du jour au Burkina, dans la transaction (D9).
-async fn aujourdhui(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<NaiveDate, sqlx::Error> {
-    sqlx::query_scalar("SELECT (now() AT TIME ZONE 'Africa/Ouagadougou')::date").fetch_one(&mut **tx).await
+async fn aujourdhui(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<NaiveDate, sqlx::Error> {
+    sqlx::query_scalar("SELECT (now() AT TIME ZONE 'Africa/Ouagadougou')::date")
+        .fetch_one(&mut **tx)
+        .await
 }
 
 // ---------------------------------------------------------------------
@@ -178,7 +201,12 @@ pub struct Lot {
     pub id: Uuid,
     pub medicament_id: Uuid,
     pub numero_lot: String,
+    /// Dernier jour utilisable, compris.
     pub date_expiration: NaiveDate,
+    /// Mois imprimé sur la boîte (`AAAA-MM`) quand elle n'indiquait que le
+    /// mois ; `date_expiration` est alors la veille de ce mois (règle
+    /// prudente, voir `expiration`).
+    pub mois_expiration_imprime: Option<String>,
     pub prix_achat_unitaire_fcfa: i32,
     pub fournisseur: String,
     pub quantite: i64,
@@ -188,7 +216,9 @@ pub struct Lot {
 
 macro_rules! select_lot {
     () => {
-        "SELECT l.id, l.medicament_id, l.numero_lot, l.date_expiration, l.prix_achat_unitaire_fcfa, l.fournisseur, \
+        "SELECT l.id, l.medicament_id, l.numero_lot, l.date_expiration, \
+                CASE WHEN l.expiration_mois_seul THEN to_char(l.date_expiration + 1, 'YYYY-MM') END AS mois_expiration_imprime, \
+                l.prix_achat_unitaire_fcfa, l.fournisseur, \
                 COALESCE((SELECT sum(m.quantite) FROM mouvement_stock m WHERE m.lot_id = l.id), 0)::BIGINT AS quantite, \
                 l.date_expiration < (now() AT TIME ZONE 'Africa/Ouagadougou')::date AS perime, l.date_creation \
          FROM lot_stock l"
@@ -197,7 +227,11 @@ macro_rules! select_lot {
 
 /// Lots d'un médicament dans la pharmacie, encore en stock, dans l'ordre
 /// FEFO (le plus proche de sa péremption d'abord).
-pub async fn lots_du_medicament(pool: &PgPool, structure_id: Uuid, medicament_id: Uuid) -> Result<Vec<Lot>, sqlx::Error> {
+pub async fn lots_du_medicament(
+    pool: &PgPool,
+    structure_id: Uuid,
+    medicament_id: Uuid,
+) -> Result<Vec<Lot>, sqlx::Error> {
     sqlx::query_as(concat!(
         "SELECT * FROM (",
         select_lot!(),
@@ -227,7 +261,12 @@ pub struct EtatMedicament {
 
 /// État du stock de la pharmacie, par médicament (ceux qui ont eu au moins
 /// un lot), par pages sur l'identifiant du médicament.
-pub async fn etat(pool: &PgPool, structure_id: Uuid, apres: Option<Uuid>, limite: i64) -> Result<Vec<EtatMedicament>, sqlx::Error> {
+pub async fn etat(
+    pool: &PgPool,
+    structure_id: Uuid,
+    apres: Option<Uuid>,
+    limite: i64,
+) -> Result<Vec<EtatMedicament>, sqlx::Error> {
     sqlx::query_as(concat!(
         "WITH lots AS (",
         select_lot!(),
@@ -297,7 +336,12 @@ macro_rules! select_mouvement {
 
 /// Journal de la pharmacie, le plus récent d'abord (`avant` : identifiant
 /// du dernier mouvement de la page précédente).
-pub async fn journal(pool: &PgPool, structure_id: Uuid, avant: Option<Uuid>, limite: i64) -> Result<Vec<Mouvement>, sqlx::Error> {
+pub async fn journal(
+    pool: &PgPool,
+    structure_id: Uuid,
+    avant: Option<Uuid>,
+    limite: i64,
+) -> Result<Vec<Mouvement>, sqlx::Error> {
     sqlx::query_as(concat!(
         select_mouvement!(),
         " WHERE mv.structure_id = $1 AND ($2::uuid IS NULL OR mv.id < $2) ORDER BY mv.id DESC LIMIT $3"
@@ -310,19 +354,25 @@ pub async fn journal(pool: &PgPool, structure_id: Uuid, avant: Option<Uuid>, lim
 }
 
 async fn mouvement(pool: &PgPool, structure_id: Uuid, id: Uuid) -> Result<Mouvement, sqlx::Error> {
-    sqlx::query_as(concat!(select_mouvement!(), " WHERE mv.structure_id = $1 AND mv.id = $2"))
-        .bind(structure_id)
-        .bind(id)
-        .fetch_one(pool)
-        .await
+    sqlx::query_as(concat!(
+        select_mouvement!(),
+        " WHERE mv.structure_id = $1 AND mv.id = $2"
+    ))
+    .bind(structure_id)
+    .bind(id)
+    .fetch_one(pool)
+    .await
 }
 
 async fn lot(pool: &PgPool, structure_id: Uuid, id: Uuid) -> Result<Lot, sqlx::Error> {
-    sqlx::query_as(concat!(select_lot!(), " WHERE l.structure_id = $1 AND l.id = $2"))
-        .bind(structure_id)
-        .bind(id)
-        .fetch_one(pool)
-        .await
+    sqlx::query_as(concat!(
+        select_lot!(),
+        " WHERE l.structure_id = $1 AND l.id = $2"
+    ))
+    .bind(structure_id)
+    .bind(id)
+    .fetch_one(pool)
+    .await
 }
 
 /// Une vente et ses lignes.
@@ -341,7 +391,11 @@ pub struct Vente {
 
 /// Une vente de la pharmacie, `None` si elle n'existe pas ou est d'une autre
 /// pharmacie.
-pub async fn vente(pool: &PgPool, structure_id: Uuid, vente_id: Uuid) -> Result<Option<Vente>, sqlx::Error> {
+pub async fn vente(
+    pool: &PgPool,
+    structure_id: Uuid,
+    vente_id: Uuid,
+) -> Result<Option<Vente>, sqlx::Error> {
     // Ordonnance papier, date, nom et prénom de l'auteur.
     type EnteteVente = (bool, DateTime<Utc>, Option<String>, Option<String>);
     let entete: Option<EnteteVente> = sqlx::query_as(
@@ -371,7 +425,16 @@ pub async fn vente(pool: &PgPool, structure_id: Uuid, vente_id: Uuid) -> Result<
         .map(|l| i64::from(-l.quantite) * i64::from(l.prix_vente_unitaire_fcfa.unwrap_or(0)))
         .sum();
     let annulee = !lignes.is_empty() && lignes.iter().all(|l| l.annule_par.is_some());
-    Ok(Some(Vente { id: vente_id, sur_ordonnance_papier, date_vente, auteur_nom, auteur_prenom, lignes, total_fcfa, annulee }))
+    Ok(Some(Vente {
+        id: vente_id,
+        sur_ordonnance_papier,
+        date_vente,
+        auteur_nom,
+        auteur_prenom,
+        lignes,
+        total_fcfa,
+        annulee,
+    }))
 }
 
 // ---------------------------------------------------------------------
@@ -404,12 +467,22 @@ async fn verrouiller_lots(
     .await?;
     let mut resultat = BTreeMap::new();
     for (id, medicament_id, prix_achat, date_expiration) in lignes {
-        let quantite: i64 =
-            sqlx::query_scalar("SELECT COALESCE(sum(quantite), 0)::BIGINT FROM mouvement_stock WHERE lot_id = $1")
-                .bind(id)
-                .fetch_one(&mut **tx)
-                .await?;
-        resultat.insert(id, LotVerrouille { id, medicament_id, prix_achat, date_expiration, quantite });
+        let quantite: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(sum(quantite), 0)::BIGINT FROM mouvement_stock WHERE lot_id = $1",
+        )
+        .bind(id)
+        .fetch_one(&mut **tx)
+        .await?;
+        resultat.insert(
+            id,
+            LotVerrouille {
+                id,
+                medicament_id,
+                prix_achat,
+                date_expiration,
+                quantite,
+            },
+        );
     }
     Ok(resultat)
 }
@@ -466,22 +539,76 @@ async fn inserer_mouvement(
 pub struct NouvelleEntree {
     pub medicament_id: Uuid,
     pub numero_lot: String,
-    pub date_expiration: NaiveDate,
+    /// Date complète imprimée sur la boîte (`AAAA-MM-JJ`) : dernier jour
+    /// utilisable, compris. Exactement un de `date_expiration` et
+    /// `mois_expiration`.
+    #[serde(default)]
+    pub date_expiration: Option<NaiveDate>,
+    /// Boîte qui n'indique que le mois et l'année (`AAAA-MM`, ex.
+    /// `2027-06` pour « EXP 06/2027 ») : voir `expiration`.
+    #[serde(default)]
+    pub mois_expiration: Option<String>,
     pub quantite: i64,
     pub prix_achat_unitaire_fcfa: i64,
     pub fournisseur: String,
 }
 
+/// Dernier jour utilisable du lot, et si la boîte n'indiquait que le mois.
+///
+/// Boîte au mois et à l'année : aucune source officielle burkinabè ni de
+/// l'UEMOA n'a été trouvée sur la convention (docs/points-ouverts.md ; la
+/// pharmacopée des États-Unis, USP, *General Notices*, lit « le dernier jour
+/// du mois imprimé », mais elle ne s'applique pas au Burkina). Règle la plus
+/// prudente pour le patient (demande du porteur du 2026-11-16) : le lot est
+/// périmé **dès le premier jour du mois imprimé** ; on enregistre donc le
+/// dernier jour du mois précédent (`2027-06` donne le 31/05/2027). Le prix
+/// de cette prudence : au plus un mois de stock sorti plus tôt.
+pub fn expiration(e: &NouvelleEntree) -> Result<(NaiveDate, bool), Erreur> {
+    match (e.date_expiration, e.mois_expiration.as_deref()) {
+        (Some(date), None) => Ok((date, false)),
+        (None, Some(mois)) => {
+            let mois = mois.trim();
+            // Exactement `AAAA-MM` : 7 caractères, mois de 01 à 12.
+            let premier = (mois.len() == 7 && mois.as_bytes()[4] == b'-')
+                .then(|| NaiveDate::parse_from_str(&format!("{mois}-01"), "%Y-%m-%d").ok())
+                .flatten()
+                .ok_or_else(|| invalide("mois_expiration : au format AAAA-MM (ex. 2027-06)."))?;
+            let veille = premier
+                .pred_opt()
+                .ok_or_else(|| invalide("mois_expiration : hors limites."))?;
+            Ok((veille, true))
+        }
+        _ => Err(invalide(
+            "date_expiration ou mois_expiration : donner exactement l'un des deux.",
+        )),
+    }
+}
+
 /// Entrée en stock : un lot et son mouvement d'entrée. Un lot déjà périmé
 /// n'entre pas (il serait aussitôt une perte).
-pub async fn entrer(pool: &PgPool, auteur: AffectationPharmacie, cle: Option<&Cle>, e: &NouvelleEntree) -> Result<Lot, Erreur> {
+pub async fn entrer(
+    pool: &PgPool,
+    auteur: AffectationPharmacie,
+    cle: Option<&Cle>,
+    e: &NouvelleEntree,
+) -> Result<Lot, Erreur> {
     let quantite = quantite_positive(e.quantite, "quantite")?;
     let prix_achat = prix(e.prix_achat_unitaire_fcfa, "prix_achat_unitaire_fcfa")?;
     let numero_lot = texte(&e.numero_lot, "numero_lot", TEXTE_COURT_MAX)?;
     let fournisseur = texte(&e.fournisseur, "fournisseur", FOURNISSEUR_MAX)?;
+    let (date_expiration, mois_seul) = expiration(e)?;
 
     let mut tx = pool.begin().await?;
-    let lot_id = match idempotence::reserver(&mut tx, auteur.structure_id, cle, "entree", &idempotence::empreinte("entree", e), None).await?? {
+    let lot_id = match idempotence::reserver(
+        &mut tx,
+        auteur.structure_id,
+        cle,
+        "entree",
+        &idempotence::empreinte("entree", e),
+        None,
+    )
+    .await??
+    {
         Reservation::DejaFaite(id) => {
             drop(tx);
             return Ok(lot(pool, auteur.structure_id, id).await?);
@@ -489,20 +616,22 @@ pub async fn entrer(pool: &PgPool, auteur: AffectationPharmacie, cle: Option<&Cl
         Reservation::Nouvelle(id) => id,
     };
     medicament_existe(&mut *tx, e.medicament_id).await?;
-    if e.date_expiration < aujourdhui(&mut tx).await? {
+    if date_expiration < aujourdhui(&mut tx).await? {
         return Err(invalide("date_expiration : ce lot est déjà périmé."));
     }
     sqlx::query(
-        "INSERT INTO lot_stock (id, structure_id, medicament_id, numero_lot, date_expiration, prix_achat_unitaire_fcfa, fournisseur) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO lot_stock (id, structure_id, medicament_id, numero_lot, date_expiration, prix_achat_unitaire_fcfa, \
+                                fournisseur, expiration_mois_seul) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(lot_id)
     .bind(auteur.structure_id)
     .bind(e.medicament_id)
     .bind(&numero_lot)
-    .bind(e.date_expiration)
+    .bind(date_expiration)
     .bind(prix_achat)
     .bind(&fournisseur)
+    .bind(mois_seul)
     .execute(&mut *tx)
     .await?;
     inserer_mouvement(
@@ -547,7 +676,12 @@ pub struct NouvelleVente {
 
 /// Vente : un en-tête et une ligne par lot sorti, au prix de vente en
 /// vigueur et au prix d'achat du lot, figés. Tout ou rien.
-pub async fn vendre(pool: &PgPool, auteur: AffectationPharmacie, cle: Option<&Cle>, v: &NouvelleVente) -> Result<Vente, Erreur> {
+pub async fn vendre(
+    pool: &PgPool,
+    auteur: AffectationPharmacie,
+    cle: Option<&Cle>,
+    v: &NouvelleVente,
+) -> Result<Vente, Erreur> {
     if v.lignes.is_empty() || v.lignes.len() > LIGNES_MAX {
         return Err(invalide(format!("lignes : entre 1 et {LIGNES_MAX}.")));
     }
@@ -556,10 +690,21 @@ pub async fn vendre(pool: &PgPool, auteur: AffectationPharmacie, cle: Option<&Cl
     }
 
     let mut tx = pool.begin().await?;
-    let vente_id = match idempotence::reserver(&mut tx, auteur.structure_id, cle, "vente", &idempotence::empreinte("vente", v), None).await?? {
+    let vente_id = match idempotence::reserver(
+        &mut tx,
+        auteur.structure_id,
+        cle,
+        "vente",
+        &idempotence::empreinte("vente", v),
+        None,
+    )
+    .await??
+    {
         Reservation::DejaFaite(id) => {
             drop(tx);
-            return vente(pool, auteur.structure_id, id).await?.ok_or(Erreur::VenteInconnue);
+            return vente(pool, auteur.structure_id, id)
+                .await?
+                .ok_or(Erreur::VenteInconnue);
         }
         Reservation::Nouvelle(id) => id,
     };
@@ -580,7 +725,12 @@ pub async fn vendre(pool: &PgPool, auteur: AffectationPharmacie, cle: Option<&Cl
         .bind(medicament_id)
         .fetch_optional(&mut *tx)
         .await?;
-        prix_vente.insert(*medicament_id, prix.ok_or(Erreur::PrixNonDefini { medicament_id: *medicament_id })?);
+        prix_vente.insert(
+            *medicament_id,
+            prix.ok_or(Erreur::PrixNonDefini {
+                medicament_id: *medicament_id,
+            })?,
+        );
     }
     let candidats: Vec<Uuid> = sqlx::query_scalar(
         "SELECT id FROM lot_stock WHERE structure_id = $1 AND medicament_id = ANY($2) ORDER BY id",
@@ -609,7 +759,10 @@ pub async fn vendre(pool: &PgPool, auteur: AffectationPharmacie, cle: Option<&Cl
         // la plus proche, puis le plus ancien lot) parmi les non périmés.
         let ordre: Vec<Uuid> = match ligne.lot_id {
             Some(lot_id) => {
-                let choisi = lots.get(&lot_id).filter(|l| l.medicament_id == ligne.medicament_id).ok_or(Erreur::LotInconnu)?;
+                let choisi = lots
+                    .get(&lot_id)
+                    .filter(|l| l.medicament_id == ligne.medicament_id)
+                    .ok_or(Erreur::LotInconnu)?;
                 if choisi.date_expiration < jour {
                     return Err(Erreur::LotPerime);
                 }
@@ -618,15 +771,26 @@ pub async fn vendre(pool: &PgPool, auteur: AffectationPharmacie, cle: Option<&Cl
             None => {
                 let mut fefo: Vec<&LotVerrouille> = lots
                     .values()
-                    .filter(|l| l.medicament_id == ligne.medicament_id && l.date_expiration >= jour && l.quantite > 0)
+                    .filter(|l| {
+                        l.medicament_id == ligne.medicament_id
+                            && l.date_expiration >= jour
+                            && l.quantite > 0
+                    })
                     .collect();
                 fefo.sort_by_key(|l| (l.date_expiration, l.id));
                 fefo.into_iter().map(|l| l.id).collect()
             }
         };
-        let disponible: i64 = ordre.iter().filter_map(|id| lots.get(id)).map(|l| l.quantite.max(0)).sum();
+        let disponible: i64 = ordre
+            .iter()
+            .filter_map(|id| lots.get(id))
+            .map(|l| l.quantite.max(0))
+            .sum();
         if disponible < reste {
-            return Err(Erreur::StockInsuffisant { medicament_id: Some(ligne.medicament_id), quantite_disponible: disponible });
+            return Err(Erreur::StockInsuffisant {
+                medicament_id: Some(ligne.medicament_id),
+                quantite_disponible: disponible,
+            });
         }
         for lot_id in ordre {
             if reste == 0 {
@@ -660,7 +824,9 @@ pub async fn vendre(pool: &PgPool, auteur: AffectationPharmacie, cle: Option<&Cl
         }
     }
     tx.commit().await?;
-    vente(pool, auteur.structure_id, vente_id).await?.ok_or(Erreur::VenteInconnue)
+    vente(pool, auteur.structure_id, vente_id)
+        .await?
+        .ok_or(Erreur::VenteInconnue)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -680,11 +846,20 @@ pub async fn annuler_vente(
     let motif = texte(&a.motif, "motif", COMMENTAIRE_MAX)?;
     let mut tx = pool.begin().await?;
     let empreinte = idempotence::empreinte("annulation_vente", &(vente_id, a));
-    if let Reservation::DejaFaite(id) =
-        idempotence::reserver(&mut tx, auteur.structure_id, cle, "annulation_vente", &empreinte, Some(vente_id)).await??
+    if let Reservation::DejaFaite(id) = idempotence::reserver(
+        &mut tx,
+        auteur.structure_id,
+        cle,
+        "annulation_vente",
+        &empreinte,
+        Some(vente_id),
+    )
+    .await??
     {
         drop(tx);
-        return vente(pool, auteur.structure_id, id).await?.ok_or(Erreur::VenteInconnue);
+        return vente(pool, auteur.structure_id, id)
+            .await?
+            .ok_or(Erreur::VenteInconnue);
     }
     let lignes: Vec<(Uuid, Uuid, i32, i32, Option<i32>, bool)> = sqlx::query_as(
         "SELECT mv.id, mv.lot_id, mv.quantite, mv.prix_achat_unitaire_fcfa, mv.prix_vente_unitaire_fcfa, \
@@ -727,7 +902,9 @@ pub async fn annuler_vente(
         .await?;
     }
     tx.commit().await?;
-    vente(pool, auteur.structure_id, vente_id).await?.ok_or(Erreur::VenteInconnue)
+    vente(pool, auteur.structure_id, vente_id)
+        .await?
+        .ok_or(Erreur::VenteInconnue)
 }
 
 // ---------------------------------------------------------------------
@@ -761,14 +938,30 @@ pub struct NouvellePerte {
 }
 
 /// Perte (péremption, casse, autre) : valorisée au prix d'achat du lot.
-pub async fn declarer_perte(pool: &PgPool, auteur: AffectationPharmacie, cle: Option<&Cle>, p: &NouvellePerte) -> Result<Mouvement, Erreur> {
+pub async fn declarer_perte(
+    pool: &PgPool,
+    auteur: AffectationPharmacie,
+    cle: Option<&Cle>,
+    p: &NouvellePerte,
+) -> Result<Mouvement, Erreur> {
     let quantite = quantite_positive(p.quantite, "quantite")?;
     let commentaire = texte_facultatif(p.commentaire.as_deref(), "commentaire", COMMENTAIRE_MAX)?;
     if p.motif == MotifPerte::Autre && commentaire.is_none() {
-        return Err(invalide("commentaire : obligatoire pour le motif « autre »."));
+        return Err(invalide(
+            "commentaire : obligatoire pour le motif « autre ».",
+        ));
     }
     let mut tx = pool.begin().await?;
-    let id = match idempotence::reserver(&mut tx, auteur.structure_id, cle, "perte", &idempotence::empreinte("perte", p), None).await?? {
+    let id = match idempotence::reserver(
+        &mut tx,
+        auteur.structure_id,
+        cle,
+        "perte",
+        &idempotence::empreinte("perte", p),
+        None,
+    )
+    .await??
+    {
         Reservation::DejaFaite(id) => {
             drop(tx);
             return Ok(mouvement(pool, auteur.structure_id, id).await?);
@@ -778,7 +971,10 @@ pub async fn declarer_perte(pool: &PgPool, auteur: AffectationPharmacie, cle: Op
     let lots = verrouiller_lots(&mut tx, auteur.structure_id, &[p.lot_id]).await?;
     let lot = lots.get(&p.lot_id).ok_or(Erreur::LotInconnu)?;
     if lot.quantite < i64::from(quantite) {
-        return Err(Erreur::StockInsuffisant { medicament_id: Some(lot.medicament_id), quantite_disponible: lot.quantite });
+        return Err(Erreur::StockInsuffisant {
+            medicament_id: Some(lot.medicament_id),
+            quantite_disponible: lot.quantite,
+        });
     }
     inserer_mouvement(
         &mut tx,
@@ -823,7 +1019,12 @@ pub struct Inventaire {
 /// Inventaire express (BF-04) : pour chaque lot compté, l'écart entre le
 /// compte et le stock devient un mouvement `inventaire`, valorisé au prix
 /// d'achat du lot. Un lot sans écart n'écrit rien.
-pub async fn inventorier(pool: &PgPool, auteur: AffectationPharmacie, cle: Option<&Cle>, i: &NouvelInventaire) -> Result<Inventaire, Erreur> {
+pub async fn inventorier(
+    pool: &PgPool,
+    auteur: AffectationPharmacie,
+    cle: Option<&Cle>,
+    i: &NouvelInventaire,
+) -> Result<Inventaire, Erreur> {
     if i.lignes.is_empty() || i.lignes.len() > LIGNES_MAX {
         return Err(invalide(format!("lignes : entre 1 et {LIGNES_MAX}.")));
     }
@@ -834,18 +1035,28 @@ pub async fn inventorier(pool: &PgPool, auteur: AffectationPharmacie, cle: Optio
     }
     for ligne in &i.lignes {
         if !(0..=QUANTITE_MAX).contains(&ligne.quantite_comptee) {
-            return Err(invalide(format!("lignes.quantite_comptee : entre 0 et {QUANTITE_MAX}.")));
+            return Err(invalide(format!(
+                "lignes.quantite_comptee : entre 0 et {QUANTITE_MAX}."
+            )));
         }
     }
     let mut tx = pool.begin().await?;
-    let inventaire_id =
-        match idempotence::reserver(&mut tx, auteur.structure_id, cle, "inventaire", &idempotence::empreinte("inventaire", i), None).await?? {
-            Reservation::DejaFaite(id) => {
-                drop(tx);
-                return inventaire(pool, auteur.structure_id, id).await;
-            }
-            Reservation::Nouvelle(id) => id,
-        };
+    let inventaire_id = match idempotence::reserver(
+        &mut tx,
+        auteur.structure_id,
+        cle,
+        "inventaire",
+        &idempotence::empreinte("inventaire", i),
+        None,
+    )
+    .await??
+    {
+        Reservation::DejaFaite(id) => {
+            drop(tx);
+            return inventaire(pool, auteur.structure_id, id).await;
+        }
+        Reservation::Nouvelle(id) => id,
+    };
     let lots = verrouiller_lots(&mut tx, auteur.structure_id, &ids).await?;
     if lots.len() != ids.len() {
         return Err(Erreur::LotInconnu);
@@ -879,7 +1090,11 @@ pub async fn inventorier(pool: &PgPool, auteur: AffectationPharmacie, cle: Optio
     inventaire(pool, auteur.structure_id, inventaire_id).await
 }
 
-async fn inventaire(pool: &PgPool, structure_id: Uuid, inventaire_id: Uuid) -> Result<Inventaire, Erreur> {
+async fn inventaire(
+    pool: &PgPool,
+    structure_id: Uuid,
+    inventaire_id: Uuid,
+) -> Result<Inventaire, Erreur> {
     let ecarts = sqlx::query_as(concat!(
         select_mouvement!(),
         " WHERE mv.structure_id = $1 AND mv.inventaire_id = $2 ORDER BY mv.id"
@@ -888,7 +1103,10 @@ async fn inventaire(pool: &PgPool, structure_id: Uuid, inventaire_id: Uuid) -> R
     .bind(inventaire_id)
     .fetch_all(pool)
     .await?;
-    Ok(Inventaire { inventaire_id, ecarts })
+    Ok(Inventaire {
+        inventaire_id,
+        ecarts,
+    })
 }
 
 /// Annulation d'une entrée, d'une perte ou d'un écart d'inventaire : une
@@ -904,7 +1122,16 @@ pub async fn annuler_mouvement(
     let motif = texte(&a.motif, "motif", COMMENTAIRE_MAX)?;
     let mut tx = pool.begin().await?;
     let empreinte = idempotence::empreinte("annulation_mouvement", &(mouvement_id, a));
-    let id = match idempotence::reserver(&mut tx, auteur.structure_id, cle, "annulation_mouvement", &empreinte, None).await?? {
+    let id = match idempotence::reserver(
+        &mut tx,
+        auteur.structure_id,
+        cle,
+        "annulation_mouvement",
+        &empreinte,
+        None,
+    )
+    .await??
+    {
         Reservation::DejaFaite(id) => {
             drop(tx);
             return Ok(mouvement(pool, auteur.structure_id, id).await?);
@@ -925,7 +1152,10 @@ pub async fn annuler_mouvement(
     let lots = verrouiller_lots(&mut tx, auteur.structure_id, &[lot_id]).await?;
     let lot = &lots[&lot_id];
     if lot.quantite - i64::from(quantite) < 0 {
-        return Err(Erreur::StockInsuffisant { medicament_id: Some(lot.medicament_id), quantite_disponible: lot.quantite });
+        return Err(Erreur::StockInsuffisant {
+            medicament_id: Some(lot.medicament_id),
+            quantite_disponible: lot.quantite,
+        });
     }
     inserer_mouvement(
         &mut tx,
@@ -962,7 +1192,12 @@ pub struct PrixVente {
 
 /// Nouveau prix de vente (le responsable seulement, D7) ; les ventes déjà
 /// faites gardent leur prix.
-pub async fn fixer_prix(pool: &PgPool, responsable: AffectationPharmacie, medicament_id: Uuid, prix_fcfa: i64) -> Result<PrixVente, Erreur> {
+pub async fn fixer_prix(
+    pool: &PgPool,
+    responsable: AffectationPharmacie,
+    medicament_id: Uuid,
+    prix_fcfa: i64,
+) -> Result<PrixVente, Erreur> {
     let prix_fcfa = prix(prix_fcfa, "prix_unitaire_fcfa")?;
     medicament_existe(pool, medicament_id).await?;
     Ok(sqlx::query_as(
@@ -986,9 +1221,19 @@ pub struct Seuils {
 }
 
 /// Seuils minimal et maximal d'un médicament (BF-04), pour la pharmacie.
-pub async fn fixer_seuils(pool: &PgPool, auteur: AffectationPharmacie, medicament_id: Uuid, s: &Seuils) -> Result<(), Erreur> {
-    if !(0..=QUANTITE_MAX).contains(&s.seuil_min) || s.seuil_max.is_some_and(|m| m < s.seuil_min || m > QUANTITE_MAX) {
-        return Err(invalide(format!("seuils : seuil_min entre 0 et {QUANTITE_MAX}, seuil_max au moins égal à seuil_min.")));
+pub async fn fixer_seuils(
+    pool: &PgPool,
+    auteur: AffectationPharmacie,
+    medicament_id: Uuid,
+    s: &Seuils,
+) -> Result<(), Erreur> {
+    if !(0..=QUANTITE_MAX).contains(&s.seuil_min)
+        || s.seuil_max
+            .is_some_and(|m| m < s.seuil_min || m > QUANTITE_MAX)
+    {
+        return Err(invalide(format!(
+            "seuils : seuil_min entre 0 et {QUANTITE_MAX}, seuil_max au moins égal à seuil_min."
+        )));
     }
     medicament_existe(pool, medicament_id).await?;
     sqlx::query(
@@ -1016,9 +1261,17 @@ pub struct Reglages {
 }
 
 /// Réglages de la pharmacie (le responsable seulement).
-pub async fn regler(pool: &PgPool, responsable: AffectationPharmacie, r: &Reglages) -> Result<(), Erreur> {
-    if r.delai_alerte_peremption_jours.is_some_and(|d| !(1..=365).contains(&d)) {
-        return Err(invalide("delai_alerte_peremption_jours : entre 1 et 365, ou null pour désactiver."));
+pub async fn regler(
+    pool: &PgPool,
+    responsable: AffectationPharmacie,
+    r: &Reglages,
+) -> Result<(), Erreur> {
+    if r.delai_alerte_peremption_jours
+        .is_some_and(|d| !(1..=365).contains(&d))
+    {
+        return Err(invalide(
+            "delai_alerte_peremption_jours : entre 1 et 365, ou null pour désactiver.",
+        ));
     }
     sqlx::query(
         "INSERT INTO reglage_pharmacie (structure_id, delai_alerte_peremption_jours, auteur_affectation_id, auteur_structure_id, auteur_role) \
@@ -1089,15 +1342,24 @@ pub async fn alertes(pool: &PgPool, structure_id: Uuid) -> Result<Alertes, sqlx:
     .bind(structure_id)
     .fetch_all(pool)
     .await?;
-    let (sous, autres): (Vec<_>, Vec<_>) = seuils.into_iter().partition(|s| s.quantite_disponible < i64::from(s.seuil_min));
-    let au_dessus = autres.into_iter().filter(|s| s.seuil_max.is_some_and(|m| s.quantite_disponible > i64::from(m))).collect();
+    let (sous, autres): (Vec<_>, Vec<_>) = seuils
+        .into_iter()
+        .partition(|s| s.quantite_disponible < i64::from(s.seuil_min));
+    let au_dessus = autres
+        .into_iter()
+        .filter(|s| {
+            s.seuil_max
+                .is_some_and(|m| s.quantite_disponible > i64::from(m))
+        })
+        .collect();
 
-    let delai: Option<i16> =
-        sqlx::query_scalar("SELECT delai_alerte_peremption_jours FROM reglage_pharmacie WHERE structure_id = $1")
-            .bind(structure_id)
-            .fetch_optional(pool)
-            .await?
-            .flatten();
+    let delai: Option<i16> = sqlx::query_scalar(
+        "SELECT delai_alerte_peremption_jours FROM reglage_pharmacie WHERE structure_id = $1",
+    )
+    .bind(structure_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
     let lots: Vec<AlerteLot> = sqlx::query_as(
         "SELECT * FROM (SELECT l.id AS lot_id, l.medicament_id, m.denomination, l.numero_lot, l.date_expiration, \
                 COALESCE((SELECT sum(mv.quantite) FROM mouvement_stock mv WHERE mv.lot_id = l.id), 0)::BIGINT AS quantite, \
@@ -1125,11 +1387,36 @@ pub async fn alertes(pool: &PgPool, structure_id: Uuid) -> Result<Alertes, sqlx:
 // Équivalents par DCI (BF-05, partie sans ordonnance)
 // ---------------------------------------------------------------------
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+/// Ressemblance d'un équivalent avec le médicament demandé (demande du
+/// porteur du 2026-11-16 : la même DCI ne suffit pas pour la sécurité du
+/// patient). Toujours la même DCI ; le dosage et la forme sont comparés.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Correspondance {
+    /// Même DCI, même dosage et même forme.
+    MemeDciMemeDosageMemeForme,
+    /// Même DCI, mais le dosage ou la forme diffère : **substitution à
+    /// juger par le pharmacien** (posologie, voie d'administration).
+    MemeDciDosageOuFormeDifferent,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct LigneEquivalent {
+    #[sqlx(flatten)]
+    medicament: Medicament,
+    quantite_disponible: i64,
+    prix_vente_unitaire_fcfa: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct Equivalent {
     #[serde(flatten)]
-    #[sqlx(flatten)]
     pub medicament: Medicament,
+    pub correspondance: Correspondance,
+    /// Faux : le dosage diffère de celui du médicament demandé.
+    pub meme_dosage: bool,
+    /// Faux : la forme diffère de celle du médicament demandé.
+    pub meme_forme: bool,
     /// Stock non périmé dans **cette** pharmacie.
     pub quantite_disponible: i64,
     pub prix_vente_unitaire_fcfa: Option<i32>,
@@ -1141,20 +1428,33 @@ pub struct Equivalents {
     pub equivalents: Vec<Equivalent>,
 }
 
+/// Nombre maximal d'équivalents renvoyés (garde-fou technique).
+const EQUIVALENTS_MAX: usize = 100;
+
 /// Médicaments qui ont **exactement les mêmes DCI** (CDC, BF-05 et cadre
 /// réglementaire : l'équivalence « repose exclusivement sur l'équivalence de
-/// molécule active »), avec leur stock dans la pharmacie ; ceux en stock
-/// d'abord. La forme et le dosage sont montrés : le pharmacien juge.
-/// `None` si le médicament n'existe pas.
-pub async fn equivalents(pool: &PgPool, structure_id: Uuid, medicament_id: Uuid) -> Result<Option<Equivalents>, sqlx::Error> {
-    let Some(medicament) = sqlx::query_as::<_, Medicament>(concat!(select_medicament!(), " WHERE m.id = $1"))
-        .bind(medicament_id)
-        .fetch_optional(pool)
-        .await?
+/// molécule active »), avec leur stock dans la pharmacie. **Classés** :
+/// d'abord même dosage et même forme, ensuite dosage ou forme différents,
+/// marqués comme tels (`correspondance`, `meme_dosage`, `meme_forme`) ; dans
+/// chaque groupe, ceux en stock d'abord. Rien n'est caché : le pharmacien
+/// décide. Le dosage et la forme sont comparés sur leur clé du catalogue
+/// (espaces réduites, sans majuscules, `catalogue::cle`) : « 500 mg » et
+/// « 500mg » restent différents, ce qui est le sens prudent (signalé, jamais
+/// caché). `None` si le médicament n'existe pas.
+pub async fn equivalents(
+    pool: &PgPool,
+    structure_id: Uuid,
+    medicament_id: Uuid,
+) -> Result<Option<Equivalents>, sqlx::Error> {
+    let Some(medicament) =
+        sqlx::query_as::<_, Medicament>(concat!(select_medicament!(), " WHERE m.id = $1"))
+            .bind(medicament_id)
+            .fetch_optional(pool)
+            .await?
     else {
         return Ok(None);
     };
-    let equivalents = sqlx::query_as(concat!(
+    let lignes: Vec<LigneEquivalent> = sqlx::query_as(concat!(
         "SELECT med.*, \
                 COALESCE((SELECT sum(mv.quantite) FROM mouvement_stock mv JOIN lot_stock l ON l.id = mv.lot_id \
                           WHERE l.structure_id = $2 AND l.medicament_id = med.id \
@@ -1166,13 +1466,56 @@ pub async fn equivalents(pool: &PgPool, structure_id: Uuid, medicament_id: Uuid)
         " WHERE m.id <> $1 \
             AND (SELECT array_agg(dci_id ORDER BY dci_id) FROM medicament_dci WHERE medicament_id = m.id) \
               = (SELECT array_agg(dci_id ORDER BY dci_id) FROM medicament_dci WHERE medicament_id = $1)) med \
-         ORDER BY quantite_disponible DESC, med.denomination, med.id LIMIT 100"
+         LIMIT 1000"
     ))
     .bind(medicament_id)
     .bind(structure_id)
     .fetch_all(pool)
     .await?;
-    Ok(Some(Equivalents { medicament, equivalents }))
+    let (dosage, forme) = (
+        crate::catalogue::cle(&medicament.dosage),
+        crate::catalogue::cle(&medicament.forme),
+    );
+    let mut equivalents: Vec<Equivalent> = lignes
+        .into_iter()
+        .map(|l| {
+            let meme_dosage = crate::catalogue::cle(&l.medicament.dosage) == dosage;
+            let meme_forme = crate::catalogue::cle(&l.medicament.forme) == forme;
+            Equivalent {
+                correspondance: if meme_dosage && meme_forme {
+                    Correspondance::MemeDciMemeDosageMemeForme
+                } else {
+                    Correspondance::MemeDciDosageOuFormeDifferent
+                },
+                meme_dosage,
+                meme_forme,
+                quantite_disponible: l.quantite_disponible,
+                prix_vente_unitaire_fcfa: l.prix_vente_unitaire_fcfa,
+                medicament: l.medicament,
+            }
+        })
+        .collect();
+    // Le classement se fait ici, avant la limite, pour qu'un équivalent
+    // identique ne soit jamais coupé au profit d'un autre.
+    equivalents.sort_by(|a, b| {
+        (
+            a.correspondance,
+            std::cmp::Reverse(a.quantite_disponible > 0),
+            &a.medicament.denomination,
+            a.medicament.id,
+        )
+            .cmp(&(
+                b.correspondance,
+                std::cmp::Reverse(b.quantite_disponible > 0),
+                &b.medicament.denomination,
+                b.medicament.id,
+            ))
+    });
+    equivalents.truncate(EQUIVALENTS_MAX);
+    Ok(Some(Equivalents {
+        medicament,
+        equivalents,
+    }))
 }
 
 #[cfg(test)]
@@ -1183,7 +1526,10 @@ pub(crate) mod tests {
 
     /// Pharmacie validée avec un responsable et un pharmacien. Renvoie
     /// (responsable, pharmacien).
-    pub(crate) async fn pharmacie(pool: &PgPool, prefixe: &str) -> (AffectationPharmacie, AffectationPharmacie) {
+    pub(crate) async fn pharmacie(
+        pool: &PgPool,
+        prefixe: &str,
+    ) -> (AffectationPharmacie, AffectationPharmacie) {
         let compte = |suffixe: &'static str| {
             let pool = pool.clone();
             let telephone = format!("+226{prefixe}{suffixe}");
@@ -1224,8 +1570,16 @@ pub(crate) mod tests {
             }
         };
         (
-            AffectationPharmacie { affectation_id: affecter(titulaire, "responsable").await, structure_id, role: RolePharmacie::Responsable },
-            AffectationPharmacie { affectation_id: affecter(employe, "pharmacien").await, structure_id, role: RolePharmacie::Pharmacien },
+            AffectationPharmacie {
+                affectation_id: affecter(titulaire, "responsable").await,
+                structure_id,
+                role: RolePharmacie::Responsable,
+            },
+            AffectationPharmacie {
+                affectation_id: affecter(employe, "pharmacien").await,
+                structure_id,
+                role: RolePharmacie::Pharmacien,
+            },
         )
     }
 
@@ -1237,14 +1591,24 @@ pub(crate) mod tests {
                        Produit X fictif;Molécule-A fictive;comprimé;500 mg\n\
                        Produit Y fictif;Molécule-A fictive;comprimé;500 mg\n\
                        Produit Z fictif;Molécule-A fictive + Molécule-B fictive;comprimé;500 mg\n";
-        crate::catalogue::importer(pool, admin, "Liste fictive", fichier.as_bytes()).await.unwrap();
+        crate::catalogue::importer(pool, admin, "Liste fictive", fichier.as_bytes())
+            .await
+            .unwrap();
         let id = |nom: &'static str| {
             let pool = pool.clone();
             async move {
-                sqlx::query_scalar::<_, Uuid>("SELECT id FROM medicament WHERE denomination = $1").bind(nom).fetch_one(&pool).await.unwrap()
+                sqlx::query_scalar::<_, Uuid>("SELECT id FROM medicament WHERE denomination = $1")
+                    .bind(nom)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
             }
         };
-        (id("Produit X fictif").await, id("Produit Y fictif").await, id("Produit Z fictif").await)
+        (
+            id("Produit X fictif").await,
+            id("Produit Y fictif").await,
+            id("Produit Z fictif").await,
+        )
     }
 
     pub(crate) fn dans(jours: i64) -> NaiveDate {
@@ -1252,11 +1616,18 @@ pub(crate) mod tests {
         Utc::now().date_naive() + chrono::Duration::days(jours)
     }
 
-    pub(crate) fn entree(medicament_id: Uuid, lot: &str, jours: i64, quantite: i64, prix_achat: i64) -> NouvelleEntree {
+    pub(crate) fn entree(
+        medicament_id: Uuid,
+        lot: &str,
+        jours: i64,
+        quantite: i64,
+        prix_achat: i64,
+    ) -> NouvelleEntree {
         NouvelleEntree {
             medicament_id,
             numero_lot: lot.into(),
-            date_expiration: dans(jours),
+            date_expiration: Some(dans(jours)),
+            mois_expiration: None,
             quantite,
             prix_achat_unitaire_fcfa: prix_achat,
             fournisseur: "Grossiste fictif".into(),
@@ -1264,23 +1635,37 @@ pub(crate) mod tests {
     }
 
     fn ligne(medicament_id: Uuid, quantite: i64, lot_id: Option<Uuid>) -> LigneDemandee {
-        LigneDemandee { medicament_id, quantite, lot_id }
+        LigneDemandee {
+            medicament_id,
+            quantite,
+            lot_id,
+        }
     }
 
     pub(crate) fn vente_de(lignes: Vec<LigneDemandee>) -> NouvelleVente {
-        NouvelleVente { sur_ordonnance_papier: false, lignes }
+        NouvelleVente {
+            sur_ordonnance_papier: false,
+            lignes,
+        }
     }
 
     async fn quantite(pool: &PgPool, lot_id: Uuid) -> i64 {
-        sqlx::query_scalar("SELECT COALESCE(sum(quantite), 0)::BIGINT FROM mouvement_stock WHERE lot_id = $1")
-            .bind(lot_id)
-            .fetch_one(pool)
-            .await
-            .unwrap()
+        sqlx::query_scalar(
+            "SELECT COALESCE(sum(quantite), 0)::BIGINT FROM mouvement_stock WHERE lot_id = $1",
+        )
+        .bind(lot_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
     }
 
     /// Lot périmé posé en SQL (l'entrée refuse un lot déjà périmé).
-    async fn lot_perime(pool: &PgPool, auteur: AffectationPharmacie, medicament_id: Uuid, quantite: i32) -> Uuid {
+    async fn lot_perime(
+        pool: &PgPool,
+        auteur: AffectationPharmacie,
+        medicament_id: Uuid,
+        quantite: i32,
+    ) -> Uuid {
         let lot: Uuid = sqlx::query_scalar(
             "INSERT INTO lot_stock (structure_id, medicament_id, numero_lot, date_expiration, prix_achat_unitaire_fcfa, fournisseur) \
              VALUES ($1, $2, 'PERIME-1', CURRENT_DATE - 2, 50, 'Grossiste fictif') RETURNING id",
@@ -1315,62 +1700,181 @@ pub(crate) mod tests {
         let (responsable, pharmacien) = pharmacie(&pool, "706001").await;
         let (x, _, _) = catalogue_fictif(&pool).await;
 
-        assert!(matches!(entrer(&pool, pharmacien, None, &entree(x, "L-PASSE", -1, 5, 100)).await, Err(Erreur::DonneesInvalides(_))));
-        assert!(matches!(entrer(&pool, pharmacien, None, &entree(x, "L", 30, 0, 100)).await, Err(Erreur::DonneesInvalides(_))));
-        assert!(matches!(entrer(&pool, pharmacien, None, &entree(Uuid::max(), "L", 30, 5, 100)).await, Err(Erreur::MedicamentInconnu)));
-        let lot_a = entrer(&pool, pharmacien, None, &entree(x, "LOT-A", 30, 10, 100)).await.unwrap();
-        let lot_b = entrer(&pool, pharmacien, None, &entree(x, "LOT-B", 10, 5, 120)).await.unwrap();
+        assert!(matches!(
+            entrer(&pool, pharmacien, None, &entree(x, "L-PASSE", -1, 5, 100)).await,
+            Err(Erreur::DonneesInvalides(_))
+        ));
+        assert!(matches!(
+            entrer(&pool, pharmacien, None, &entree(x, "L", 30, 0, 100)).await,
+            Err(Erreur::DonneesInvalides(_))
+        ));
+        assert!(matches!(
+            entrer(
+                &pool,
+                pharmacien,
+                None,
+                &entree(Uuid::max(), "L", 30, 5, 100)
+            )
+            .await,
+            Err(Erreur::MedicamentInconnu)
+        ));
+        let lot_a = entrer(&pool, pharmacien, None, &entree(x, "LOT-A", 30, 10, 100))
+            .await
+            .unwrap();
+        let lot_b = entrer(&pool, pharmacien, None, &entree(x, "LOT-B", 10, 5, 120))
+            .await
+            .unwrap();
         assert_eq!((lot_a.quantite, lot_a.perime), (10, false));
         let perime = lot_perime(&pool, pharmacien, x, 4).await;
 
         // Sans prix : bloqué. Le prix ne se fixe que par le responsable.
-        assert!(matches!(vendre(&pool, pharmacien, None, &vente_de(vec![ligne(x, 1, None)])).await, Err(Erreur::PrixNonDefini { .. })));
-        assert!(fixer_prix(&pool, pharmacien, x, 200).await.is_err(), "la base refuse un pharmacien comme auteur d'un prix");
+        assert!(matches!(
+            vendre(&pool, pharmacien, None, &vente_de(vec![ligne(x, 1, None)])).await,
+            Err(Erreur::PrixNonDefini { .. })
+        ));
+        assert!(
+            fixer_prix(&pool, pharmacien, x, 200).await.is_err(),
+            "la base refuse un pharmacien comme auteur d'un prix"
+        );
         fixer_prix(&pool, responsable, x, 200).await.unwrap();
 
         // FEFO : le lot B (10 jours) part avant le lot A (30 jours) ; le lot
         // périmé jamais.
-        let v = vendre(&pool, pharmacien, None, &vente_de(vec![ligne(x, 7, None)])).await.unwrap();
-        let sorties: Vec<(Uuid, i32, Option<i32>, i32)> =
-            v.lignes.iter().map(|l| (l.lot_id, l.quantite, l.prix_vente_unitaire_fcfa, l.prix_achat_unitaire_fcfa)).collect();
-        assert_eq!(sorties, [(lot_b.id, -5, Some(200), 120), (lot_a.id, -2, Some(200), 100)]);
+        let v = vendre(&pool, pharmacien, None, &vente_de(vec![ligne(x, 7, None)]))
+            .await
+            .unwrap();
+        let sorties: Vec<(Uuid, i32, Option<i32>, i32)> = v
+            .lignes
+            .iter()
+            .map(|l| {
+                (
+                    l.lot_id,
+                    l.quantite,
+                    l.prix_vente_unitaire_fcfa,
+                    l.prix_achat_unitaire_fcfa,
+                )
+            })
+            .collect();
+        assert_eq!(
+            sorties,
+            [
+                (lot_b.id, -5, Some(200), 120),
+                (lot_a.id, -2, Some(200), 100)
+            ]
+        );
         assert_eq!(v.total_fcfa, 1400);
         assert_eq!(quantite(&pool, perime).await, 4);
 
         // Un nouveau prix ne change pas la vente passée.
         fixer_prix(&pool, responsable, x, 250).await.unwrap();
-        assert_eq!(vente(&pool, responsable.structure_id, v.id).await.unwrap().unwrap().total_fcfa, 1400);
+        assert_eq!(
+            vente(&pool, responsable.structure_id, v.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .total_fcfa,
+            1400
+        );
 
         // Disponible : 8 (le lot périmé ne compte pas).
         match vendre(&pool, pharmacien, None, &vente_de(vec![ligne(x, 9, None)])).await {
-            Err(Erreur::StockInsuffisant { quantite_disponible, .. }) => assert_eq!(quantite_disponible, 8),
+            Err(Erreur::StockInsuffisant {
+                quantite_disponible,
+                ..
+            }) => assert_eq!(quantite_disponible, 8),
             autre => panic!("{autre:?}"),
         }
-        assert!(matches!(vendre(&pool, pharmacien, None, &vente_de(vec![ligne(x, 1, Some(perime))])).await, Err(Erreur::LotPerime)));
-        let choisi = vendre(&pool, pharmacien, None, &vente_de(vec![ligne(x, 1, Some(lot_a.id))])).await.unwrap();
-        assert_eq!((choisi.lignes[0].lot_id, choisi.total_fcfa), (lot_a.id, 250));
+        assert!(matches!(
+            vendre(
+                &pool,
+                pharmacien,
+                None,
+                &vente_de(vec![ligne(x, 1, Some(perime))])
+            )
+            .await,
+            Err(Erreur::LotPerime)
+        ));
+        let choisi = vendre(
+            &pool,
+            pharmacien,
+            None,
+            &vente_de(vec![ligne(x, 1, Some(lot_a.id))]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (choisi.lignes[0].lot_id, choisi.total_fcfa),
+            (lot_a.id, 250)
+        );
 
         // Annulation d'une vente entière : le stock revient dans ses lots.
-        let annulee = annuler_vente(&pool, pharmacien, None, v.id, &Annulation { motif: "Erreur de saisie".into() }).await.unwrap();
+        let annulee = annuler_vente(
+            &pool,
+            pharmacien,
+            None,
+            v.id,
+            &Annulation {
+                motif: "Erreur de saisie".into(),
+            },
+        )
+        .await
+        .unwrap();
         assert!(annulee.annulee && annulee.total_fcfa == 0);
-        assert_eq!((quantite(&pool, lot_a.id).await, quantite(&pool, lot_b.id).await), (9, 5));
+        assert_eq!(
+            (
+                quantite(&pool, lot_a.id).await,
+                quantite(&pool, lot_b.id).await
+            ),
+            (9, 5)
+        );
         assert!(matches!(
-            annuler_vente(&pool, pharmacien, None, v.id, &Annulation { motif: "Encore".into() }).await,
+            annuler_vente(
+                &pool,
+                pharmacien,
+                None,
+                v.id,
+                &Annulation {
+                    motif: "Encore".into()
+                }
+            )
+            .await,
             Err(Erreur::DejaAnnule)
         ));
 
         // État du stock.
-        let etat = etat(&pool, responsable.structure_id, None, 50).await.unwrap();
+        let etat = etat(&pool, responsable.structure_id, None, 50)
+            .await
+            .unwrap();
         assert_eq!(etat.len(), 1);
-        assert_eq!((etat[0].quantite_disponible, etat[0].quantite_perimee, etat[0].prix_vente_unitaire_fcfa), (14, 4, Some(250)));
+        assert_eq!(
+            (
+                etat[0].quantite_disponible,
+                etat[0].quantite_perimee,
+                etat[0].prix_vente_unitaire_fcfa
+            ),
+            (14, 4, Some(250))
+        );
         assert_eq!(etat[0].valeur_achat_fcfa, 9 * 100 + 5 * 120 + 4 * 50);
-        let lots = lots_du_medicament(&pool, responsable.structure_id, x).await.unwrap();
-        assert_eq!(lots.iter().map(|l| l.id).collect::<Vec<_>>(), [perime, lot_b.id, lot_a.id], "ordre FEFO");
+        let lots = lots_du_medicament(&pool, responsable.structure_id, x)
+            .await
+            .unwrap();
+        assert_eq!(
+            lots.iter().map(|l| l.id).collect::<Vec<_>>(),
+            [perime, lot_b.id, lot_a.id],
+            "ordre FEFO"
+        );
 
         // Le journal ne se modifie ni ne s'efface.
-        for requete in ["UPDATE mouvement_stock SET quantite = 1", "DELETE FROM lot_stock", "TRUNCATE vente CASCADE"] {
+        for requete in [
+            "UPDATE mouvement_stock SET quantite = 1",
+            "DELETE FROM lot_stock",
+            "TRUNCATE vente CASCADE",
+        ] {
             let erreur = sqlx::query(requete).execute(&pool).await.unwrap_err();
-            assert!(erreur.to_string().contains("jamais modifiees"), "{requete} : {erreur}");
+            assert!(
+                erreur.to_string().contains("jamais modifiees"),
+                "{requete} : {erreur}"
+            );
         }
     }
 
@@ -1382,29 +1886,103 @@ pub(crate) mod tests {
         let (resp_1, pharm_1) = pharmacie(&pool, "706101").await;
         let (resp_2, pharm_2) = pharmacie(&pool, "706102").await;
         let (x, _, _) = catalogue_fictif(&pool).await;
-        let lot = entrer(&pool, pharm_1, None, &entree(x, "LOT-1", 30, 10, 100)).await.unwrap();
+        let lot = entrer(&pool, pharm_1, None, &entree(x, "LOT-1", 30, 10, 100))
+            .await
+            .unwrap();
         fixer_prix(&pool, resp_1, x, 200).await.unwrap();
         fixer_prix(&pool, resp_2, x, 200).await.unwrap();
-        let v = vendre(&pool, pharm_1, None, &vente_de(vec![ligne(x, 1, None)])).await.unwrap();
+        let v = vendre(&pool, pharm_1, None, &vente_de(vec![ligne(x, 1, None)]))
+            .await
+            .unwrap();
 
-        assert!(matches!(vendre(&pool, pharm_2, None, &vente_de(vec![ligne(x, 1, Some(lot.id))])).await, Err(Erreur::LotInconnu)));
+        assert!(matches!(
+            vendre(
+                &pool,
+                pharm_2,
+                None,
+                &vente_de(vec![ligne(x, 1, Some(lot.id))])
+            )
+            .await,
+            Err(Erreur::LotInconnu)
+        ));
         assert!(matches!(
             vendre(&pool, pharm_2, None, &vente_de(vec![ligne(x, 1, None)])).await,
-            Err(Erreur::StockInsuffisant { quantite_disponible: 0, .. })
+            Err(Erreur::StockInsuffisant {
+                quantite_disponible: 0,
+                ..
+            })
         ));
-        let perte = NouvellePerte { lot_id: lot.id, quantite: 1, motif: MotifPerte::Casse, commentaire: None };
-        assert!(matches!(declarer_perte(&pool, pharm_2, None, &perte).await, Err(Erreur::LotInconnu)));
-        let compte = NouvelInventaire { lignes: vec![LigneInventaire { lot_id: lot.id, quantite_comptee: 0 }] };
-        assert!(matches!(inventorier(&pool, pharm_2, None, &compte).await, Err(Erreur::LotInconnu)));
-        let motif = Annulation { motif: "Intrusion".into() };
-        assert!(matches!(annuler_vente(&pool, pharm_2, None, v.id, &motif).await, Err(Erreur::VenteInconnue)));
-        assert!(matches!(annuler_mouvement(&pool, pharm_2, None, v.lignes[0].id, &motif).await, Err(Erreur::MouvementInconnu)));
-        assert!(vente(&pool, resp_2.structure_id, v.id).await.unwrap().is_none());
-        assert!(etat(&pool, resp_2.structure_id, None, 50).await.unwrap().is_empty());
-        assert!(journal(&pool, resp_2.structure_id, None, 50).await.unwrap().is_empty());
-        assert!(lots_du_medicament(&pool, resp_2.structure_id, x).await.unwrap().is_empty());
-        assert_eq!(equivalents(&pool, resp_2.structure_id, x).await.unwrap().unwrap().equivalents.iter().map(|e| e.quantite_disponible).sum::<i64>(), 0);
-        assert_eq!(quantite(&pool, lot.id).await, 9, "rien n'a bougé chez la pharmacie 1");
+        let perte = NouvellePerte {
+            lot_id: lot.id,
+            quantite: 1,
+            motif: MotifPerte::Casse,
+            commentaire: None,
+        };
+        assert!(matches!(
+            declarer_perte(&pool, pharm_2, None, &perte).await,
+            Err(Erreur::LotInconnu)
+        ));
+        let compte = NouvelInventaire {
+            lignes: vec![LigneInventaire {
+                lot_id: lot.id,
+                quantite_comptee: 0,
+            }],
+        };
+        assert!(matches!(
+            inventorier(&pool, pharm_2, None, &compte).await,
+            Err(Erreur::LotInconnu)
+        ));
+        let motif = Annulation {
+            motif: "Intrusion".into(),
+        };
+        assert!(matches!(
+            annuler_vente(&pool, pharm_2, None, v.id, &motif).await,
+            Err(Erreur::VenteInconnue)
+        ));
+        assert!(matches!(
+            annuler_mouvement(&pool, pharm_2, None, v.lignes[0].id, &motif).await,
+            Err(Erreur::MouvementInconnu)
+        ));
+        assert!(
+            vente(&pool, resp_2.structure_id, v.id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            etat(&pool, resp_2.structure_id, None, 50)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            journal(&pool, resp_2.structure_id, None, 50)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            lots_du_medicament(&pool, resp_2.structure_id, x)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            equivalents(&pool, resp_2.structure_id, x)
+                .await
+                .unwrap()
+                .unwrap()
+                .equivalents
+                .iter()
+                .map(|e| e.quantite_disponible)
+                .sum::<i64>(),
+            0
+        );
+        assert_eq!(
+            quantite(&pool, lot.id).await,
+            9,
+            "rien n'a bougé chez la pharmacie 1"
+        );
 
         // La base refuse un mouvement qui viserait le lot d'une autre
         // pharmacie (clé étrangère composite).
@@ -1419,7 +1997,10 @@ pub(crate) mod tests {
         .execute(&pool)
         .await
         .unwrap_err();
-        assert_eq!(erreur.as_database_error().and_then(|e| e.constraint()), Some("mouvement_lot_de_sa_pharmacie"));
+        assert_eq!(
+            erreur.as_database_error().and_then(|e| e.constraint()),
+            Some("mouvement_lot_de_sa_pharmacie")
+        );
     }
 
     /// Clé d'idempotence : la même requête rejouée renvoie le même objet,
@@ -1434,36 +2015,249 @@ pub(crate) mod tests {
         let cle = |texte: &str| Cle::lire(texte).unwrap();
 
         let e = entree(x, "LOT-1", 30, 3, 100);
-        let premier = entrer(&pool, pharmacien, Some(&cle("cle-entree-1")), &e).await.unwrap();
-        let rejoue = entrer(&pool, pharmacien, Some(&cle("cle-entree-1")), &e).await.unwrap();
+        let premier = entrer(&pool, pharmacien, Some(&cle("cle-entree-1")), &e)
+            .await
+            .unwrap();
+        let rejoue = entrer(&pool, pharmacien, Some(&cle("cle-entree-1")), &e)
+            .await
+            .unwrap();
         assert_eq!(premier.id, rejoue.id);
-        let lots: i64 = sqlx::query_scalar("SELECT count(*) FROM lot_stock").fetch_one(&pool).await.unwrap();
+        let lots: i64 = sqlx::query_scalar("SELECT count(*) FROM lot_stock")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(lots, 1);
         assert!(matches!(
-            entrer(&pool, pharmacien, Some(&cle("cle-entree-1")), &entree(x, "LOT-2", 30, 3, 100)).await,
+            entrer(
+                &pool,
+                pharmacien,
+                Some(&cle("cle-entree-1")),
+                &entree(x, "LOT-2", 30, 3, 100)
+            )
+            .await,
             Err(Erreur::Idempotence(ErreurIdempotence::CleReutilisee))
         ));
 
         let v = vente_de(vec![ligne(x, 1, None)]);
-        let vente_1 = vendre(&pool, pharmacien, Some(&cle("cle-vente-1")), &v).await.unwrap();
-        let vente_1_bis = vendre(&pool, pharmacien, Some(&cle("cle-vente-1")), &v).await.unwrap();
+        let vente_1 = vendre(&pool, pharmacien, Some(&cle("cle-vente-1")), &v)
+            .await
+            .unwrap();
+        let vente_1_bis = vendre(&pool, pharmacien, Some(&cle("cle-vente-1")), &v)
+            .await
+            .unwrap();
         assert_eq!(vente_1.id, vente_1_bis.id);
         assert_eq!(quantite(&pool, premier.id).await, 2, "une seule sortie");
-        let a = Annulation { motif: "Erreur".into() };
-        let annulee = annuler_vente(&pool, pharmacien, Some(&cle("cle-annul-1")), vente_1.id, &a).await.unwrap();
-        let annulee_bis = annuler_vente(&pool, pharmacien, Some(&cle("cle-annul-1")), vente_1.id, &a).await.unwrap();
+        let a = Annulation {
+            motif: "Erreur".into(),
+        };
+        let annulee = annuler_vente(&pool, pharmacien, Some(&cle("cle-annul-1")), vente_1.id, &a)
+            .await
+            .unwrap();
+        let annulee_bis =
+            annuler_vente(&pool, pharmacien, Some(&cle("cle-annul-1")), vente_1.id, &a)
+                .await
+                .unwrap();
         assert!(annulee.annulee && annulee_bis.annulee && annulee_bis.id == vente_1.id);
         assert_eq!(quantite(&pool, premier.id).await, 3);
 
         // Dernières unités : deux ventes simultanées de 2 sur 3.
         let (p1, p2) = (pool.clone(), pool.clone());
-        let (v1, v2) = (vente_de(vec![ligne(x, 2, None)]), vente_de(vec![ligne(x, 2, None)]));
+        let (v1, v2) = (
+            vente_de(vec![ligne(x, 2, None)]),
+            vente_de(vec![ligne(x, 2, None)]),
+        );
         let t1 = tokio::spawn(async move { vendre(&p1, pharmacien, None, &v1).await });
         let t2 = tokio::spawn(async move { vendre(&p2, pharmacien, None, &v2).await });
         let resultats = [t1.await.unwrap(), t2.await.unwrap()];
         assert_eq!(resultats.iter().filter(|r| r.is_ok()).count(), 1);
-        assert!(resultats.iter().any(|r| matches!(r, Err(Erreur::StockInsuffisant { .. }))));
+        assert!(
+            resultats
+                .iter()
+                .any(|r| matches!(r, Err(Erreur::StockInsuffisant { .. })))
+        );
         assert_eq!(quantite(&pool, premier.id).await, 1);
+    }
+
+    #[test]
+    fn expiration_au_mois_regle_prudente() {
+        let avec = |date: Option<NaiveDate>, mois: Option<&str>| NouvelleEntree {
+            mois_expiration: mois.map(String::from),
+            date_expiration: date,
+            ..entree(Uuid::nil(), "L", 0, 1, 1)
+        };
+        let jour = |a, m, j| NaiveDate::from_ymd_opt(a, m, j).unwrap();
+        // « EXP 06/2027 » : périmé dès le 1er juin, utilisable jusqu'au 31 mai.
+        assert_eq!(
+            expiration(&avec(None, Some("2027-06"))).unwrap(),
+            (jour(2027, 5, 31), true)
+        );
+        assert_eq!(
+            expiration(&avec(None, Some(" 2028-03 "))).unwrap(),
+            (jour(2028, 2, 29), true),
+            "année bissextile"
+        );
+        assert_eq!(
+            expiration(&avec(None, Some("2027-01"))).unwrap(),
+            (jour(2026, 12, 31), true)
+        );
+        assert_eq!(
+            expiration(&avec(Some(jour(2027, 6, 15)), None)).unwrap(),
+            (jour(2027, 6, 15), false)
+        );
+        for mauvais in ["2027-6", "06/2027", "2027-13", "2027-00", "2027-06-01", ""] {
+            assert!(
+                matches!(
+                    expiration(&avec(None, Some(mauvais))),
+                    Err(Erreur::DonneesInvalides(_))
+                ),
+                "{mauvais:?}"
+            );
+        }
+        assert!(matches!(
+            expiration(&avec(Some(jour(2027, 6, 1)), Some("2027-06"))),
+            Err(Erreur::DonneesInvalides(_))
+        ));
+        assert!(matches!(
+            expiration(&avec(None, None)),
+            Err(Erreur::DonneesInvalides(_))
+        ));
+    }
+
+    /// Entrée d'une boîte au mois seul : date enregistrée, mois imprimé
+    /// rendu, boîte du mois en cours refusée (déjà périmée selon la règle
+    /// prudente), garantie de la base sur la fin de mois.
+    #[sqlx::test]
+    #[ignore]
+    async fn entree_au_mois_seul(pool: PgPool) {
+        let (_, pharmacien) = pharmacie(&pool, "706801").await;
+        let (x, _, _) = catalogue_fictif(&pool).await;
+        let aujourdhui = dans(0);
+        let premier_du_mois = |date: NaiveDate| chrono::Datelike::with_day(&date, 1).unwrap();
+        // Le mois qui commence dans trois mois environ.
+        let futur = premier_du_mois(premier_du_mois(aujourdhui) + chrono::Duration::days(95));
+        let e = NouvelleEntree {
+            date_expiration: None,
+            mois_expiration: Some(futur.format("%Y-%m").to_string()),
+            ..entree(x, "LOT-M", 0, 5, 100)
+        };
+        let lot = entrer(&pool, pharmacien, None, &e).await.unwrap();
+        assert_eq!(lot.date_expiration, futur.pred_opt().unwrap());
+        assert_eq!(
+            lot.mois_expiration_imprime.as_deref(),
+            Some(futur.format("%Y-%m").to_string().as_str())
+        );
+        let date_complete = entrer(&pool, pharmacien, None, &entree(x, "LOT-J", 30, 5, 100))
+            .await
+            .unwrap();
+        assert_eq!(date_complete.mois_expiration_imprime, None);
+
+        // Une boîte « mois en cours » est déjà périmée : refusée à l'entrée.
+        let en_cours = NouvelleEntree {
+            date_expiration: None,
+            mois_expiration: Some(aujourdhui.format("%Y-%m").to_string()),
+            ..entree(x, "LOT-C", 0, 5, 100)
+        };
+        assert!(matches!(
+            entrer(&pool, pharmacien, None, &en_cours).await,
+            Err(Erreur::DonneesInvalides(_))
+        ));
+
+        let erreur = sqlx::query(
+            "INSERT INTO lot_stock (structure_id, medicament_id, numero_lot, date_expiration, prix_achat_unitaire_fcfa, \
+                                    fournisseur, expiration_mois_seul) \
+             VALUES ($1, $2, 'LOT-X', '2027-06-15', 100, 'Grossiste fictif', true)",
+        )
+        .bind(pharmacien.structure_id)
+        .bind(x)
+        .execute(&pool)
+        .await
+        .unwrap_err();
+        assert_eq!(
+            erreur.as_database_error().and_then(|e| e.constraint()),
+            Some("lot_expiration_mois_seul_fin_de_mois")
+        );
+    }
+
+    /// Équivalents classés (demande du porteur du 2026-11-16) : d'abord
+    /// même DCI, même dosage et même forme ; ensuite dosage ou forme
+    /// différents, marqués ; jamais une association ; rien n'est caché, même
+    /// sans stock.
+    #[sqlx::test]
+    #[ignore]
+    async fn equivalents_classes_par_dosage_et_forme(pool: PgPool) {
+        let (_, pharmacien) = pharmacie(&pool, "706601").await;
+        let (x, y, z) = catalogue_fictif(&pool).await;
+        let admin: Uuid =
+            sqlx::query_scalar("SELECT administrateur_compte_id FROM import_catalogue")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let complement = "denomination;dci;forme;dosage\n\
+                          Produit W fictif;Molécule-A fictive;comprimé;1 g\n\
+                          Produit V fictif;MOLÉCULE-A FICTIVE;sirop;500 mg\n\
+                          Produit U fictif;Molécule-A fictive;Comprimé;500  MG\n";
+        crate::catalogue::importer(&pool, admin, "Liste fictive 2", complement.as_bytes())
+            .await
+            .unwrap();
+        let id = |nom: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, Uuid>("SELECT id FROM medicament WHERE denomination = $1")
+                    .bind(nom)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+            }
+        };
+        let (w, v, u) = (
+            id("Produit W fictif").await,
+            id("Produit V fictif").await,
+            id("Produit U fictif").await,
+        );
+        // Seul W est en stock : il reste quand même après les identiques.
+        entrer(&pool, pharmacien, None, &entree(w, "LOT-W", 60, 3, 100))
+            .await
+            .unwrap();
+
+        let eq = equivalents(&pool, pharmacien.structure_id, x)
+            .await
+            .unwrap()
+            .unwrap();
+        let vus: Vec<(Uuid, Correspondance, bool, bool, i64)> = eq
+            .equivalents
+            .iter()
+            .map(|e| {
+                (
+                    e.medicament.id,
+                    e.correspondance,
+                    e.meme_dosage,
+                    e.meme_forme,
+                    e.quantite_disponible,
+                )
+            })
+            .collect();
+        use Correspondance::*;
+        assert_eq!(
+            vus,
+            [
+                // Identiques (majuscules et espaces en trop ignorées), par nom.
+                (u, MemeDciMemeDosageMemeForme, true, true, 0),
+                (y, MemeDciMemeDosageMemeForme, true, true, 0),
+                // Différents : en stock d'abord.
+                (w, MemeDciDosageOuFormeDifferent, false, true, 3),
+                (v, MemeDciDosageOuFormeDifferent, true, false, 0),
+            ]
+        );
+        assert!(
+            vus.iter().all(|e| e.0 != z && e.0 != x),
+            "ni l'association ni le médicament lui-même"
+        );
+        let json = serde_json::to_value(&eq.equivalents[2]).unwrap();
+        assert_eq!(json["correspondance"], "meme_dci_dosage_ou_forme_different");
+        assert_eq!(
+            (json["meme_dosage"].as_bool(), json["denomination"].as_str()),
+            (Some(false), Some("Produit W fictif"))
+        );
     }
 
     /// Pertes, inventaire express, annulations, seuils et alertes,
@@ -1473,9 +2267,15 @@ pub(crate) mod tests {
     async fn pertes_inventaire_alertes_et_equivalents(pool: PgPool) {
         let (responsable, pharmacien) = pharmacie(&pool, "706301").await;
         let (x, y, z) = catalogue_fictif(&pool).await;
-        let lot_a = entrer(&pool, pharmacien, None, &entree(x, "LOT-A", 30, 10, 100)).await.unwrap();
-        let lot_b = entrer(&pool, pharmacien, None, &entree(x, "LOT-B", 200, 5, 100)).await.unwrap();
-        let lot_y = entrer(&pool, pharmacien, None, &entree(y, "LOT-Y", 200, 4, 90)).await.unwrap();
+        let lot_a = entrer(&pool, pharmacien, None, &entree(x, "LOT-A", 30, 10, 100))
+            .await
+            .unwrap();
+        let lot_b = entrer(&pool, pharmacien, None, &entree(x, "LOT-B", 200, 5, 100))
+            .await
+            .unwrap();
+        let lot_y = entrer(&pool, pharmacien, None, &entree(y, "LOT-Y", 200, 4, 90))
+            .await
+            .unwrap();
         let perime = lot_perime(&pool, pharmacien, x, 3).await;
 
         // Pertes.
@@ -1485,66 +2285,239 @@ pub(crate) mod tests {
             motif,
             commentaire: commentaire.map(String::from),
         };
-        let casse = declarer_perte(&pool, pharmacien, None, &perte(lot_a.id, 2, MotifPerte::Casse, None)).await.unwrap();
-        assert_eq!((casse.quantite, casse.motif_perte.as_deref(), casse.prix_achat_unitaire_fcfa), (-2, Some("casse"), 100));
-        assert!(matches!(declarer_perte(&pool, pharmacien, None, &perte(lot_a.id, 1, MotifPerte::Autre, None)).await, Err(Erreur::DonneesInvalides(_))));
+        let casse = declarer_perte(
+            &pool,
+            pharmacien,
+            None,
+            &perte(lot_a.id, 2, MotifPerte::Casse, None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (
+                casse.quantite,
+                casse.motif_perte.as_deref(),
+                casse.prix_achat_unitaire_fcfa
+            ),
+            (-2, Some("casse"), 100)
+        );
         assert!(matches!(
-            declarer_perte(&pool, pharmacien, None, &perte(lot_a.id, 99, MotifPerte::Casse, None)).await,
-            Err(Erreur::StockInsuffisant { quantite_disponible: 8, .. })
+            declarer_perte(
+                &pool,
+                pharmacien,
+                None,
+                &perte(lot_a.id, 1, MotifPerte::Autre, None)
+            )
+            .await,
+            Err(Erreur::DonneesInvalides(_))
         ));
-        declarer_perte(&pool, pharmacien, None, &perte(perime, 3, MotifPerte::Peremption, None)).await.unwrap();
+        assert!(matches!(
+            declarer_perte(
+                &pool,
+                pharmacien,
+                None,
+                &perte(lot_a.id, 99, MotifPerte::Casse, None)
+            )
+            .await,
+            Err(Erreur::StockInsuffisant {
+                quantite_disponible: 8,
+                ..
+            })
+        ));
+        declarer_perte(
+            &pool,
+            pharmacien,
+            None,
+            &perte(perime, 3, MotifPerte::Peremption, None),
+        )
+        .await
+        .unwrap();
 
         // Inventaire : A compté 6 (stock 8, écart -2), B juste.
         let compte = NouvelInventaire {
             lignes: vec![
-                LigneInventaire { lot_id: lot_a.id, quantite_comptee: 6 },
-                LigneInventaire { lot_id: lot_b.id, quantite_comptee: 5 },
+                LigneInventaire {
+                    lot_id: lot_a.id,
+                    quantite_comptee: 6,
+                },
+                LigneInventaire {
+                    lot_id: lot_b.id,
+                    quantite_comptee: 5,
+                },
             ],
         };
         let inventaire = inventorier(&pool, pharmacien, None, &compte).await.unwrap();
-        assert_eq!(inventaire.ecarts.iter().map(|e| (e.lot_id, e.quantite)).collect::<Vec<_>>(), [(lot_a.id, -2)]);
-        let double = NouvelInventaire { lignes: vec![compte.lignes[0].clone(), compte.lignes[0].clone()] };
-        assert!(matches!(inventorier(&pool, pharmacien, None, &double).await, Err(Erreur::DonneesInvalides(_))));
+        assert_eq!(
+            inventaire
+                .ecarts
+                .iter()
+                .map(|e| (e.lot_id, e.quantite))
+                .collect::<Vec<_>>(),
+            [(lot_a.id, -2)]
+        );
+        let double = NouvelInventaire {
+            lignes: vec![compte.lignes[0].clone(), compte.lignes[0].clone()],
+        };
+        assert!(matches!(
+            inventorier(&pool, pharmacien, None, &double).await,
+            Err(Erreur::DonneesInvalides(_))
+        ));
 
         // Annulations : une perte revient ; une annulation ne s'annule pas ;
         // une entrée en partie sortie ne s'annule pas.
-        let motif = Annulation { motif: "Erreur de saisie".into() };
-        let retour = annuler_mouvement(&pool, pharmacien, None, casse.id, &motif).await.unwrap();
-        assert_eq!((retour.nature.as_str(), retour.quantite, retour.annule_mouvement_id), ("annulation", 2, Some(casse.id)));
+        let motif = Annulation {
+            motif: "Erreur de saisie".into(),
+        };
+        let retour = annuler_mouvement(&pool, pharmacien, None, casse.id, &motif)
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                retour.nature.as_str(),
+                retour.quantite,
+                retour.annule_mouvement_id
+            ),
+            ("annulation", 2, Some(casse.id))
+        );
         assert_eq!(quantite(&pool, lot_a.id).await, 8);
-        assert!(matches!(annuler_mouvement(&pool, pharmacien, None, retour.id, &motif).await, Err(Erreur::AnnulationImpossible)));
-        assert!(matches!(annuler_mouvement(&pool, pharmacien, None, casse.id, &motif).await, Err(Erreur::DejaAnnule)));
+        assert!(matches!(
+            annuler_mouvement(&pool, pharmacien, None, retour.id, &motif).await,
+            Err(Erreur::AnnulationImpossible)
+        ));
+        assert!(matches!(
+            annuler_mouvement(&pool, pharmacien, None, casse.id, &motif).await,
+            Err(Erreur::DejaAnnule)
+        ));
         let entree_a = journal(&pool, pharmacien.structure_id, None, 100)
             .await
             .unwrap()
             .into_iter()
             .find(|m| m.lot_id == lot_a.id && m.nature == "entree")
             .unwrap();
-        assert!(matches!(annuler_mouvement(&pool, pharmacien, None, entree_a.id, &motif).await, Err(Erreur::StockInsuffisant { .. })));
+        assert!(matches!(
+            annuler_mouvement(&pool, pharmacien, None, entree_a.id, &motif).await,
+            Err(Erreur::StockInsuffisant { .. })
+        ));
 
         // Seuils et alertes ; alerte de péremption désactivée par défaut.
-        fixer_seuils(&pool, pharmacien, x, &Seuils { seuil_min: 20, seuil_max: None }).await.unwrap();
-        fixer_seuils(&pool, pharmacien, y, &Seuils { seuil_min: 0, seuil_max: Some(1) }).await.unwrap();
-        assert!(matches!(fixer_seuils(&pool, pharmacien, y, &Seuils { seuil_min: 5, seuil_max: Some(1) }).await, Err(Erreur::DonneesInvalides(_))));
+        fixer_seuils(
+            &pool,
+            pharmacien,
+            x,
+            &Seuils {
+                seuil_min: 20,
+                seuil_max: None,
+            },
+        )
+        .await
+        .unwrap();
+        fixer_seuils(
+            &pool,
+            pharmacien,
+            y,
+            &Seuils {
+                seuil_min: 0,
+                seuil_max: Some(1),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            fixer_seuils(
+                &pool,
+                pharmacien,
+                y,
+                &Seuils {
+                    seuil_min: 5,
+                    seuil_max: Some(1)
+                }
+            )
+            .await,
+            Err(Erreur::DonneesInvalides(_))
+        ));
         let a = alertes(&pool, pharmacien.structure_id).await.unwrap();
-        assert_eq!(a.sous_seuil_min.iter().map(|s| (s.medicament_id, s.quantite_disponible)).collect::<Vec<_>>(), [(x, 13)]);
-        assert_eq!(a.au_dessus_seuil_max.iter().map(|s| s.medicament_id).collect::<Vec<_>>(), [y]);
+        assert_eq!(
+            a.sous_seuil_min
+                .iter()
+                .map(|s| (s.medicament_id, s.quantite_disponible))
+                .collect::<Vec<_>>(),
+            [(x, 13)]
+        );
+        assert_eq!(
+            a.au_dessus_seuil_max
+                .iter()
+                .map(|s| s.medicament_id)
+                .collect::<Vec<_>>(),
+            [y]
+        );
         assert!(!a.alerte_peremption_active && a.bientot_perimes.is_empty());
-        assert!(a.perimes_en_stock.is_empty(), "le lot périmé est sorti en perte");
+        assert!(
+            a.perimes_en_stock.is_empty(),
+            "le lot périmé est sorti en perte"
+        );
 
-        assert!(regler(&pool, pharmacien, &Reglages { delai_alerte_peremption_jours: Some(40) }).await.is_err(), "réservé au responsable par la base");
-        assert!(matches!(regler(&pool, responsable, &Reglages { delai_alerte_peremption_jours: Some(0) }).await, Err(Erreur::DonneesInvalides(_))));
-        regler(&pool, responsable, &Reglages { delai_alerte_peremption_jours: Some(40) }).await.unwrap();
+        assert!(
+            regler(
+                &pool,
+                pharmacien,
+                &Reglages {
+                    delai_alerte_peremption_jours: Some(40)
+                }
+            )
+            .await
+            .is_err(),
+            "réservé au responsable par la base"
+        );
+        assert!(matches!(
+            regler(
+                &pool,
+                responsable,
+                &Reglages {
+                    delai_alerte_peremption_jours: Some(0)
+                }
+            )
+            .await,
+            Err(Erreur::DonneesInvalides(_))
+        ));
+        regler(
+            &pool,
+            responsable,
+            &Reglages {
+                delai_alerte_peremption_jours: Some(40),
+            },
+        )
+        .await
+        .unwrap();
         let a = alertes(&pool, pharmacien.structure_id).await.unwrap();
         assert!(a.alerte_peremption_active);
-        assert_eq!(a.bientot_perimes.iter().map(|l| (l.lot_id, l.jours_restants)).collect::<Vec<_>>(), [(lot_a.id, 30)]);
+        assert_eq!(
+            a.bientot_perimes
+                .iter()
+                .map(|l| (l.lot_id, l.jours_restants))
+                .collect::<Vec<_>>(),
+            [(lot_a.id, 30)]
+        );
 
         // Équivalents de X : Y (même molécule, en stock), jamais Z
         // (association).
-        let eq = equivalents(&pool, pharmacien.structure_id, x).await.unwrap().unwrap();
-        assert_eq!(eq.equivalents.iter().map(|e| (e.medicament.id, e.quantite_disponible)).collect::<Vec<_>>(), [(y, 4)]);
+        let eq = equivalents(&pool, pharmacien.structure_id, x)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            eq.equivalents
+                .iter()
+                .map(|e| (e.medicament.id, e.quantite_disponible))
+                .collect::<Vec<_>>(),
+            [(y, 4)]
+        );
         assert!(eq.equivalents.iter().all(|e| e.medicament.id != z));
-        assert!(equivalents(&pool, pharmacien.structure_id, Uuid::max()).await.unwrap().is_none());
+        assert!(
+            equivalents(&pool, pharmacien.structure_id, Uuid::max())
+                .await
+                .unwrap()
+                .is_none()
+        );
         let _ = lot_y;
     }
 }

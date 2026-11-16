@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::types::Uuid;
 
 use crate::AppState;
-use crate::erreur_api::{CheminApi, Complement, ErreurApi, JsonApi, RequeteApi, reponse_erreur, reponse_erreur_interne};
+use crate::erreur_api::{
+    CheminApi, Complement, ErreurApi, JsonApi, RequeteApi, reponse_erreur, reponse_erreur_interne,
+};
 use crate::extracteur_jwt::PatientAuthentifie;
 use laaficare_backend::piece_justificative::{self, ErreurPiece, TypePiece};
 use laaficare_backend::structure::{
@@ -135,7 +137,10 @@ fn reponse_erreur_soumission(erreur: ErreurSoumission) -> Response {
         ErreurSoumission::CompteProfessionnelDesactive => (StatusCode::FORBIDDEN, "acces_refuse"),
         ErreurSoumission::TypeNonDisponible => (StatusCode::CONFLICT, "type_non_disponible"),
         ErreurSoumission::PiecesManquantes { pieces } => {
-            let complement = Complement { pieces_manquantes: Some(pieces.clone()), ..Default::default() };
+            let complement = Complement {
+                pieces_manquantes: Some(pieces.clone()),
+                ..Default::default()
+            };
             let corps = ErreurApi::avec("pieces_manquantes", erreur.to_string(), complement);
             return (StatusCode::CONFLICT, Json(corps)).into_response();
         }
@@ -224,7 +229,9 @@ fn reponse_erreur_piece(erreur: ErreurPiece) -> Response {
         // RFC 9110 §15.5.14 : 413 pour un contenu trop grand.
         ErreurPiece::FichierTropGrand => (StatusCode::PAYLOAD_TOO_LARGE, "fichier_trop_grand"),
         ErreurPiece::DonneesInvalides(_) => (StatusCode::UNPROCESSABLE_ENTITY, "donnees_invalides"),
-        ErreurPiece::Interne(detail) => return reponse_erreur_interne("pièce justificative", detail).into_response(),
+        ErreurPiece::Interne(detail) => {
+            return reponse_erreur_interne("pièce justificative", detail).into_response();
+        }
     };
     reponse_erreur(statut, code, erreur.to_string()).into_response()
 }
@@ -249,7 +256,10 @@ pub async fn deposer_piece(
         Err(rejet) if rejet.status() == StatusCode::PAYLOAD_TOO_LARGE => {
             return reponse_erreur_piece(ErreurPiece::FichierTropGrand);
         }
-        Err(rejet) => return reponse_erreur(rejet.status(), "corps_illisible", rejet.body_text()).into_response(),
+        Err(rejet) => {
+            return reponse_erreur(rejet.status(), "corps_illisible", rejet.body_text())
+                .into_response();
+        }
     };
     match piece_justificative::deposer(
         &state.db,
@@ -279,7 +289,9 @@ pub async fn lister_pieces(
     State(state): State<AppState>,
     CheminApi(structure_id): CheminApi<Uuid>,
 ) -> Response {
-    match piece_justificative::lister_pour_createur(&state.db, patient.compte_id, structure_id).await {
+    match piece_justificative::lister_pour_createur(&state.db, patient.compte_id, structure_id)
+        .await
+    {
         Ok(Some(pieces)) => (StatusCode::OK, Json(ListePieces { pieces })).into_response(),
         Ok(None) => reponse_erreur_piece(ErreurPiece::StructureInconnue),
         Err(_) => reponse_erreur_interne("liste des pièces", "erreur de la base").into_response(),
@@ -336,7 +348,16 @@ mod tests {
                 .await
                 .unwrap();
                 let session = session::ouvrir(&state.db, patient, None).await.unwrap();
-                let jeton = state.jwt.emettre(SorteJeton::Patient, patient, 0, None, Some(session.session_id)).unwrap();
+                let jeton = state
+                    .jwt
+                    .emettre(
+                        SorteJeton::Patient,
+                        patient,
+                        0,
+                        None,
+                        Some(session.session_id),
+                    )
+                    .unwrap();
                 (u, format!("Bearer {jeton}"))
             }
         };
@@ -358,8 +379,9 @@ mod tests {
             .route("/api/structures/{id}/pieces", get(lister_pieces))
             .route(
                 "/api/structures/{id}/pieces/{type_piece}",
-                post(deposer_piece)
-                    .layer(axum::extract::DefaultBodyLimit::max(piece_justificative::TAILLE_MAX_OCTETS)),
+                post(deposer_piece).layer(axum::extract::DefaultBodyLimit::max(
+                    piece_justificative::TAILLE_MAX_OCTETS,
+                )),
             )
             .with_state(state);
         let ecoute = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -367,7 +389,10 @@ mod tests {
         tokio::spawn(async move { axum::serve(ecoute, app).await.unwrap() });
 
         // Statut et corps d'une requête, connexion fermée ensuite.
-        let envoyer = |methode: &'static str, chemin: String, autorisation: String, corps: Vec<u8>| async move {
+        let envoyer = |methode: &'static str,
+                       chemin: String,
+                       autorisation: String,
+                       corps: Vec<u8>| async move {
             let mut flux = tokio::net::TcpStream::connect(adresse).await.unwrap();
             let entete = format!(
                 "{methode} {chemin} HTTP/1.1\r\nHost: localhost\r\nAuthorization: {autorisation}\r\n\
@@ -393,16 +418,35 @@ mod tests {
         assert_eq!(statut, 413, "{texte}");
         assert!(texte.contains("fichier_trop_grand"), "{texte}");
 
-        let (statut, texte) = envoyer("POST", chemin.clone(), jeton_intrus.clone(), b"%PDF-1.7".to_vec()).await;
+        let (statut, texte) = envoyer(
+            "POST",
+            chemin.clone(),
+            jeton_intrus.clone(),
+            b"%PDF-1.7".to_vec(),
+        )
+        .await;
         assert_eq!(statut, 404, "{texte}");
 
-        let (statut, texte) = envoyer("POST", chemin, jeton.clone(), b"%PDF-1.7 fictif".to_vec()).await;
+        let (statut, texte) =
+            envoyer("POST", chemin, jeton.clone(), b"%PDF-1.7 fictif".to_vec()).await;
         assert_eq!(statut, 201, "{texte}");
-        assert!(texte.contains("\"type_mime\":\"application/pdf\""), "{texte}");
+        assert!(
+            texte.contains("\"type_mime\":\"application/pdf\""),
+            "{texte}"
+        );
 
-        let (statut, texte) = envoyer("GET", format!("/api/structures/{structure_id}/pieces"), jeton, Vec::new()).await;
+        let (statut, texte) = envoyer(
+            "GET",
+            format!("/api/structures/{structure_id}/pieces"),
+            jeton,
+            Vec::new(),
+        )
+        .await;
         assert_eq!(statut, 200, "{texte}");
-        assert!(texte.contains("2025-001") && !texte.contains("fictif"), "{texte}");
+        assert!(
+            texte.contains("2025-001") && !texte.contains("fictif"),
+            "{texte}"
+        );
     }
 
     #[test]

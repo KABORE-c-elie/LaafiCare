@@ -31,17 +31,20 @@ use sqlx::types::Uuid;
 
 use crate::AppState;
 use crate::erreur_api::{
-    CheminApi, Complement, ErreurApi, JsonApi, ReponseErreur, RequeteApi, reponse_erreur, reponse_erreur_interne,
+    CheminApi, Complement, ErreurApi, JsonApi, ReponseErreur, RequeteApi, reponse_erreur,
+    reponse_erreur_interne,
 };
 use crate::extracteur_jwt::{PersonnelPharmacie, ResponsablePharmacie};
 use laaficare_backend::benefice_pharmacie::{
-    self as benefice, AnnulationDepense, ChoixPeriode, Depense, ErreurBenefice, NouvelleDepense, Rapport,
+    self as benefice, AnnulationDepense, ChoixPeriode, Depense, ErreurBenefice, NouvelleDepense,
+    Rapport,
 };
 use laaficare_backend::catalogue::{self, Medicament};
 use laaficare_backend::idempotence::{self, Cle, ErreurIdempotence};
 use laaficare_backend::stock_pharmacie::{
-    self as stock, Alertes, Annulation, Equivalents, ErreurStock, EtatMedicament, Inventaire, Lot, Mouvement,
-    NouvelInventaire, NouvelleEntree, NouvellePerte, NouvelleVente, PrixVente, Reglages, Seuils, Vente,
+    self as stock, Alertes, Annulation, Equivalents, ErreurStock, EtatMedicament, Inventaire, Lot,
+    Mouvement, NouvelInventaire, NouvelleEntree, NouvellePerte, NouvelleVente, PrixVente, Reglages,
+    Seuils, Vente,
 };
 
 // Mêmes bornes que les autres listes de l'API.
@@ -60,24 +63,47 @@ pub(crate) fn mapper_erreur(erreur: ErreurStock) -> ReponseErreur {
         E::VenteInconnue => (StatusCode::NOT_FOUND, "vente_inconnue"),
         E::MouvementInconnu => (StatusCode::NOT_FOUND, "mouvement_inconnu"),
         E::LotPerime => (StatusCode::CONFLICT, "lot_perime"),
-        E::StockInsuffisant { medicament_id, quantite_disponible } => {
+        E::StockInsuffisant {
+            medicament_id,
+            quantite_disponible,
+        } => {
             let complement = Complement {
                 medicament_id: *medicament_id,
                 quantite_disponible: Some(*quantite_disponible),
                 ..Default::default()
             };
-            return (StatusCode::CONFLICT, Json(ErreurApi::avec("stock_insuffisant", erreur.to_string(), complement)));
+            return (
+                StatusCode::CONFLICT,
+                Json(ErreurApi::avec(
+                    "stock_insuffisant",
+                    erreur.to_string(),
+                    complement,
+                )),
+            );
         }
         E::PrixNonDefini { medicament_id } => {
-            let complement = Complement { medicament_id: Some(*medicament_id), ..Default::default() };
-            return (StatusCode::CONFLICT, Json(ErreurApi::avec("prix_non_defini", erreur.to_string(), complement)));
+            let complement = Complement {
+                medicament_id: Some(*medicament_id),
+                ..Default::default()
+            };
+            return (
+                StatusCode::CONFLICT,
+                Json(ErreurApi::avec(
+                    "prix_non_defini",
+                    erreur.to_string(),
+                    complement,
+                )),
+            );
         }
         E::DejaAnnule => (StatusCode::CONFLICT, "deja_annule"),
         E::AnnulationImpossible => (StatusCode::CONFLICT, "annulation_impossible"),
-        E::Idempotence(ErreurIdempotence::CleInvalide) => (StatusCode::BAD_REQUEST, "cle_idempotence_invalide"),
-        E::Idempotence(ErreurIdempotence::CleReutilisee) => {
-            (StatusCode::UNPROCESSABLE_ENTITY, "cle_idempotence_reutilisee")
+        E::Idempotence(ErreurIdempotence::CleInvalide) => {
+            (StatusCode::BAD_REQUEST, "cle_idempotence_invalide")
         }
+        E::Idempotence(ErreurIdempotence::CleReutilisee) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "cle_idempotence_reutilisee",
+        ),
         E::DonneesInvalides(_) => (StatusCode::UNPROCESSABLE_ENTITY, "donnees_invalides"),
         E::Interne(detail) => return reponse_erreur_interne("stock pharmacie", detail),
     };
@@ -147,7 +173,9 @@ pub async fn rechercher_medicaments(
             format!("q doit faire entre {RECHERCHE_MIN} et {RECHERCHE_MAX} caractères"),
         ));
     }
-    let medicaments = catalogue::rechercher(&state.db, &r.q, limite).await.map_err(interne("catalogue"))?;
+    let medicaments = catalogue::rechercher(&state.db, &r.q, limite)
+        .await
+        .map_err(interne("catalogue"))?;
     Ok(Json(ListeMedicaments { medicaments }))
 }
 
@@ -189,9 +217,18 @@ pub async fn etat(
     RequeteApi(page): RequeteApi<PageApres>,
 ) -> Result<Json<EtatReponse>, ReponseErreur> {
     let limite = limite_valide(page.limite)?;
-    let medicaments = stock::etat(&state.db, personnel.structure_id, page.apres, limite).await.map_err(interne("etat"))?;
-    let suivant = if medicaments.len() as i64 == limite { medicaments.last().map(|m| m.medicament.id) } else { None };
-    Ok(Json(EtatReponse { medicaments, suivant }))
+    let medicaments = stock::etat(&state.db, personnel.structure_id, page.apres, limite)
+        .await
+        .map_err(interne("etat"))?;
+    let suivant = if medicaments.len() as i64 == limite {
+        medicaments.last().map(|m| m.medicament.id)
+    } else {
+        None
+    };
+    Ok(Json(EtatReponse {
+        medicaments,
+        suivant,
+    }))
 }
 
 #[derive(Debug, Serialize)]
@@ -208,8 +245,13 @@ pub async fn lots(
     State(state): State<AppState>,
     CheminApi(medicament_id): CheminApi<Uuid>,
 ) -> Result<Json<LotsReponse>, ReponseErreur> {
-    let lots = stock::lots_du_medicament(&state.db, personnel.structure_id, medicament_id).await.map_err(interne("lots"))?;
-    Ok(Json(LotsReponse { medicament_id, lots }))
+    let lots = stock::lots_du_medicament(&state.db, personnel.structure_id, medicament_id)
+        .await
+        .map_err(interne("lots"))?;
+    Ok(Json(LotsReponse {
+        medicament_id,
+        lots,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -233,9 +275,18 @@ pub async fn journal(
     RequeteApi(page): RequeteApi<PageAvant>,
 ) -> Result<Json<JournalReponse>, ReponseErreur> {
     let limite = limite_valide(page.limite)?;
-    let mouvements = stock::journal(&state.db, personnel.structure_id, page.avant, limite).await.map_err(interne("journal"))?;
-    let suivant = if mouvements.len() as i64 == limite { mouvements.last().map(|m| m.id) } else { None };
-    Ok(Json(JournalReponse { mouvements, suivant }))
+    let mouvements = stock::journal(&state.db, personnel.structure_id, page.avant, limite)
+        .await
+        .map_err(interne("journal"))?;
+    let suivant = if mouvements.len() as i64 == limite {
+        mouvements.last().map(|m| m.id)
+    } else {
+        None
+    };
+    Ok(Json(JournalReponse {
+        mouvements,
+        suivant,
+    }))
 }
 
 /// `GET /api/pharmacie/ventes/{id}` : une vente et ses lignes.
@@ -257,7 +308,10 @@ pub async fn alertes(
     PersonnelPharmacie(personnel): PersonnelPharmacie,
     State(state): State<AppState>,
 ) -> Result<Json<Alertes>, ReponseErreur> {
-    stock::alertes(&state.db, personnel.structure_id).await.map(Json).map_err(interne("alertes"))
+    stock::alertes(&state.db, personnel.structure_id)
+        .await
+        .map(Json)
+        .map_err(interne("alertes"))
 }
 
 // ---------------------------------------------------------------------
@@ -272,7 +326,9 @@ pub async fn entrer(
     JsonApi(corps): JsonApi<NouvelleEntree>,
 ) -> Result<(StatusCode, Json<Lot>), ReponseErreur> {
     let cle = cle_idempotence(&entetes)?;
-    let lot = stock::entrer(&state.db, personnel, cle.as_ref(), &corps).await.map_err(mapper_erreur)?;
+    let lot = stock::entrer(&state.db, personnel, cle.as_ref(), &corps)
+        .await
+        .map_err(mapper_erreur)?;
     Ok((StatusCode::CREATED, Json(lot)))
 }
 
@@ -285,7 +341,9 @@ pub async fn vendre(
     JsonApi(corps): JsonApi<NouvelleVente>,
 ) -> Result<(StatusCode, Json<Vente>), ReponseErreur> {
     let cle = cle_idempotence(&entetes)?;
-    let vente = stock::vendre(&state.db, personnel, cle.as_ref(), &corps).await.map_err(mapper_erreur)?;
+    let vente = stock::vendre(&state.db, personnel, cle.as_ref(), &corps)
+        .await
+        .map_err(mapper_erreur)?;
     Ok((StatusCode::CREATED, Json(vente)))
 }
 
@@ -299,7 +357,10 @@ pub async fn annuler_vente(
     JsonApi(corps): JsonApi<Annulation>,
 ) -> Result<Json<Vente>, ReponseErreur> {
     let cle = cle_idempotence(&entetes)?;
-    stock::annuler_vente(&state.db, personnel, cle.as_ref(), vente_id, &corps).await.map(Json).map_err(mapper_erreur)
+    stock::annuler_vente(&state.db, personnel, cle.as_ref(), vente_id, &corps)
+        .await
+        .map(Json)
+        .map_err(mapper_erreur)
 }
 
 /// `POST /api/pharmacie/pertes` : perte d'un lot (201).
@@ -310,7 +371,9 @@ pub async fn declarer_perte(
     JsonApi(corps): JsonApi<NouvellePerte>,
 ) -> Result<(StatusCode, Json<Mouvement>), ReponseErreur> {
     let cle = cle_idempotence(&entetes)?;
-    let mouvement = stock::declarer_perte(&state.db, personnel, cle.as_ref(), &corps).await.map_err(mapper_erreur)?;
+    let mouvement = stock::declarer_perte(&state.db, personnel, cle.as_ref(), &corps)
+        .await
+        .map_err(mapper_erreur)?;
     Ok((StatusCode::CREATED, Json(mouvement)))
 }
 
@@ -322,7 +385,9 @@ pub async fn inventorier(
     JsonApi(corps): JsonApi<NouvelInventaire>,
 ) -> Result<(StatusCode, Json<Inventaire>), ReponseErreur> {
     let cle = cle_idempotence(&entetes)?;
-    let inventaire = stock::inventorier(&state.db, personnel, cle.as_ref(), &corps).await.map_err(mapper_erreur)?;
+    let inventaire = stock::inventorier(&state.db, personnel, cle.as_ref(), &corps)
+        .await
+        .map_err(mapper_erreur)?;
     Ok((StatusCode::CREATED, Json(inventaire)))
 }
 
@@ -337,7 +402,9 @@ pub async fn annuler_mouvement(
 ) -> Result<(StatusCode, Json<Mouvement>), ReponseErreur> {
     let cle = cle_idempotence(&entetes)?;
     let mouvement =
-        stock::annuler_mouvement(&state.db, personnel, cle.as_ref(), mouvement_id, &corps).await.map_err(mapper_erreur)?;
+        stock::annuler_mouvement(&state.db, personnel, cle.as_ref(), mouvement_id, &corps)
+            .await
+            .map_err(mapper_erreur)?;
     Ok((StatusCode::CREATED, Json(mouvement)))
 }
 
@@ -358,7 +425,15 @@ pub async fn fixer_prix(
     CheminApi(medicament_id): CheminApi<Uuid>,
     JsonApi(corps): JsonApi<NouveauPrix>,
 ) -> Result<Json<PrixVente>, ReponseErreur> {
-    stock::fixer_prix(&state.db, responsable, medicament_id, corps.prix_unitaire_fcfa).await.map(Json).map_err(mapper_erreur)
+    stock::fixer_prix(
+        &state.db,
+        responsable,
+        medicament_id,
+        corps.prix_unitaire_fcfa,
+    )
+    .await
+    .map(Json)
+    .map_err(mapper_erreur)
 }
 
 /// `PUT /api/pharmacie/seuils/{medicament_id}` : seuils d'alerte (204).
@@ -368,7 +443,9 @@ pub async fn fixer_seuils(
     CheminApi(medicament_id): CheminApi<Uuid>,
     JsonApi(corps): JsonApi<Seuils>,
 ) -> Result<StatusCode, ReponseErreur> {
-    stock::fixer_seuils(&state.db, personnel, medicament_id, &corps).await.map_err(mapper_erreur)?;
+    stock::fixer_seuils(&state.db, personnel, medicament_id, &corps)
+        .await
+        .map_err(mapper_erreur)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -380,7 +457,9 @@ pub async fn regler(
     State(state): State<AppState>,
     JsonApi(corps): JsonApi<Reglages>,
 ) -> Result<Json<Reglages>, ReponseErreur> {
-    stock::regler(&state.db, responsable, &corps).await.map_err(mapper_erreur)?;
+    stock::regler(&state.db, responsable, &corps)
+        .await
+        .map_err(mapper_erreur)?;
     Ok(Json(corps))
 }
 
@@ -396,10 +475,13 @@ fn mapper_erreur_benefice(erreur: ErreurBenefice) -> ReponseErreur {
         E::DejaAnnulee => (StatusCode::CONFLICT, "deja_annule"),
         E::AnnulationImpossible => (StatusCode::CONFLICT, "annulation_impossible"),
         // Mêmes codes que pour le stock.
-        E::Idempotence(ErreurIdempotence::CleInvalide) => (StatusCode::BAD_REQUEST, "cle_idempotence_invalide"),
-        E::Idempotence(ErreurIdempotence::CleReutilisee) => {
-            (StatusCode::UNPROCESSABLE_ENTITY, "cle_idempotence_reutilisee")
+        E::Idempotence(ErreurIdempotence::CleInvalide) => {
+            (StatusCode::BAD_REQUEST, "cle_idempotence_invalide")
         }
+        E::Idempotence(ErreurIdempotence::CleReutilisee) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "cle_idempotence_reutilisee",
+        ),
         E::DonneesInvalides(_) => (StatusCode::UNPROCESSABLE_ENTITY, "donnees_invalides"),
         E::Interne(detail) => return reponse_erreur_interne("benefice pharmacie", detail),
     };
@@ -414,8 +496,9 @@ pub async fn enregistrer_depense(
     JsonApi(corps): JsonApi<NouvelleDepense>,
 ) -> Result<(StatusCode, Json<Depense>), ReponseErreur> {
     let cle = cle_idempotence(&entetes)?;
-    let depense =
-        benefice::enregistrer_depense(&state.db, responsable, cle.as_ref(), &corps).await.map_err(mapper_erreur_benefice)?;
+    let depense = benefice::enregistrer_depense(&state.db, responsable, cle.as_ref(), &corps)
+        .await
+        .map_err(mapper_erreur_benefice)?;
     Ok((StatusCode::CREATED, Json(depense)))
 }
 
@@ -432,10 +515,15 @@ pub async fn lister_depenses(
     RequeteApi(page): RequeteApi<PageAvant>,
 ) -> Result<Json<DepensesReponse>, ReponseErreur> {
     let limite = limite_valide(page.limite)?;
-    let depenses = benefice::lister_depenses(&state.db, responsable.structure_id, page.avant, limite)
-        .await
-        .map_err(interne("depenses"))?;
-    let suivant = if depenses.len() as i64 == limite { depenses.last().map(|d| d.id) } else { None };
+    let depenses =
+        benefice::lister_depenses(&state.db, responsable.structure_id, page.avant, limite)
+            .await
+            .map_err(interne("depenses"))?;
+    let suivant = if depenses.len() as i64 == limite {
+        depenses.last().map(|d| d.id)
+    } else {
+        None
+    };
     Ok(Json(DepensesReponse { depenses, suivant }))
 }
 
@@ -449,9 +537,10 @@ pub async fn annuler_depense(
     JsonApi(corps): JsonApi<AnnulationDepense>,
 ) -> Result<(StatusCode, Json<Depense>), ReponseErreur> {
     let cle = cle_idempotence(&entetes)?;
-    let depense = benefice::annuler_depense(&state.db, responsable, cle.as_ref(), depense_id, &corps)
-        .await
-        .map_err(mapper_erreur_benefice)?;
+    let depense =
+        benefice::annuler_depense(&state.db, responsable, cle.as_ref(), depense_id, &corps)
+            .await
+            .map_err(mapper_erreur_benefice)?;
     Ok((StatusCode::CREATED, Json(depense)))
 }
 
@@ -462,7 +551,10 @@ pub async fn rapport(
     State(state): State<AppState>,
     RequeteApi(choix): RequeteApi<ChoixPeriode>,
 ) -> Result<Json<Rapport>, ReponseErreur> {
-    benefice::rapport(&state.db, responsable.structure_id, &choix).await.map(Json).map_err(mapper_erreur_benefice)
+    benefice::rapport(&state.db, responsable.structure_id, &choix)
+        .await
+        .map(Json)
+        .map_err(mapper_erreur_benefice)
 }
 
 #[cfg(test)]
@@ -510,7 +602,11 @@ pub(crate) mod tests {
         .fetch_one(db)
         .await
         .unwrap();
-        sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1").bind(u).execute(db).await.unwrap();
+        sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1")
+            .bind(u)
+            .execute(db)
+            .await
+            .unwrap();
         let compte: Uuid = sqlx::query_scalar(
             "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'professionnel', 'x') RETURNING id",
         )
@@ -541,10 +637,18 @@ pub(crate) mod tests {
                 .fetch_one(db)
                 .await
                 .unwrap();
-        let session = session::ouvrir(db, compte, Some(affectation)).await.unwrap();
+        let session = session::ouvrir(db, compte, Some(affectation))
+            .await
+            .unwrap();
         let jeton = state
             .jwt
-            .emettre(SorteJeton::ProfessionnelEnExercice, compte, 0, Some(affectation), Some(session.session_id))
+            .emettre(
+                SorteJeton::ProfessionnelEnExercice,
+                compte,
+                0,
+                Some(affectation),
+                Some(session.session_id),
+            )
             .unwrap();
         (format!("Bearer {jeton}"), structure)
     }
@@ -557,13 +661,19 @@ pub(crate) mod tests {
         requete.body(()).unwrap().into_parts().0
     }
 
-    pub(crate) async fn personnel(state: &AppState, en_tete: &str) -> Result<PersonnelPharmacie, StatusCode> {
+    pub(crate) async fn personnel(
+        state: &AppState,
+        en_tete: &str,
+    ) -> Result<PersonnelPharmacie, StatusCode> {
         PersonnelPharmacie::from_request_parts(&mut parts(en_tete, None), state)
             .await
             .map_err(|r| r.into_response().status())
     }
 
-    pub(crate) async fn responsable(state: &AppState, en_tete: &str) -> Result<ResponsablePharmacie, StatusCode> {
+    pub(crate) async fn responsable(
+        state: &AppState,
+        en_tete: &str,
+    ) -> Result<ResponsablePharmacie, StatusCode> {
         ResponsablePharmacie::from_request_parts(&mut parts(en_tete, None), state)
             .await
             .map_err(|r| r.into_response().status())
@@ -588,18 +698,35 @@ pub(crate) mod tests {
                        Produit X fictif;Molécule-A fictive;comprimé;500 mg\n\
                        Produit Y fictif;Molécule-A fictive;comprimé;500 mg\n\
                        Produit Z fictif;Molécule-A fictive + Molécule-B fictive;comprimé;500 mg\n";
-        catalogue::importer(pool, admin, "Liste fictive", fichier.as_bytes()).await.unwrap();
+        catalogue::importer(pool, admin, "Liste fictive", fichier.as_bytes())
+            .await
+            .unwrap();
         let id = |nom: &'static str| async move {
-            sqlx::query_scalar::<_, Uuid>("SELECT id FROM medicament WHERE denomination = $1").bind(nom).fetch_one(pool).await.unwrap()
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM medicament WHERE denomination = $1")
+                .bind(nom)
+                .fetch_one(pool)
+                .await
+                .unwrap()
         };
-        (id("Produit X fictif").await, id("Produit Y fictif").await, id("Produit Z fictif").await)
+        (
+            id("Produit X fictif").await,
+            id("Produit Y fictif").await,
+            id("Produit Z fictif").await,
+        )
     }
 
-    pub(crate) fn nouvelle_entree(medicament_id: Uuid, lot: &str, jours: i64, quantite: i64, prix_achat: i64) -> NouvelleEntree {
+    pub(crate) fn nouvelle_entree(
+        medicament_id: Uuid,
+        lot: &str,
+        jours: i64,
+        quantite: i64,
+        prix_achat: i64,
+    ) -> NouvelleEntree {
         NouvelleEntree {
             medicament_id,
             numero_lot: lot.into(),
-            date_expiration: chrono::Utc::now().date_naive() + chrono::Duration::days(jours),
+            date_expiration: Some(chrono::Utc::now().date_naive() + chrono::Duration::days(jours)),
+            mois_expiration: None,
             quantite,
             prix_achat_unitaire_fcfa: prix_achat,
             fournisseur: "Grossiste fictif".into(),
@@ -614,24 +741,78 @@ pub(crate) mod tests {
     #[ignore]
     async fn acces_idempotence_et_isolement(pool: sqlx::PgPool) {
         let state = etat_de_test(&pool);
-        let (jeton_resp, pharmacie) = en_exercice(&state, "+22670610001", "pharmacie", "validee", "responsable", None).await;
-        let (jeton_pharm, _) = en_exercice(&state, "+22670610002", "pharmacie", "validee", "pharmacien", Some(pharmacie)).await;
-        let (jeton_autre, _) = en_exercice(&state, "+22670610003", "pharmacie", "validee", "responsable", None).await;
-        let (jeton_attente, _) = en_exercice(&state, "+22670610004", "pharmacie", "en_attente", "responsable", None).await;
-        let (jeton_agent, _) = en_exercice(&state, "+22670610005", "munaseb", "validee", "agent_assurance_munaseb", None).await;
+        let (jeton_resp, pharmacie) = en_exercice(
+            &state,
+            "+22670610001",
+            "pharmacie",
+            "validee",
+            "responsable",
+            None,
+        )
+        .await;
+        let (jeton_pharm, _) = en_exercice(
+            &state,
+            "+22670610002",
+            "pharmacie",
+            "validee",
+            "pharmacien",
+            Some(pharmacie),
+        )
+        .await;
+        let (jeton_autre, _) = en_exercice(
+            &state,
+            "+22670610003",
+            "pharmacie",
+            "validee",
+            "responsable",
+            None,
+        )
+        .await;
+        let (jeton_attente, _) = en_exercice(
+            &state,
+            "+22670610004",
+            "pharmacie",
+            "en_attente",
+            "responsable",
+            None,
+        )
+        .await;
+        let (jeton_agent, _) = en_exercice(
+            &state,
+            "+22670610005",
+            "munaseb",
+            "validee",
+            "agent_assurance_munaseb",
+            None,
+        )
+        .await;
         let (x, _, _) = catalogue_fictif(&pool).await;
 
-        assert_eq!(personnel(&state, &jeton_agent).await.err(), Some(StatusCode::FORBIDDEN));
-        assert_eq!(personnel(&state, &jeton_attente).await.err(), Some(StatusCode::FORBIDDEN));
-        assert_eq!(personnel(&state, "Bearer abc").await.err(), Some(StatusCode::UNAUTHORIZED));
-        assert_eq!(responsable(&state, &jeton_pharm).await.err(), Some(StatusCode::FORBIDDEN));
+        assert_eq!(
+            personnel(&state, &jeton_agent).await.err(),
+            Some(StatusCode::FORBIDDEN)
+        );
+        assert_eq!(
+            personnel(&state, &jeton_attente).await.err(),
+            Some(StatusCode::FORBIDDEN)
+        );
+        assert_eq!(
+            personnel(&state, "Bearer abc").await.err(),
+            Some(StatusCode::UNAUTHORIZED)
+        );
+        assert_eq!(
+            responsable(&state, &jeton_pharm).await.err(),
+            Some(StatusCode::FORBIDDEN)
+        );
 
         // Prix par le responsable ; entrée par le pharmacien, rejouée.
         let Json(prix) = fixer_prix(
             responsable(&state, &jeton_resp).await.unwrap(),
             State(state.clone()),
             CheminApi(x),
-            JsonApi(NouveauPrix { prix_unitaire_fcfa: 300 }),
+            JsonApi(NouveauPrix {
+                prix_unitaire_fcfa: 300,
+            }),
         )
         .await
         .unwrap();
@@ -641,17 +822,34 @@ pub(crate) mod tests {
             let state = state.clone();
             let jeton = jeton_pharm.clone();
             async move {
-                entrer(personnel(&state, &jeton).await.unwrap(), State(state.clone()), entetes(cle), JsonApi(corps)).await
+                entrer(
+                    personnel(&state, &jeton).await.unwrap(),
+                    State(state.clone()),
+                    entetes(cle),
+                    JsonApi(corps),
+                )
+                .await
             }
         };
         let (statut, Json(lot)) = entree(Some("e-1"), corps.clone()).await.unwrap();
         assert_eq!(statut, StatusCode::CREATED);
         let (_, Json(rejoue)) = entree(Some("e-1"), corps.clone()).await.unwrap();
         assert_eq!(rejoue.id, lot.id);
-        let (s, Json(e)) = entree(Some("e-1"), nouvelle_entree(x, "LOT-2", 60, 10, 100)).await.unwrap_err();
-        assert_eq!((s, e.code), (StatusCode::UNPROCESSABLE_ENTITY, "cle_idempotence_reutilisee"));
+        let (s, Json(e)) = entree(Some("e-1"), nouvelle_entree(x, "LOT-2", 60, 10, 100))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (s, e.code),
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "cle_idempotence_reutilisee"
+            )
+        );
         let (s, Json(e)) = entree(Some("é"), corps.clone()).await.unwrap_err();
-        assert_eq!((s, e.code), (StatusCode::BAD_REQUEST, "cle_idempotence_invalide"));
+        assert_eq!(
+            (s, e.code),
+            (StatusCode::BAD_REQUEST, "cle_idempotence_invalide")
+        );
         let mut deux = entetes(Some("a"));
         deux.append(idempotence::ENTETE, "b".parse().unwrap());
         assert!(cle_idempotence(&deux).is_err(), "deux en-têtes");
@@ -659,45 +857,80 @@ pub(crate) mod tests {
         // Vente, puis stock insuffisant avec ses champs.
         let vente_de = |quantite| NouvelleVente {
             sur_ordonnance_papier: false,
-            lignes: vec![stock::LigneDemandee { medicament_id: x, quantite, lot_id: None }],
+            lignes: vec![stock::LigneDemandee {
+                medicament_id: x,
+                quantite,
+                lot_id: None,
+            }],
         };
-        let (_, Json(v)) =
-            vendre(personnel(&state, &jeton_pharm).await.unwrap(), State(state.clone()), entetes(None), JsonApi(vente_de(2)))
-                .await
-                .unwrap();
+        let (_, Json(v)) = vendre(
+            personnel(&state, &jeton_pharm).await.unwrap(),
+            State(state.clone()),
+            entetes(None),
+            JsonApi(vente_de(2)),
+        )
+        .await
+        .unwrap();
         assert_eq!(v.total_fcfa, 600);
-        let (s, Json(e)) =
-            vendre(personnel(&state, &jeton_pharm).await.unwrap(), State(state.clone()), entetes(None), JsonApi(vente_de(50)))
-                .await
-                .unwrap_err();
+        let (s, Json(e)) = vendre(
+            personnel(&state, &jeton_pharm).await.unwrap(),
+            State(state.clone()),
+            entetes(None),
+            JsonApi(vente_de(50)),
+        )
+        .await
+        .unwrap_err();
         assert_eq!((s, e.code), (StatusCode::CONFLICT, "stock_insuffisant"));
         // Les champs complémentaires sont au premier niveau du JSON.
         let json = serde_json::to_value(&e).unwrap();
-        assert_eq!((json["medicament_id"].as_str(), json["quantite_disponible"].as_i64()), (Some(x.to_string().as_str()), Some(8)));
-        assert!(json.get("complement").is_none() && json.get("pieces_manquantes").is_none(), "{json}");
+        assert_eq!(
+            (
+                json["medicament_id"].as_str(),
+                json["quantite_disponible"].as_i64()
+            ),
+            (Some(x.to_string().as_str()), Some(8))
+        );
+        assert!(
+            json.get("complement").is_none() && json.get("pieces_manquantes").is_none(),
+            "{json}"
+        );
 
         // L'autre pharmacie : rien à voir, rien à toucher.
-        let (s, Json(e)) = vente(personnel(&state, &jeton_autre).await.unwrap(), State(state.clone()), CheminApi(v.id))
-            .await
-            .unwrap_err();
+        let (s, Json(e)) = vente(
+            personnel(&state, &jeton_autre).await.unwrap(),
+            State(state.clone()),
+            CheminApi(v.id),
+        )
+        .await
+        .unwrap_err();
         assert_eq!((s, e.code), (StatusCode::NOT_FOUND, "vente_inconnue"));
         let (s, _) = annuler_vente(
             personnel(&state, &jeton_autre).await.unwrap(),
             State(state.clone()),
             CheminApi(v.id),
             entetes(None),
-            JsonApi(Annulation { motif: "Intrusion".into() }),
+            JsonApi(Annulation {
+                motif: "Intrusion".into(),
+            }),
         )
         .await
         .unwrap_err();
         assert_eq!(s, StatusCode::NOT_FOUND);
-        let Json(lots_autre) =
-            lots(personnel(&state, &jeton_autre).await.unwrap(), State(state.clone()), CheminApi(x)).await.unwrap();
+        let Json(lots_autre) = lots(
+            personnel(&state, &jeton_autre).await.unwrap(),
+            State(state.clone()),
+            CheminApi(x),
+        )
+        .await
+        .unwrap();
         assert!(lots_autre.lots.is_empty());
         let Json(journal_autre) = journal(
             personnel(&state, &jeton_autre).await.unwrap(),
             State(state.clone()),
-            RequeteApi(PageAvant { limite: None, avant: None }),
+            RequeteApi(PageAvant {
+                limite: None,
+                avant: None,
+            }),
         )
         .await
         .unwrap();
@@ -705,7 +938,10 @@ pub(crate) mod tests {
         let Json(etat_autre) = etat(
             personnel(&state, &jeton_autre).await.unwrap(),
             State(state.clone()),
-            RequeteApi(PageApres { limite: None, apres: None }),
+            RequeteApi(PageApres {
+                limite: None,
+                apres: None,
+            }),
         )
         .await
         .unwrap();
@@ -714,7 +950,12 @@ pub(crate) mod tests {
             personnel(&state, &jeton_autre).await.unwrap(),
             State(state.clone()),
             entetes(None),
-            JsonApi(NouvellePerte { lot_id: lot.id, quantite: 1, motif: stock::MotifPerte::Casse, commentaire: None }),
+            JsonApi(NouvellePerte {
+                lot_id: lot.id,
+                quantite: 1,
+                motif: stock::MotifPerte::Casse,
+                commentaire: None,
+            }),
         )
         .await
         .unwrap_err();
@@ -724,7 +965,10 @@ pub(crate) mod tests {
         let Json(e) = etat(
             personnel(&state, &jeton_pharm).await.unwrap(),
             State(state.clone()),
-            RequeteApi(PageApres { limite: Some(1), apres: None }),
+            RequeteApi(PageApres {
+                limite: Some(1),
+                apres: None,
+            }),
         )
         .await
         .unwrap();
@@ -732,7 +976,10 @@ pub(crate) mod tests {
         let (s, _) = journal(
             personnel(&state, &jeton_pharm).await.unwrap(),
             State(state.clone()),
-            RequeteApi(PageAvant { limite: Some(101), avant: None }),
+            RequeteApi(PageAvant {
+                limite: Some(101),
+                avant: None,
+            }),
         )
         .await
         .unwrap_err();
@@ -740,7 +987,10 @@ pub(crate) mod tests {
         let Json(trouves) = rechercher_medicaments(
             personnel(&state, &jeton_pharm).await.unwrap(),
             State(state.clone()),
-            RequeteApi(Recherche { q: "molécule-a".into(), limite: None }),
+            RequeteApi(Recherche {
+                q: "molécule-a".into(),
+                limite: None,
+            }),
         )
         .await
         .unwrap();
@@ -748,30 +998,48 @@ pub(crate) mod tests {
         let (s, _) = rechercher_medicaments(
             personnel(&state, &jeton_pharm).await.unwrap(),
             State(state.clone()),
-            RequeteApi(Recherche { q: "m".into(), limite: None }),
+            RequeteApi(Recherche {
+                q: "m".into(),
+                limite: None,
+            }),
         )
         .await
         .unwrap_err();
         assert_eq!(s, StatusCode::BAD_REQUEST);
-        let (s, Json(e)) =
-            equivalents(personnel(&state, &jeton_pharm).await.unwrap(), State(state.clone()), CheminApi(Uuid::max()))
-                .await
-                .unwrap_err();
+        let (s, Json(e)) = equivalents(
+            personnel(&state, &jeton_pharm).await.unwrap(),
+            State(state.clone()),
+            CheminApi(Uuid::max()),
+        )
+        .await
+        .unwrap_err();
         assert_eq!((s, e.code), (StatusCode::NOT_FOUND, "medicament_inconnu"));
 
         // Réglages par le responsable ; alertes.
         let Json(r) = regler(
             responsable(&state, &jeton_resp).await.unwrap(),
             State(state.clone()),
-            JsonApi(Reglages { delai_alerte_peremption_jours: Some(90) }),
+            JsonApi(Reglages {
+                delai_alerte_peremption_jours: Some(90),
+            }),
         )
         .await
         .unwrap();
         assert_eq!(r.delai_alerte_peremption_jours, Some(90));
-        let Json(a) = alertes(personnel(&state, &jeton_pharm).await.unwrap(), State(state.clone())).await.unwrap();
+        let Json(a) = alertes(
+            personnel(&state, &jeton_pharm).await.unwrap(),
+            State(state.clone()),
+        )
+        .await
+        .unwrap();
         assert!(a.alerte_peremption_active);
         assert_eq!(a.bientot_perimes.len(), 1);
-        let Json(a) = alertes(personnel(&state, &jeton_autre).await.unwrap(), State(state.clone())).await.unwrap();
+        let Json(a) = alertes(
+            personnel(&state, &jeton_autre).await.unwrap(),
+            State(state.clone()),
+        )
+        .await
+        .unwrap();
         assert!(!a.alerte_peremption_active && a.bientot_perimes.is_empty());
     }
 
@@ -782,12 +1050,39 @@ pub(crate) mod tests {
     #[ignore]
     async fn depenses_et_rapport_par_la_route(pool: sqlx::PgPool) {
         let state = etat_de_test(&pool);
-        let (jeton_resp, pharmacie) = en_exercice(&state, "+22670620001", "pharmacie", "validee", "responsable", None).await;
-        let (jeton_pharm, _) = en_exercice(&state, "+22670620002", "pharmacie", "validee", "pharmacien", Some(pharmacie)).await;
-        let (jeton_autre, _) = en_exercice(&state, "+22670620003", "pharmacie", "validee", "responsable", None).await;
+        let (jeton_resp, pharmacie) = en_exercice(
+            &state,
+            "+22670620001",
+            "pharmacie",
+            "validee",
+            "responsable",
+            None,
+        )
+        .await;
+        let (jeton_pharm, _) = en_exercice(
+            &state,
+            "+22670620002",
+            "pharmacie",
+            "validee",
+            "pharmacien",
+            Some(pharmacie),
+        )
+        .await;
+        let (jeton_autre, _) = en_exercice(
+            &state,
+            "+22670620003",
+            "pharmacie",
+            "validee",
+            "responsable",
+            None,
+        )
+        .await;
 
         // Le pharmacien n'atteint aucune de ces routes.
-        assert_eq!(responsable(&state, &jeton_pharm).await.err(), Some(StatusCode::FORBIDDEN));
+        assert_eq!(
+            responsable(&state, &jeton_pharm).await.err(),
+            Some(StatusCode::FORBIDDEN)
+        );
 
         let aujourdhui = chrono::Utc::now().date_naive();
         let corps = NouvelleDepense {
@@ -809,11 +1104,20 @@ pub(crate) mod tests {
             responsable(&state, &jeton_resp).await.unwrap(),
             State(state.clone()),
             entetes(Some("dep-1")),
-            JsonApi(NouvelleDepense { montant_fcfa: 1, ..corps.clone() }),
+            JsonApi(NouvelleDepense {
+                montant_fcfa: 1,
+                ..corps.clone()
+            }),
         )
         .await
         .unwrap_err();
-        assert_eq!((s, e.code), (StatusCode::UNPROCESSABLE_ENTITY, "cle_idempotence_reutilisee"));
+        assert_eq!(
+            (s, e.code),
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "cle_idempotence_reutilisee"
+            )
+        );
 
         // L'autre pharmacie.
         let (s, Json(e)) = annuler_depense(
@@ -821,7 +1125,9 @@ pub(crate) mod tests {
             State(state.clone()),
             CheminApi(d.id),
             entetes(None),
-            JsonApi(AnnulationDepense { motif: "Intrusion".into() }),
+            JsonApi(AnnulationDepense {
+                motif: "Intrusion".into(),
+            }),
         )
         .await
         .unwrap_err();
@@ -829,27 +1135,50 @@ pub(crate) mod tests {
         let Json(liste) = lister_depenses(
             responsable(&state, &jeton_autre).await.unwrap(),
             State(state.clone()),
-            RequeteApi(PageAvant { limite: None, avant: None }),
+            RequeteApi(PageAvant {
+                limite: None,
+                avant: None,
+            }),
         )
         .await
         .unwrap();
         assert!(liste.depenses.is_empty());
 
         // Rapports.
-        let semaine = ChoixPeriode { periode: Some(benefice::Periode::Semaine), ..Default::default() };
-        let Json(r) = rapport(responsable(&state, &jeton_resp).await.unwrap(), State(state.clone()), RequeteApi(semaine.clone()))
-            .await
-            .unwrap();
-        assert_eq!((r.depenses.total_fcfa, r.benefice_net_fcfa), (50_000, -50_000));
-        let Json(r) = rapport(responsable(&state, &jeton_autre).await.unwrap(), State(state.clone()), RequeteApi(semaine))
-            .await
-            .unwrap();
+        let semaine = ChoixPeriode {
+            periode: Some(benefice::Periode::Semaine),
+            ..Default::default()
+        };
+        let Json(r) = rapport(
+            responsable(&state, &jeton_resp).await.unwrap(),
+            State(state.clone()),
+            RequeteApi(semaine.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (r.depenses.total_fcfa, r.benefice_net_fcfa),
+            (50_000, -50_000)
+        );
+        let Json(r) = rapport(
+            responsable(&state, &jeton_autre).await.unwrap(),
+            State(state.clone()),
+            RequeteApi(semaine),
+        )
+        .await
+        .unwrap();
         assert_eq!(r.depenses.total_fcfa, 0);
-        let (s, Json(e)) =
-            rapport(responsable(&state, &jeton_resp).await.unwrap(), State(state.clone()), RequeteApi(ChoixPeriode::default()))
-                .await
-                .unwrap_err();
-        assert_eq!((s, e.code), (StatusCode::UNPROCESSABLE_ENTITY, "donnees_invalides"));
+        let (s, Json(e)) = rapport(
+            responsable(&state, &jeton_resp).await.unwrap(),
+            State(state.clone()),
+            RequeteApi(ChoixPeriode::default()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            (s, e.code),
+            (StatusCode::UNPROCESSABLE_ENTITY, "donnees_invalides")
+        );
 
         // Annulation par le responsable.
         let (s, Json(a)) = annuler_depense(
@@ -857,7 +1186,9 @@ pub(crate) mod tests {
             State(state.clone()),
             CheminApi(d.id),
             entetes(None),
-            JsonApi(AnnulationDepense { motif: "Erreur".into() }),
+            JsonApi(AnnulationDepense {
+                motif: "Erreur".into(),
+            }),
         )
         .await
         .unwrap();

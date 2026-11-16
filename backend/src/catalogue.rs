@@ -7,13 +7,20 @@
 //! ministère de la Santé) n'est pas dans `docs/Reglementation, loi et
 //! reference/`. Les tests n'utilisent que des médicaments fictifs.
 //!
-//! **Format du fichier d'import** (le fichier officiel est un PDF : l'équipe
-//! en tire un fichier texte, relu ligne à ligne, avant l'import) :
-//! - texte UTF-8 ; première ligne exactement `denomination;dci;forme;dosage` ;
-//! - une ligne par médicament, quatre champs séparés par `;` (aucun champ ne
-//!   peut contenir `;`, il n'y a pas de guillemets) ;
+//! **Format du fichier d'import : CSV** (le fichier officiel est un PDF ;
+//! l'équipe recopie la liste dans un tableur, la relit ligne à ligne, puis
+//! l'enregistre en « CSV UTF-8 » avec le point-virgule comme séparateur,
+//! celui des tableurs réglés en français) :
+//! - texte UTF-8 (marque d'ordre des octets acceptée), fins de ligne LF ou
+//!   CRLF ;
+//! - première ligne exactement `denomination;dci;forme;dosage` ;
+//! - une ligne par médicament, quatre champs séparés par `;` ;
+//! - **sans guillemets** : aucun champ ne contient de `;`, un tableur n'en
+//!   met donc pas ; une ligne qui en contient est refusée, avec son numéro,
+//!   plutôt qu'importée avec des guillemets dans le nom ;
 //! - `dci` : une ou plusieurs molécules séparées par `+` (association) ;
-//! - lignes vides ignorées.
+//! - lignes vides ignorées ; 20 000 lignes au plus ; dénomination et DCI de
+//!   200 caractères au plus, forme et dosage de 100.
 
 use std::collections::BTreeSet;
 
@@ -38,7 +45,9 @@ const MAX_SOURCE: usize = 300;
 pub enum ErreurCatalogue {
     #[error("Le fichier n'est pas un texte UTF-8.")]
     PasUtf8,
-    #[error("La première ligne doit être exactement : {ENTETE}")]
+    #[error(
+        "La première ligne doit être exactement : {ENTETE} (fichier CSV UTF-8, séparateur point-virgule, sans guillemets)"
+    )]
     EnteteInvalide,
     #[error("Ligne {ligne} : {probleme}")]
     LigneInvalide { ligne: usize, probleme: String },
@@ -71,7 +80,11 @@ pub struct LigneCatalogue {
 /// espaces réduites à une seule. Deux écritures d'un même nom (« Paracétamol »,
 /// « paracétamol ») ne créent pas deux lignes.
 pub fn cle(texte: &str) -> String {
-    texte.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    texte
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 fn champ(valeur: &str, nom: &str, max: usize, ligne: usize) -> Result<String, ErreurCatalogue> {
@@ -106,9 +119,18 @@ pub fn lire_fichier(contenu: &str) -> Result<Vec<LigneCatalogue>, ErreurCatalogu
         if texte.trim().is_empty() {
             continue;
         }
+        if texte.contains('"') {
+            return Err(ErreurCatalogue::LigneInvalide {
+                ligne: numero,
+                probleme: "guillemets non acceptés (enregistrer le CSV sans guillemets)".into(),
+            });
+        }
         let champs: Vec<&str> = texte.split(';').collect();
         let [denomination, dci, forme, dosage] = champs[..] else {
-            return Err(ErreurCatalogue::LigneInvalide { ligne: numero, probleme: format!("{} champs au lieu de 4", champs.len()) });
+            return Err(ErreurCatalogue::LigneInvalide {
+                ligne: numero,
+                probleme: format!("{} champs au lieu de 4", champs.len()),
+            });
         };
         let mut dcis = Vec::new();
         for molecule in dci.split('+') {
@@ -131,7 +153,12 @@ pub fn lire_fichier(contenu: &str) -> Result<Vec<LigneCatalogue>, ErreurCatalogu
 }
 
 fn cle_medicament(ligne: &LigneCatalogue) -> String {
-    format!("{}|{}|{}", cle(&ligne.denomination), cle(&ligne.forme), cle(&ligne.dosage))
+    format!(
+        "{}|{}|{}",
+        cle(&ligne.denomination),
+        cle(&ligne.forme),
+        cle(&ligne.dosage)
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,18 +182,26 @@ pub async fn importer(
     fichier: &[u8],
 ) -> Result<BilanImport, ErreurCatalogue> {
     let source = source.trim();
-    if source.is_empty() || source.chars().count() > MAX_SOURCE || source.chars().any(char::is_control) {
+    if source.is_empty()
+        || source.chars().count() > MAX_SOURCE
+        || source.chars().any(char::is_control)
+    {
         return Err(ErreurCatalogue::SourceInvalide);
     }
     let texte = std::str::from_utf8(fichier).map_err(|_| ErreurCatalogue::PasUtf8)?;
     let lignes = lire_fichier(texte)?;
     // Une même ligne répétée dans le fichier ne compte qu'une fois.
     let mut vues = BTreeSet::new();
-    let lignes: Vec<LigneCatalogue> = lignes.into_iter().filter(|l| vues.insert(cle_medicament(l))).collect();
+    let lignes: Vec<LigneCatalogue> = lignes
+        .into_iter()
+        .filter(|l| vues.insert(cle_medicament(l)))
+        .collect();
 
     let mut tx = pool.begin().await?;
     // Clé du verrou : un nombre fixe propre à cet import (« catalogue »).
-    sqlx::query("SELECT pg_advisory_xact_lock(1_330_2026)").execute(&mut *tx).await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(1_330_2026)")
+        .execute(&mut *tx)
+        .await?;
     let cles: Vec<String> = lignes.iter().map(cle_medicament).collect();
     let deja: i64 = sqlx::query_scalar("SELECT count(*) FROM medicament WHERE cle = ANY($1)")
         .bind(&cles)
@@ -198,7 +233,9 @@ pub async fn importer(
         .bind(import_id)
         .fetch_optional(&mut *tx)
         .await?;
-        let Some(medicament_id) = medicament else { continue };
+        let Some(medicament_id) = medicament else {
+            continue;
+        };
         for molecule in &ligne.dcis {
             sqlx::query("INSERT INTO dci (nom, cle, import_id) VALUES ($1, $2, $3) ON CONFLICT (cle) DO NOTHING")
                 .bind(molecule)
@@ -214,7 +251,12 @@ pub async fn importer(
         }
     }
     tx.commit().await?;
-    Ok(BilanImport { import_id, lignes_lues: lignes.len(), medicaments_ajoutes: lignes.len() - deja, deja_presents: deja })
+    Ok(BilanImport {
+        import_id,
+        lignes_lues: lignes.len(),
+        medicaments_ajoutes: lignes.len() - deja,
+        deja_presents: deja,
+    })
 }
 
 /// Un médicament tel que la pharmacie le voit.
@@ -255,7 +297,11 @@ fn motif_like(texte: &str) -> String {
 
 /// Recherche par dénomination ou par DCI (contient, sans tenir compte des
 /// majuscules), dans l'ordre alphabétique de la dénomination.
-pub async fn rechercher(pool: &PgPool, texte: &str, limite: i64) -> Result<Vec<Medicament>, sqlx::Error> {
+pub async fn rechercher(
+    pool: &PgPool,
+    texte: &str,
+    limite: i64,
+) -> Result<Vec<Medicament>, sqlx::Error> {
     sqlx::query_as(concat!(
         select_medicament!(),
         " WHERE m.denomination ILIKE $1 \
@@ -282,9 +328,32 @@ pub(crate) mod tests {
         let lignes = lire_fichier(fichier).unwrap();
         assert_eq!(lignes.len(), 2);
         assert_eq!(lignes[0].denomination, "Doliprane fictif");
-        assert_eq!(lignes[1].dcis, ["paracétamol", "Codéine"], "doublon de DCI retiré, majuscules ignorées");
+        assert_eq!(
+            lignes[1].dcis,
+            ["paracétamol", "Codéine"],
+            "doublon de DCI retiré, majuscules ignorées"
+        );
 
-        assert!(matches!(lire_fichier("nom;dci\nx;y"), Err(ErreurCatalogue::EnteteInvalide)));
+        assert!(matches!(
+            lire_fichier("nom;dci\nx;y"),
+            Err(ErreurCatalogue::EnteteInvalide)
+        ));
+        // CSV d'un tableur réglé en anglais (virgules) : en-tête refusé.
+        assert!(matches!(
+            lire_fichier("denomination,dci,forme,dosage\na,b,c,d"),
+            Err(ErreurCatalogue::EnteteInvalide)
+        ));
+        // Fins de ligne CRLF d'un tableur : acceptées.
+        assert_eq!(
+            lire_fichier("denomination;dci;forme;dosage\r\nA fictif;B;comprimé;1 g\r\n").unwrap()
+                [0]
+            .dosage,
+            "1 g"
+        );
+        assert!(matches!(
+            lire_fichier("denomination;dci;forme;dosage\n\"A fictif\";B;comprimé;1 g"),
+            Err(ErreurCatalogue::LigneInvalide { ligne: 2, .. })
+        ));
         assert!(matches!(lire_fichier(ENTETE), Err(ErreurCatalogue::Vide)));
         assert!(matches!(
             lire_fichier("denomination;dci;forme;dosage\na;b;c"),
@@ -295,7 +364,10 @@ pub(crate) mod tests {
             Err(ErreurCatalogue::LigneInvalide { ligne: 3, .. })
         ));
         assert!(matches!(
-            lire_fichier(&format!("denomination;dci;forme;dosage\n{};b;c;d", "x".repeat(201))),
+            lire_fichier(&format!(
+                "denomination;dci;forme;dosage\n{};b;c;d",
+                "x".repeat(201)
+            )),
             Err(ErreurCatalogue::LigneInvalide { ligne: 2, .. })
         ));
     }
@@ -331,19 +403,61 @@ pub(crate) mod tests {
                        Antalgique fictif;Molécule-A fictive;comprimé;500 mg\n\
                        Générique fictif;molécule-a FICTIVE;comprimé;500 mg\n\
                        Association fictive;Molécule-A fictive + Molécule-B fictive;comprimé;500 mg/30 mg\n";
-        assert!(matches!(importer(&pool, admin, "  ", fichier.as_bytes()).await, Err(ErreurCatalogue::SourceInvalide)));
-        assert!(matches!(importer(&pool, admin, "Source fictive", &[0xFF, 0xFE]).await, Err(ErreurCatalogue::PasUtf8)));
+        assert!(matches!(
+            importer(&pool, admin, "  ", fichier.as_bytes()).await,
+            Err(ErreurCatalogue::SourceInvalide)
+        ));
+        assert!(matches!(
+            importer(&pool, admin, "Source fictive", &[0xFF, 0xFE]).await,
+            Err(ErreurCatalogue::PasUtf8)
+        ));
         // Une ligne fausse : rien n'est écrit.
         let faux = format!("{fichier}Ligne fausse;;comprimé;1 mg\n");
-        assert!(importer(&pool, admin, "Source fictive", faux.as_bytes()).await.is_err());
-        let total = || async { sqlx::query_scalar::<_, i64>("SELECT count(*) FROM medicament").fetch_one(&pool).await.unwrap() };
+        assert!(
+            importer(&pool, admin, "Source fictive", faux.as_bytes())
+                .await
+                .is_err()
+        );
+        let total = || async {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM medicament")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        };
         assert_eq!(total().await, 0);
 
-        let bilan = importer(&pool, admin, "Liste fictive, édition de test", fichier.as_bytes()).await.unwrap();
-        assert_eq!((bilan.lignes_lues, bilan.medicaments_ajoutes, bilan.deja_presents), (3, 3, 0));
-        let dci: i64 = sqlx::query_scalar("SELECT count(*) FROM dci").fetch_one(&pool).await.unwrap();
-        assert_eq!(dci, 2, "« Molécule-A fictive » une seule fois, quelle que soit l'écriture");
-        let encore = importer(&pool, admin, "Liste fictive, édition de test", fichier.as_bytes()).await.unwrap();
+        let bilan = importer(
+            &pool,
+            admin,
+            "Liste fictive, édition de test",
+            fichier.as_bytes(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (
+                bilan.lignes_lues,
+                bilan.medicaments_ajoutes,
+                bilan.deja_presents
+            ),
+            (3, 3, 0)
+        );
+        let dci: i64 = sqlx::query_scalar("SELECT count(*) FROM dci")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            dci, 2,
+            "« Molécule-A fictive » une seule fois, quelle que soit l'écriture"
+        );
+        let encore = importer(
+            &pool,
+            admin,
+            "Liste fictive, édition de test",
+            fichier.as_bytes(),
+        )
+        .await
+        .unwrap();
         assert_eq!((encore.medicaments_ajoutes, encore.deja_presents), (0, 3));
         assert_eq!(total().await, 3);
 
@@ -351,11 +465,22 @@ pub(crate) mod tests {
         assert_eq!(trouves.len(), 1);
         assert_eq!(trouves[0].dci, ["Molécule-A fictive", "Molécule-B fictive"]);
         assert_eq!(rechercher(&pool, "générique", 50).await.unwrap().len(), 1);
-        assert_eq!(rechercher(&pool, "%", 50).await.unwrap().len(), 0, "% cherché comme un caractère");
+        assert_eq!(
+            rechercher(&pool, "%", 50).await.unwrap().len(),
+            0,
+            "% cherché comme un caractère"
+        );
 
-        for requete in ["UPDATE medicament SET dosage = 'x'", "DELETE FROM dci", "TRUNCATE medicament_dci"] {
+        for requete in [
+            "UPDATE medicament SET dosage = 'x'",
+            "DELETE FROM dci",
+            "TRUNCATE medicament_dci",
+        ] {
             let erreur = sqlx::query(requete).execute(&pool).await.unwrap_err();
-            assert!(erreur.to_string().contains("jamais modifiees"), "{requete} : {erreur}");
+            assert!(
+                erreur.to_string().contains("jamais modifiees"),
+                "{requete} : {erreur}"
+            );
         }
     }
 }

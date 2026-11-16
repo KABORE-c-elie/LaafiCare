@@ -1425,14 +1425,18 @@ Source : draft IETF *The Idempotency-Key HTTP Header Field*.
 #### Catalogue
 
 - `GET /api/pharmacie/medicaments?q=&limite=` : recherche par dénomination ou par DCI, sans tenir compte des majuscules. `q` : 2 à 100 caractères, sinon 400 `parametre_invalide`. Réponse : `{"medicaments": [{"id", "denomination", "forme", "dosage", "dci": ["…"]}]}`.
-- `GET /api/pharmacie/medicaments/{id}/equivalents` : médicaments qui ont **exactement les mêmes DCI**, avec le stock disponible et le prix de **cette** pharmacie ; ceux en stock d'abord. Réponse : `{"medicament": {…}, "equivalents": [{…, "quantite_disponible", "prix_vente_unitaire_fcfa"}]}`. La forme et le dosage sont montrés : **le pharmacien juge**. 404 `medicament_inconnu`.
+- `GET /api/pharmacie/medicaments/{id}/equivalents` : médicaments qui ont **exactement les mêmes DCI**, avec le stock disponible et le prix de **cette** pharmacie. Réponse : `{"medicament": {…}, "equivalents": [{…, "correspondance", "meme_dosage", "meme_forme", "quantite_disponible", "prix_vente_unitaire_fcfa"}]}`. 404 `medicament_inconnu`.
+  - **Classement, pour la sécurité du patient** : d'abord `"correspondance": "meme_dci_meme_dosage_meme_forme"` ; ensuite `"correspondance": "meme_dci_dosage_ou_forme_different"`, avec `meme_dosage` et `meme_forme` qui disent lequel diffère. Dans chaque groupe, ceux en stock d'abord, puis par nom.
+  - **Rien n'est caché** : un équivalent de dosage ou de forme différent reste dans la liste, même en stock ; **le pharmacien décide**. L'application doit l'afficher comme tel (par exemple « Dosage différent : 1 g au lieu de 500 mg »), avec un texte, pas seulement une couleur.
+  - Le dosage et la forme sont comparés sans tenir compte des majuscules ni des espaces en trop ; « 500 mg » et « 500mg » restent **différents** (sens prudent : signalé, jamais confondu).
+  - Une association (plusieurs DCI) n'est jamais l'équivalent d'une molécule seule, et inversement.
 
 Le catalogue est **national et unique**. Il n'est rempli que par un outil local de l'équipe LaafiCare (`importer_catalogue`), jamais par une route. **Il reste vide tant que la liste officielle n'est pas déposée** (D6).
 
 #### Lectures du stock
 
 - `GET /api/pharmacie/stock?limite=&apres=` : un élément par médicament qui a eu au moins un lot : le médicament, `quantite_disponible` (lots non périmés), `quantite_perimee`, `valeur_achat_fcfa` (tout le stock au prix d'achat), `seuil_min`, `seuil_max`, `prix_vente_unitaire_fcfa` (ou `null`). Pages : `{"medicaments": […], "suivant": "<id ou null>"}`, à passer en `apres`.
-- `GET /api/pharmacie/stock/{medicament_id}` : `{"medicament_id", "lots": [{"id", "numero_lot", "date_expiration", "prix_achat_unitaire_fcfa", "fournisseur", "quantite", "perime", "date_creation"}]}`, lots encore en stock, **dans l'ordre FEFO**.
+- `GET /api/pharmacie/stock/{medicament_id}` : `{"medicament_id", "lots": [{"id", "numero_lot", "date_expiration", "mois_expiration_imprime", "prix_achat_unitaire_fcfa", "fournisseur", "quantite", "perime", "date_creation"}]}`, lots encore en stock, **dans l'ordre FEFO**. `mois_expiration_imprime` (`AAAA-MM` ou `null`) : le mois imprimé sur une boîte qui n'indiquait que le mois (voir « Entrée d'une boîte au mois seul »).
 - `GET /api/pharmacie/mouvements?limite=&avant=` : journal, le plus récent d'abord : `{"mouvements": [{"id", "nature", "lot_id", "medicament_id", "denomination", "numero_lot", "quantite", "prix_achat_unitaire_fcfa", "prix_vente_unitaire_fcfa", "vente_id", "inventaire_id", "motif_perte", "commentaire", "annule_mouvement_id", "annule_par", "date_mouvement", "auteur_nom", "auteur_prenom"}], "suivant": …}`. `nature` : `entree`, `vente`, `perte`, `inventaire`, `annulation`. `quantite` est positive pour ce qui entre, négative pour ce qui sort.
 - `GET /api/pharmacie/ventes/{id}` : `{"id", "sur_ordonnance_papier", "date_vente", "auteur_nom", "auteur_prenom", "lignes": [mouvements], "total_fcfa", "annulee"}`. `total_fcfa` ne compte que les lignes non annulées. 404 `vente_inconnue`.
 - `limite` : 1 à 100 (50 par défaut), sinon 400 `parametre_invalide`.
@@ -1441,7 +1445,7 @@ Le catalogue est **national et unique**. Il n'est rempli que par un outil local 
 
 | Route | Corps | Réponse |
 |---|---|---|
-| `POST /api/pharmacie/entrees` | `{"medicament_id", "numero_lot", "date_expiration", "quantite", "prix_achat_unitaire_fcfa", "fournisseur"}` | 201, le lot |
+| `POST /api/pharmacie/entrees` | `{"medicament_id", "numero_lot", "date_expiration": "2027-06-15", "quantite", "prix_achat_unitaire_fcfa", "fournisseur"}`, ou `"mois_expiration": "2027-06"` à la place de `date_expiration` (exactement l'un des deux) | 201, le lot |
 | `POST /api/pharmacie/ventes` | `{"sur_ordonnance_papier": false, "lignes": [{"medicament_id", "quantite", "lot_id": null}]}` | 201, la vente |
 | `POST /api/pharmacie/ventes/{id}/annuler` | `{"motif": "…"}` | 200, la vente annulée (toute la vente ; le stock revient dans ses lots) |
 | `POST /api/pharmacie/pertes` | `{"lot_id", "quantite", "motif": "peremption" \| "casse" \| "autre", "commentaire": null}` (commentaire obligatoire pour `autre`) | 201, le mouvement |
@@ -1449,6 +1453,8 @@ Le catalogue est **national et unique**. Il n'est rempli que par un outil local 
 | `POST /api/pharmacie/mouvements/{id}/annuler` | `{"motif": "…"}` | 201, l'écriture inverse (une entrée, une perte ou un écart d'inventaire) |
 | `PUT /api/pharmacie/prix/{medicament_id}` (responsable) | `{"prix_unitaire_fcfa": 250}` | 200, `{"medicament_id", "prix_unitaire_fcfa", "date_effet"}` |
 | `PUT /api/pharmacie/seuils/{medicament_id}` | `{"seuil_min": 20, "seuil_max": null}` | 204 |
+
+**Entrée d'une boîte au mois seul** (« EXP 06/2027 ») : envoyer `"mois_expiration": "2027-06"`. Aucune source officielle burkinabè ni de l'UEMOA n'a été trouvée sur la convention ; la règle retenue est **la plus prudente pour le patient** : le lot est **périmé dès le premier jour du mois imprimé**. Le serveur enregistre donc `date_expiration` = **dernier jour du mois précédent** (`2027-06` donne `2027-05-31`) et rend `"mois_expiration_imprime": "2027-06"`. Une boîte du mois en cours est déjà périmée : 422 `donnees_invalides`. L'application doit afficher les deux : « Boîte : 06/2027, ne plus vendre à partir du 01/06/2027 ».
 | `PUT /api/pharmacie/reglages` (responsable) | `{"delai_alerte_peremption_jours": 90}` (1 à 365, `null` désactive) | 200, les réglages |
 
 Refus :
@@ -1498,7 +1504,7 @@ Refus :
 #### `POST /api/pharmacie/depenses/{id}/annuler`
 
 - **Corps** : `{"motif": "Saisie en double"}` (obligatoire, 1 000 caractères au plus). En-tête `Idempotency-Key` facultatif.
-- Crée une écriture au **montant opposé**, avec la **même date** et la **même catégorie** : la dépense disparaît du rapport de sa période.
+- Crée une écriture au **montant opposé**, avec la **même date** et la **même catégorie** : la dépense disparaît du rapport de **sa** période (règle commune des annulations, ci-dessous).
 - **Réponses** : 201 et l'annulation ; 404 `depense_inconnue` ; 409 `deja_annule` ; 409 `annulation_impossible` (une annulation ne s'annule pas).
 
 #### `GET /api/pharmacie/depenses?limite=&avant=`
@@ -1540,7 +1546,7 @@ Comment chaque nombre est calculé :
 
 À savoir :
 
-- un mouvement compte **à sa date** : une vente annulée le mois suivant diminue les ventes du mois suivant ;
+- **annulations, une seule règle** : toute annulation (vente, perte, écart d'inventaire, entrée, dépense) **corrige la période du mouvement d'origine**. Le journal ne change jamais : l'annulation y garde sa propre date ; mais le rapport la compte à la date du mouvement annulé. Exemple : une vente du 12 octobre annulée le 3 novembre disparaît des ventes d'octobre (et le produit revient dans le stock de fin octobre) ; novembre n'en garde aucune trace. **Le rapport d'une période passée peut donc changer** après une annulation ;
 - les **achats** (entrées en stock) ne sont pas des dépenses : leur coût compte quand le produit est vendu ou perdu ; le reste est dans la valeur du stock.
 
 ---

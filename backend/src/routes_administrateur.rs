@@ -246,13 +246,20 @@ pub async fn telecharger_piece(
     State(state): State<AppState>,
     CheminApi(piece_id): CheminApi<sqlx::types::Uuid>,
 ) -> Response {
-    use axum::http::header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, HeaderValue, X_CONTENT_TYPE_OPTIONS};
+    use axum::http::header::{
+        CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, HeaderValue, X_CONTENT_TYPE_OPTIONS,
+    };
     match laaficare_backend::piece_justificative::contenu(&state.db, piece_id).await {
         Ok(Some((type_mime, octets))) => {
-            let extension = match type_mime.as_str() {
-                "application/pdf" => "pdf",
-                "image/png" => "png",
-                _ => "jpg",
+            // Le type vient de la base (reconnu par les premiers octets au
+            // dépôt, CHECK de la migration 0012) ; jamais deviné ici.
+            let (type_mime, extension) = match type_mime.as_str() {
+                "application/pdf" => (type_mime, "pdf"),
+                "image/png" => (type_mime, "png"),
+                "image/jpeg" => (type_mime, "jpg"),
+                // Impossible tant que le CHECK tient ; repli neutre, qui ne
+                // s'affiche jamais dans le navigateur.
+                _ => ("application/octet-stream".to_string(), "bin"),
             };
             let disposition = format!("attachment; filename=\"piece-{piece_id}.{extension}\"");
             let mut reponse = (StatusCode::OK, octets).into_response();
@@ -261,18 +268,22 @@ pub async fn telecharger_piece(
             // peut pas échouer ; repli sûr sinon.
             entetes.insert(
                 CONTENT_TYPE,
-                HeaderValue::from_str(&type_mime).unwrap_or(HeaderValue::from_static("application/octet-stream")),
+                HeaderValue::from_str(&type_mime)
+                    .unwrap_or(HeaderValue::from_static("application/octet-stream")),
             );
             entetes.insert(
                 CONTENT_DISPOSITION,
-                HeaderValue::from_str(&disposition).unwrap_or(HeaderValue::from_static("attachment")),
+                HeaderValue::from_str(&disposition)
+                    .unwrap_or(HeaderValue::from_static("attachment")),
             );
             entetes.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
             entetes.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
             reponse
         }
-        Ok(None) => reponse_erreur(StatusCode::NOT_FOUND, "piece_inconnue", "Pièce inconnue.").into_response(),
-        Err(_) => reponse_erreur_interne("téléchargement d'une pièce", "erreur de la base").into_response(),
+        Ok(None) => reponse_erreur(StatusCode::NOT_FOUND, "piece_inconnue", "Pièce inconnue.")
+            .into_response(),
+        Err(_) => reponse_erreur_interne("téléchargement d'une pièce", "erreur de la base")
+            .into_response(),
     }
 }
 
@@ -382,18 +393,74 @@ mod tests {
             .execute(&state.db)
             .await
             .unwrap();
-        let administrateur = || AdministrateurAuthentifie { compte_id: Uuid::max() };
+        let administrateur = || AdministrateurAuthentifie {
+            compte_id: Uuid::max(),
+        };
 
-        let reponse = telecharger_piece(administrateur(), State(state.clone()), CheminApi(piece)).await;
+        let reponse =
+            telecharger_piece(administrateur(), State(state.clone()), CheminApi(piece)).await;
         assert_eq!(reponse.status(), StatusCode::OK);
         let entetes = reponse.headers().clone();
         assert_eq!(entetes["content-type"], "application/pdf");
-        assert_eq!(entetes["content-disposition"], format!("attachment; filename=\"piece-{piece}.pdf\"").as_str());
+        assert_eq!(
+            entetes["content-disposition"],
+            format!("attachment; filename=\"piece-{piece}.pdf\"").as_str()
+        );
         assert_eq!(entetes["x-content-type-options"], "nosniff");
         assert_eq!(entetes["cache-control"], "no-store");
-        assert_eq!(to_bytes(reponse.into_body(), usize::MAX).await.unwrap().as_ref(), b"%PDF-x");
+        assert_eq!(
+            to_bytes(reponse.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .as_ref(),
+            b"%PDF-x"
+        );
 
-        let inconnue = telecharger_piece(administrateur(), State(state), CheminApi(Uuid::max())).await;
+        // Une image JPEG : type et extension tirés de la base, nom choisi
+        // par le serveur, jamais celui de l'envoyeur (aucun n'est gardé).
+        let jpeg: Uuid = sqlx::query_scalar(
+            "WITH u AS (INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('KABRE', 'Ali', '+22670510002') RETURNING id), \
+                  c AS (INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) SELECT id, 'professionnel', 'x' FROM u RETURNING id), \
+                  s AS (INSERT INTO structure (type_structure, nom, telephone, telephone_urgence, region, email, commune, province, \
+                                               latitude, longitude, createur_compte_id) \
+                        SELECT 'pharmacie', 'Pharmacie fictive 2', '+22670000000', '+22670000000', 'Région fictive', 'p2@example.org', \
+                               'Commune fictive', 'Province fictive', 12.3714, -1.5197, id FROM c RETURNING id) \
+             INSERT INTO piece_justificative (structure_id, type_piece, numero, date_piece, type_mime, taille, sha256) \
+             SELECT id, 'autorisation_ouverture_exploitation', '2025-02', '2025-01-01', 'image/jpeg', 3, sha256('\\xffd8ff'::bytea) FROM s \
+             RETURNING id",
+        )
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO piece_contenu (piece_id, contenu) VALUES ($1, '\\xffd8ff'::bytea)",
+        )
+        .bind(jpeg)
+        .execute(&state.db)
+        .await
+        .unwrap();
+        let reponse =
+            telecharger_piece(administrateur(), State(state.clone()), CheminApi(jpeg)).await;
+        let entetes = reponse.headers();
+        assert_eq!(entetes["content-type"], "image/jpeg");
+        assert_eq!(
+            entetes["content-disposition"],
+            format!("attachment; filename=\"piece-{jpeg}.jpg\"").as_str()
+        );
+        assert_eq!(entetes["x-content-type-options"], "nosniff");
+        // Aucune colonne de nom de fichier : rien de l'envoyeur ne peut
+        // revenir dans l'en-tête.
+        let colonnes_nom: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM information_schema.columns \
+             WHERE table_name IN ('piece_justificative', 'piece_contenu') AND column_name LIKE '%nom%'",
+        )
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+        assert_eq!(colonnes_nom, 0);
+
+        let inconnue =
+            telecharger_piece(administrateur(), State(state), CheminApi(Uuid::max())).await;
         assert_eq!(inconnue.status(), StatusCode::NOT_FOUND);
     }
 
