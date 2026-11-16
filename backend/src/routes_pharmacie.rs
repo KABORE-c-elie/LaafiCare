@@ -30,7 +30,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::types::Uuid;
 
 use crate::AppState;
-use crate::erreur_api::{CheminApi, ErreurApi, JsonApi, ReponseErreur, RequeteApi, reponse_erreur, reponse_erreur_interne};
+use crate::erreur_api::{
+    CheminApi, Complement, ErreurApi, JsonApi, ReponseErreur, RequeteApi, reponse_erreur, reponse_erreur_interne,
+};
 use crate::extracteur_jwt::{PersonnelPharmacie, ResponsablePharmacie};
 use laaficare_backend::benefice_pharmacie::{
     self as benefice, AnnulationDepense, ChoixPeriode, Depense, ErreurBenefice, NouvelleDepense, Rapport,
@@ -59,23 +61,16 @@ pub(crate) fn mapper_erreur(erreur: ErreurStock) -> ReponseErreur {
         E::MouvementInconnu => (StatusCode::NOT_FOUND, "mouvement_inconnu"),
         E::LotPerime => (StatusCode::CONFLICT, "lot_perime"),
         E::StockInsuffisant { medicament_id, quantite_disponible } => {
-            return (
-                StatusCode::CONFLICT,
-                Json(ErreurApi {
-                    medicament_id: *medicament_id,
-                    quantite_disponible: Some(*quantite_disponible),
-                    ..ErreurApi::simple("stock_insuffisant", erreur.to_string())
-                }),
-            );
+            let complement = Complement {
+                medicament_id: *medicament_id,
+                quantite_disponible: Some(*quantite_disponible),
+                ..Default::default()
+            };
+            return (StatusCode::CONFLICT, Json(ErreurApi::avec("stock_insuffisant", erreur.to_string(), complement)));
         }
         E::PrixNonDefini { medicament_id } => {
-            return (
-                StatusCode::CONFLICT,
-                Json(ErreurApi {
-                    medicament_id: Some(*medicament_id),
-                    ..ErreurApi::simple("prix_non_defini", erreur.to_string())
-                }),
-            );
+            let complement = Complement { medicament_id: Some(*medicament_id), ..Default::default() };
+            return (StatusCode::CONFLICT, Json(ErreurApi::avec("prix_non_defini", erreur.to_string(), complement)));
         }
         E::DejaAnnule => (StatusCode::CONFLICT, "deja_annule"),
         E::AnnulationImpossible => (StatusCode::CONFLICT, "annulation_impossible"),
@@ -675,7 +670,11 @@ pub(crate) mod tests {
             vendre(personnel(&state, &jeton_pharm).await.unwrap(), State(state.clone()), entetes(None), JsonApi(vente_de(50)))
                 .await
                 .unwrap_err();
-        assert_eq!((s, e.code, e.medicament_id, e.quantite_disponible), (StatusCode::CONFLICT, "stock_insuffisant", Some(x), Some(8)));
+        assert_eq!((s, e.code), (StatusCode::CONFLICT, "stock_insuffisant"));
+        // Les champs complémentaires sont au premier niveau du JSON.
+        let json = serde_json::to_value(&e).unwrap();
+        assert_eq!((json["medicament_id"].as_str(), json["quantite_disponible"].as_i64()), (Some(x.to_string().as_str()), Some(8)));
+        assert!(json.get("complement").is_none() && json.get("pieces_manquantes").is_none(), "{json}");
 
         // L'autre pharmacie : rien à voir, rien à toucher.
         let (s, Json(e)) = vente(personnel(&state, &jeton_autre).await.unwrap(), State(state.clone()), CheminApi(v.id))

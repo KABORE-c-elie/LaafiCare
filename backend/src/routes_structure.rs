@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::types::Uuid;
 
 use crate::AppState;
-use crate::erreur_api::{CheminApi, ErreurApi, JsonApi, RequeteApi, reponse_erreur, reponse_erreur_interne};
+use crate::erreur_api::{CheminApi, Complement, ErreurApi, JsonApi, RequeteApi, reponse_erreur, reponse_erreur_interne};
 use crate::extracteur_jwt::PatientAuthentifie;
 use laaficare_backend::piece_justificative::{self, ErreurPiece, TypePiece};
 use laaficare_backend::structure::{
@@ -135,8 +135,8 @@ fn reponse_erreur_soumission(erreur: ErreurSoumission) -> Response {
         ErreurSoumission::CompteProfessionnelDesactive => (StatusCode::FORBIDDEN, "acces_refuse"),
         ErreurSoumission::TypeNonDisponible => (StatusCode::CONFLICT, "type_non_disponible"),
         ErreurSoumission::PiecesManquantes { pieces } => {
-            let mut corps = ErreurApi::simple("pieces_manquantes", erreur.to_string());
-            corps.pieces_manquantes = Some(pieces.clone());
+            let complement = Complement { pieces_manquantes: Some(pieces.clone()), ..Default::default() };
+            let corps = ErreurApi::avec("pieces_manquantes", erreur.to_string(), complement);
             return (StatusCode::CONFLICT, Json(corps)).into_response();
         }
         ErreurSoumission::Interne(etape) => {

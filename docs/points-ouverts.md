@@ -110,6 +110,12 @@ Quatre nouveaux avis, publiés du 13 au 30 octobre 2026 :
   - `libsqlite3-sys` 0.37.0 (RUSTSEC-2026-0459) : dans `Cargo.lock` par `sqlx`, mais **jamais compilé** (seul PostgreSQL est activé) ; la version corrigée est refusée par `sqlx-sqlite` 0.9.0.
 - **À refaire** à chaque nouvelle version de `jsonwebtoken` ou de `sqlx`, pour retirer ces exceptions.
 
+### Bilan de l'itération pharmacie (2026-11-16)
+
+- `cargo audit` : aucun nouvel avis ; aucune dépendance ajoutée par la pharmacie (`sha2`, `serde_json` et `chrono` étaient déjà là).
+- `cargo clippy` : aucun avertissement dans le code de la pharmacie. Les champs d'erreur ajoutés (`pieces_manquantes`, `medicament_id`, `quantite_disponible`) sont rangés dans une boîte (`Complement`, `erreur_api.rs`) : sans elle, la réponse d'erreur de toutes les routes grossissait et clippy signalait de nouveaux avertissements dans le code existant. Les 8 avertissements de style du code existant restent.
+- Relecture de sécurité : la pharmacie vient toujours de l'affectation du jeton ; chaque lecture et chaque écriture filtre sur elle, et la base le garantit par des clés étrangères composites ; un lot choisi doit être du médicament de la ligne ; montants calculés en entiers de 64 bits (1 000 000 unités × 100 000 000 FCFA au plus) ; aucune valeur saisie dans les messages d'erreur ; recherche du catalogue avec les caractères `%` et `_` échappés. **Limites notées** : un pharmacien peut rejouer la clé d'idempotence d'un collègue de la même pharmacie et recevoir le même objet (même pharmacie, aucune fuite) ; aucune limite du nombre de requêtes par pharmacie (comme le reste de l'API, avant la production).
+
 ### Application web (noté le 2026-10-20)
 
 Détail dans `web/docs/decisions.md` (branche `web`) :

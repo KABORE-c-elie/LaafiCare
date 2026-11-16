@@ -342,7 +342,9 @@ pub struct Vente {
 /// Une vente de la pharmacie, `None` si elle n'existe pas ou est d'une autre
 /// pharmacie.
 pub async fn vente(pool: &PgPool, structure_id: Uuid, vente_id: Uuid) -> Result<Option<Vente>, sqlx::Error> {
-    let entete: Option<(bool, DateTime<Utc>, Option<String>, Option<String>)> = sqlx::query_as(
+    // Ordonnance papier, date, nom et prénom de l'auteur.
+    type EnteteVente = (bool, DateTime<Utc>, Option<String>, Option<String>);
+    let entete: Option<EnteteVente> = sqlx::query_as(
         "SELECT v.sur_ordonnance_papier, v.date_vente, u.nom, u.prenom FROM vente v \
          JOIN affectation af ON af.id = v.auteur_affectation_id JOIN compte c ON c.id = af.compte_id \
          JOIN utilisateur u ON u.id = c.utilisateur_id \
