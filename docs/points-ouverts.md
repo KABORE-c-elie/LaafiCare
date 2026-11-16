@@ -101,6 +101,15 @@ Le code est enregistré en SHA-256 simple. Avec seulement un million de codes po
 
 **Décidée le 2026-10-21.** L'attaque Marvin permet, par le temps de calcul, de retrouver une clé RSA **privée** ; aucune version corrigée de `rsa` n'existe. La crate arrive seulement par la fonctionnalité `rust_crypto` de `jsonwebtoken`, qui l'impose ; aucune fonctionnalité ne garde HMAC sans RSA. **Nous ne sommes pas touchés** : les jetons sont en HS256 seulement, avec un secret partagé, et aucune clé RSA n'existe dans le projet (`src/jwt.rs` ; test `hs256_seulement`). L'exception est dans `backend/.cargo/audit.toml`. **À retirer** dès qu'une version corrigée de `rsa` existe, ou si une clé RSA entre dans le projet.
 
+### Bilan cargo audit du 2026-11-16 (étape 7)
+
+Quatre nouveaux avis, publiés du 13 au 30 octobre 2026 :
+- **corrigés** par une mise à jour de version compatible, dans `Cargo.lock` seulement (`Cargo.toml` inchangé) : `ctutils` 0.4.2 → 0.4.4 (RUSTSEC-2026-0385, comparaisons qui n'étaient pas à temps constant ; la crate sert à `aes-gcm`, qui chiffre les secrets TOTP, et aux empreintes SHA) ; `tokio` 1.53.1 → 1.53.3 (RUSTSEC-2026-0386, marqué *unsound*). Suite complète relancée ensuite ;
+- **exceptions ajoutées, à confirmer par le porteur** (`backend/.cargo/audit.toml`, justification détaillée) :
+  - `crypto-bigint` 0.5.5 (RUSTSEC-2026-0387) : il n'arrive que par l'ECDSA (ES256, ES384) de `jsonwebtoken`, comme `rsa` ; aucune clé à courbe elliptique dans le projet, HS256 seul ; la version corrigée n'est pas compatible avec `jsonwebtoken` 11.1.0 ;
+  - `libsqlite3-sys` 0.37.0 (RUSTSEC-2026-0459) : dans `Cargo.lock` par `sqlx`, mais **jamais compilé** (seul PostgreSQL est activé) ; la version corrigée est refusée par `sqlx-sqlite` 0.9.0.
+- **À refaire** à chaque nouvelle version de `jsonwebtoken` ou de `sqlx`, pour retirer ces exceptions.
+
 ### Application web (noté le 2026-10-20)
 
 Détail dans `web/docs/decisions.md` (branche `web`) :
