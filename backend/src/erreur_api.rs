@@ -21,6 +21,7 @@ use axum::http::request::Parts;
 use chrono::NaiveDate;
 use laaficare_backend::mot_de_passe::RegleMotDePasse;
 use serde::Serialize;
+use sqlx::types::Uuid;
 
 #[derive(Debug, Serialize)]
 pub struct ErreurApi {
@@ -37,6 +38,27 @@ pub struct ErreurApi {
     /// respectées, pour que l'application affiche une liste à cocher.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub regles_non_respectees: Option<Vec<RegleMotDePasse>>,
+    /// Champs des erreurs plus rares (pièces, pharmacie), au même niveau que
+    /// les autres dans le JSON (`flatten`), mais rangés dans une boîte : sans
+    /// elle, chaque réponse d'erreur de tous les handlers grossissait de
+    /// 56 octets (avertissement `result_large_err` de clippy).
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub complement: Option<Box<Complement>>,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct Complement {
+    /// Seulement pour `pieces_manquantes` : les types de pièces exigées qui
+    /// n'ont pas été déposés (soumission d'une structure).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pieces_manquantes: Option<Vec<&'static str>>,
+    /// Seulement pour `stock_insuffisant` et `prix_non_defini` (pharmacie) :
+    /// le médicament concerné, pour que l'application montre la bonne ligne.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub medicament_id: Option<Uuid>,
+    /// Seulement pour `stock_insuffisant` : la quantité encore disponible.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quantite_disponible: Option<i64>,
 }
 
 impl ErreurApi {
@@ -48,6 +70,15 @@ impl ErreurApi {
             debut_couverture: None,
             statut_actuel: None,
             regles_non_respectees: None,
+            complement: None,
+        }
+    }
+
+    /// Erreur avec des champs complémentaires rares.
+    pub fn avec(code: &'static str, erreur: impl Into<String>, complement: Complement) -> Self {
+        ErreurApi {
+            complement: Some(Box::new(complement)),
+            ..ErreurApi::simple(code, erreur)
         }
     }
 }

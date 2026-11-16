@@ -31,6 +31,7 @@ use crate::erreur_api::reponse_erreur;
 use laaficare_backend::affectation::{self, ControleExercice, Exercice};
 use laaficare_backend::demande_remboursement_munaseb::{AffectationAgent, ROLE_AGENT};
 use laaficare_backend::jwt::SorteJeton;
+use laaficare_backend::stock_pharmacie::{AffectationPharmacie, RolePharmacie};
 
 /// Motif de refus d'une requête protégée. Messages génériques : la réponse
 /// n'aide pas à deviner pourquoi un jeton est refusé.
@@ -464,6 +465,65 @@ impl FromRequestParts<AppState> for MembreMunaseb {
             return Err(RefusAuthentification::Interdit);
         }
         Ok(MembreMunaseb)
+    }
+}
+
+/// Personnel d'une pharmacie en exercice (pharmacie, étapes 3 à 5 ; CLAUDE.md
+/// §15, D5) : un professionnel en exercice dont l'affectation a le rôle
+/// `pharmacien` ou `responsable`, dans une structure de type `pharmacie`
+/// (validée et sous licence, contrôlé par `ProfessionnelEnExercice`). Sinon :
+/// 403 `acces_refuse`. La pharmacie est celle de l'affectation, jamais un
+/// identifiant lu dans la requête : chaque lecture et chaque écriture filtre
+/// sur elle (OWASP API1:2023, *Broken Object Level Authorization*). Le
+/// responsable est admis : un titulaire qui travaille seul n'a qu'une
+/// affectation `responsable` (on ne s'invite pas soi-même).
+#[derive(Debug)]
+pub struct PersonnelPharmacie(pub AffectationPharmacie);
+
+impl FromRequestParts<AppState> for PersonnelPharmacie {
+    type Rejection = RefusAuthentification;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let ProfessionnelEnExercice(exercice) =
+            ProfessionnelEnExercice::from_request_parts(parts, state).await?;
+        let role = match exercice.role.as_str() {
+            "pharmacien" => RolePharmacie::Pharmacien,
+            "responsable" => RolePharmacie::Responsable,
+            _ => return Err(RefusAuthentification::Interdit),
+        };
+        if exercice.type_structure != "pharmacie" {
+            return Err(RefusAuthentification::Interdit);
+        }
+        Ok(PersonnelPharmacie(AffectationPharmacie {
+            affectation_id: exercice.affectation_id,
+            structure_id: exercice.structure_id,
+            role,
+        }))
+    }
+}
+
+/// Responsable d'une pharmacie en exercice : prix de vente, réglages,
+/// dépenses et rapports (décision du porteur, 2026-11-16, CLAUDE.md §15).
+/// Un pharmacien reçoit 403 `acces_refuse`.
+#[derive(Debug)]
+pub struct ResponsablePharmacie(pub AffectationPharmacie);
+
+impl FromRequestParts<AppState> for ResponsablePharmacie {
+    type Rejection = RefusAuthentification;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let PersonnelPharmacie(affectation) =
+            PersonnelPharmacie::from_request_parts(parts, state).await?;
+        if affectation.role != RolePharmacie::Responsable {
+            return Err(RefusAuthentification::Interdit);
+        }
+        Ok(ResponsablePharmacie(affectation))
     }
 }
 

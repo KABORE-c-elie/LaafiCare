@@ -2,7 +2,7 @@
 
 Ce document décrit les routes de l'API Rust/Axum telles qu'elles sont **codées aujourd'hui**, puis celles qui sont **seulement prévues**. Les applications Angular (web) et Flutter (mobile) s'appuient sur lui. Il est mis à jour avec chaque ajout ou modification d'une route.
 
-État au 2026-10-18, branche `dev`.
+État au 2026-11-16, branche `backend-pharmacie`.
 
 Toutes les valeurs des exemples sont fictives.
 
@@ -200,6 +200,9 @@ Résumé :
 | POST | `/api/structures` | jeton `laaficare:patient` | fonctionne (section 2.8) ; type `munaseb` seulement |
 | POST | `/api/structures/{id}/soumettre` | jeton `laaficare:patient` du créateur | fonctionne (section 2.8) |
 | POST | `/api/structures/{id}/abandonner` | jeton `laaficare:patient` du créateur | fonctionne (section 2.8) |
+| POST | `/api/structures/{id}/pieces/{type_piece}` | jeton `laaficare:patient` du créateur | fonctionne (section 2.8) |
+| GET | `/api/structures/{id}/pieces` | jeton `laaficare:patient` du créateur | fonctionne (section 2.8) |
+| GET | `/api/administrateurs/pieces/{id}/fichier` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
 | GET | `/api/structures/mes-demandes` | jeton `laaficare:patient` | fonctionne (section 2.8) |
 | GET | `/api/administrateurs/structures` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
 | GET | `/api/administrateurs/structures/{id}` | jeton `laaficare:administrateur` | fonctionne (section 2.9) |
@@ -238,6 +241,14 @@ Résumé :
 | POST, GET | `/api/assurance-munaseb/contrats` | jeton en exercice, agent MUNASEB | fonctionne (section 2.14) ; GET avec `?numero_carte=` |
 | GET | `/api/assurance-munaseb/contrats/{id}` | jeton en exercice, agent MUNASEB | fonctionne (section 2.14) |
 | POST | `/api/assurance-munaseb/contrats/{id}/renouvellements` | jeton en exercice, agent MUNASEB | fonctionne (section 2.14) |
+| GET | `/api/pharmacie/medicaments`, `/api/pharmacie/medicaments/{id}/equivalents` | jeton en exercice, pharmacien ou responsable d'une pharmacie | fonctionne (section 2.15) |
+| GET | `/api/pharmacie/stock`, `/api/pharmacie/stock/{medicament_id}`, `/api/pharmacie/mouvements`, `/api/pharmacie/ventes/{id}`, `/api/pharmacie/alertes` | même appelant | fonctionne (section 2.15) |
+| POST | `/api/pharmacie/entrees`, `/api/pharmacie/ventes`, `/api/pharmacie/ventes/{id}/annuler`, `/api/pharmacie/pertes`, `/api/pharmacie/inventaires`, `/api/pharmacie/mouvements/{id}/annuler` | même appelant ; en-tête `Idempotency-Key` facultatif | fonctionne (section 2.15) |
+| PUT | `/api/pharmacie/seuils/{medicament_id}` | même appelant | fonctionne (section 2.15) |
+| PUT | `/api/pharmacie/prix/{medicament_id}`, `/api/pharmacie/reglages` | jeton en exercice, **responsable** d'une pharmacie seulement | fonctionne (section 2.15) |
+| POST, GET | `/api/pharmacie/depenses` | jeton en exercice, **responsable** d'une pharmacie seulement ; POST avec `Idempotency-Key` facultatif | fonctionne (section 2.16) |
+| POST | `/api/pharmacie/depenses/{id}/annuler` | même appelant | fonctionne (section 2.16) |
+| GET | `/api/pharmacie/rapport` | même appelant | fonctionne (section 2.16) |
 
 > **Routes MUNASEB rebranchées (étape 3.9).** Un agent se connecte par la connexion professionnelle (section 2.4), puis active son affectation `agent_assurance_munaseb` (section 2.6). Les routes de remboursement n'acceptent qu'un jeton `laaficare:professionnel_en_exercice` : tout autre jeton est refusé en 401. Avec un jeton de la bonne sorte, elles répondent **403 `acces_refuse`** si l'affectation n'est pas celle d'un agent MUNASEB, est désactivée, ou si la MUNASEB n'est plus validée ou sous licence. **Testable dans Postman de bout en bout** : la structure MUNASEB se crée (section 2.8), l'équipe la valide (section 2.9), le responsable invite un agent (section 2.10), et l'agent enregistre les contrats (section 2.14).
 
@@ -888,7 +899,7 @@ Cycle : `brouillon` (création) → `en_attente` (soumission) → `validee` ou `
 | 409 | `email_deja_utilise` | `email_professionnel` appartient à une autre personne |
 | 409 | `second_facteur_requis` | le compte professionnel a un second facteur : pas encore pris en charge ici |
 | 422 | `donnees_invalides` | champ obligatoire manquant ou vide, `email` ou `email_professionnel` refusé par le contrôle ci-dessus (le message nomme le champ : « Le champ « email » n'est pas une adresse email valide. »), type inconnu |
-| 422 | `type_non_disponible` | type connu mais pas encore ouvert (clinique, hôpital, pharmacie, laboratoire) |
+| 422 | `type_non_disponible` | type connu mais pas encore ouvert (clinique, hôpital, laboratoire). **`pharmacie` est ouvert depuis le 2026-11-16** (officine) |
 | 422 | `nom_trop_long` | nom de plus de 100 caractères |
 | 422 | `nom_invalide` | nom avec un retour à la ligne ou un caractère invisible |
 | 422 | `telephone_service_invalide` | numéro de service : format non reconnu (section 1.6) |
@@ -899,7 +910,7 @@ Cycle : `brouillon` (création) → `en_attente` (soumission) → `validee` ou `
 
 #### `POST /api/structures/{id}/soumettre`
 
-- **Appelant** : jeton patient du **créateur**. Pas de corps. La MUNASEB se soumet sans pièce justificative.
+- **Appelant** : jeton patient du **créateur**. Pas de corps. La MUNASEB se soumet sans pièce justificative ; une **pharmacie** doit avoir déposé son `autorisation_ouverture_exploitation` (route suivante).
 - **Réponses** :
 
 | Code | `code` | Cas |
@@ -909,7 +920,33 @@ Cycle : `brouillon` (création) → `en_attente` (soumission) → `validee` ou `
 | 403 | `acces_refuse` | compte professionnel désactivé |
 | 404 | `structure_inconnue` | structure inexistante, ou créée par une autre personne (jamais distingués) |
 | 409 | `transition_invalide` | la structure n'est pas en brouillon ; `statut_actuel` dans la réponse |
+| 409 | `pieces_manquantes` | pièces exigées non déposées ; **`pieces_manquantes`** dans la réponse, par exemple `["autorisation_ouverture_exploitation"]` (ajouté le 2026-11-16) |
 | 500 | `erreur_interne` | panne |
+
+#### `POST /api/structures/{id}/pieces/{type_piece}?numero=&date_piece=`
+
+Dépôt d'une pièce justificative (ajouté le 2026-11-16), **une requête par fichier** (réseau faible).
+
+- **Appelant** : jeton patient du **créateur**, sur une demande **en brouillon**.
+- **`type_piece`** : `autorisation_ouverture_exploitation` pour une pharmacie (seule pièce demandée aujourd'hui ; liste à confirmer par la DGPML ou l'Ordre des pharmaciens). `autorisation_creation` n'est pas demandée à une pharmacie.
+- **Paramètres** : `numero` (le numéro inscrit sur le document, 100 caractères au plus, gardé tel quel) et `date_piece` (`AAAA-MM-JJ`, jamais après aujourd'hui).
+- **Corps** : **le fichier lui-même**, tel quel (pas de formulaire). PDF, JPEG ou PNG, **5 Mo au plus**. Le serveur reconnaît le type par les premiers octets du fichier : l'en-tête `Content-Type` et le nom du fichier ne servent à rien et ne sont pas gardés.
+- Un nouveau dépôt du même type **remplace** la pièce active ; l'ancienne reste gardée, inactive.
+- **Réponses** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 201 | — | `{"id", "type_piece", "numero", "date_piece", "type_mime", "taille", "sha256", "active", "date_depot"}` |
+| 404 | `structure_inconnue` | structure inexistante, ou créée par une autre personne |
+| 409 | `transition_invalide` | la demande n'est plus en brouillon ; `statut_actuel` dans la réponse |
+| 413 | `fichier_trop_grand` | plus de 5 Mo |
+| 415 | `format_refuse` | ni PDF, ni JPEG, ni PNG (SVG et HEIC refusés) |
+| 422 | `piece_non_prevue` | ce type de pièce n'est pas demandé pour ce type de structure |
+| 422 | `fichier_vide`, `donnees_invalides` | fichier vide ; numéro vide, trop long ou réduit à « N° », date future |
+
+#### `GET /api/structures/{id}/pieces`
+
+- **Appelant** : jeton patient du **créateur**. **Réponse 200** : `{"pieces": [ … ]}`, les pièces actives, même forme que ci-dessus, **sans le fichier**. 404 `structure_inconnue`.
 
 #### `POST /api/structures/{id}/abandonner`
 
@@ -969,7 +1006,14 @@ Réservé à l'équipe LaafiCare : jeton d'accès `laaficare:administrateur` (se
 - **Avertissements MUNASEB** (vides pour les autres types) :
   - `autres_demandes_munaseb_en_attente` : les autres demandes MUNASEB en attente ;
   - `munaseb_deja_validee` : la MUNASEB déjà validée ou suspendue, si elle existe.
+- **`pieces`** (ajouté le 2026-11-16) : toutes les pièces, anciennes comprises (`active` à `false`), **sans le fichier** ; chacune avec **`meme_numero_dans`**, la liste des autres demandes dont une pièce active du même type porte le même numéro (comparé sans espaces, sans « N° », majuscules et tirets unifiés). Une seule structure peut être validée avec un même numéro : la seconde validation répond 409 `autorisation_deja_validee`.
 - 404 `structure_inconnue`.
+
+#### `GET /api/administrateurs/pieces/{id}/fichier`
+
+- **Appelant** : jeton administrateur. **La seule route qui renvoie le contenu d'une pièce.**
+- **Réponse 200** : le fichier, avec `Content-Type` (le type reconnu au dépôt), `Content-Disposition: attachment; filename="piece-<id>.pdf"` (nom choisi par le serveur), `X-Content-Type-Options: nosniff` et `Cache-Control: no-store`. Le navigateur l'enregistre au lieu de l'ouvrir.
+- 404 `piece_inconnue`.
 
 #### `POST /api/administrateurs/structures/{id}/valider`
 
@@ -1007,6 +1051,7 @@ Le **responsable** d'une structure validée invite au numéro de téléphone. La
 - **Le SMS**, sans lien ni code, entièrement dans l'alphabet GSM 7 bits (3GPP TS 23.038) : `LaafiCare : invitation à rejoindre "{structure}" comme {agent MUNASEB | responsable}. Ouvrez ou installez LaafiCare avec ce numéro pour répondre avant le {JJ/MM/AAAA}. LaafiCare ne demande jamais votre mot de passe.` Avec un nom de 100 caractères GSM 7 bits, il tient en 2 parties au plus. Un nom qui contient un caractère hors de cet alphabet (un `ê`, par exemple) le fait partir en UCS-2, plus long.
 - **En développement**, le SMS s'affiche dans le terminal du serveur.
 - **Pour la MUNASEB**, deux rôles : `agent_assurance_munaseb` et `responsable`.
+- **Pour une pharmacie** (ajouté le 2026-11-16), deux rôles : `pharmacien` et `responsable`. Pas de préparateur en V1.
 
 #### Côté responsable : jeton `laaficare:professionnel_en_exercice` sur une affectation `responsable`
 
@@ -1339,6 +1384,171 @@ La seule recherche de l'agent est le **numéro de carte** (de n'importe quelle a
 - **Corps** : `{"numero_carte": "0552/2027", "niveau_etudes": null, "antenne": null, "paiement": { … }}`, mêmes règles que l'adhésion. La nouvelle carte doit être différente de toutes les cartes déjà enregistrées.
 - **Réponses** : 201 et le détail du contrat ; 404 `contrat_inconnu` ; 409 `periode_future_deja_payee` (carence en cours, ou période suivante déjà payée) ; 409 `contrat_suspendu` (règles de suspension inconnues : le renouvellement reste bloqué) ; 409 `numero_carte_deja_utilise` ; 409 `reference_transaction_deja_utilisee` ; 422 `donnees_invalides`.
 
+### 2.15 Pharmacie : catalogue, stock, ventes (2026-11-16)
+
+Pour une **officine** validée et sous licence (type `pharmacie`, section 2.8). Jeton `laaficare:professionnel_en_exercice` sur une affectation de cette pharmacie :
+
+- **pharmacien ou responsable** : toutes les routes ci-dessous, sauf deux ;
+- **responsable seulement** : `PUT /api/pharmacie/prix/{medicament_id}` et `PUT /api/pharmacie/reglages`. Un pharmacien reçoit **403 `acces_refuse`**.
+
+Tout autre rôle, une autre sorte de structure ou une pharmacie non validée : 403 `acces_refuse`.
+
+**La pharmacie est toujours celle de l'affectation du jeton.** Aucune route ne prend l'identifiant d'une pharmacie. Un lot, une vente ou un mouvement d'une autre pharmacie répond **404**, exactement comme un objet qui n'existe pas.
+
+**Ce qui n'existe pas encore** : ordonnance numérique, dossier du patient, alerte d'allergie (module médecin, plus tard, D2) ; aucune donnée patient n'est enregistrée avec une vente (D10).
+
+#### Règles du stock
+
+- **Le stock est un journal.** Chaque entrée crée un **lot** (numéro, date d'expiration, prix d'achat, fournisseur). Chaque entrée, vente, perte, écart d'inventaire ou annulation est un **mouvement**, jamais modifié ni effacé. Une erreur se corrige par une **annulation**, qui écrit le mouvement inverse.
+- **Lot périmé** : un lot se vend jusqu'à sa date d'expiration **comprise** (date du Burkina). Le lendemain, il ne se vend plus et ne compte plus dans le stock disponible. Il reste en stock jusqu'à sa sortie en perte (motif `peremption`). Un lot déjà périmé ne peut pas entrer.
+- **FEFO** : une vente sort d'abord le lot qui périme le plus tôt, sauf si le pharmacien choisit un lot (`lot_id`).
+- **Prix figés** : chaque mouvement garde le prix d'achat de son lot ; chaque ligne de vente garde aussi son prix de vente. Un nouveau prix ne change jamais une vente passée.
+- **Sans prix de vente fixé par le responsable, un médicament ne se vend pas** (409 `prix_non_defini`).
+- Garde-fous techniques : 1 à 1 000 000 unités par ligne, prix de 0 à 100 000 000 FCFA, 100 lignes par vente ou par inventaire.
+
+#### Clé d'idempotence (coupure de réseau)
+
+Chaque création (`entrees`, `ventes`, `ventes/{id}/annuler`, `pertes`, `inventaires`, `mouvements/{id}/annuler`) accepte l'en-tête facultatif :
+
+```
+Idempotency-Key: 8e03978e-40d5-43e8-bc93-6894a57f9324
+```
+
+Source : draft IETF *The Idempotency-Key HTTP Header Field*.
+
+- L'application crée **une clé par opération** (un UUID par exemple), **avant** le premier envoi, et la garde jusqu'à la réponse.
+- Si la réponse se perd, elle renvoie **la même requête avec la même clé** : le serveur renvoie l'objet déjà créé, **sans rien créer une seconde fois**.
+- La même clé avec une **autre** requête : **422 `cle_idempotence_reutilisee`**.
+- Une clé de plus de 255 caractères, vide, avec une espace ou un caractère non ASCII, ou deux en-têtes : **400 `cle_idempotence_invalide`**.
+- Une clé vaut pour **la pharmacie**, sans limite de durée.
+
+#### Catalogue
+
+- `GET /api/pharmacie/medicaments?q=&limite=` : recherche par dénomination ou par DCI, sans tenir compte des majuscules. `q` : 2 à 100 caractères, sinon 400 `parametre_invalide`. Réponse : `{"medicaments": [{"id", "denomination", "forme", "dosage", "dci": ["…"]}]}`.
+- `GET /api/pharmacie/medicaments/{id}/equivalents` : médicaments qui ont **exactement les mêmes DCI**, avec le stock disponible et le prix de **cette** pharmacie. Réponse : `{"medicament": {…}, "equivalents": [{…, "correspondance", "meme_dosage", "meme_forme", "quantite_disponible", "prix_vente_unitaire_fcfa"}]}`. 404 `medicament_inconnu`.
+  - **Classement, pour la sécurité du patient** : d'abord `"correspondance": "meme_dci_meme_dosage_meme_forme"` ; ensuite `"correspondance": "meme_dci_dosage_ou_forme_different"`, avec `meme_dosage` et `meme_forme` qui disent lequel diffère. Dans chaque groupe, ceux en stock d'abord, puis par nom.
+  - **Rien n'est caché** : un équivalent de dosage ou de forme différent reste dans la liste, même en stock ; **le pharmacien décide**. L'application doit l'afficher comme tel (par exemple « Dosage différent : 1 g au lieu de 500 mg »), avec un texte, pas seulement une couleur.
+  - Le dosage et la forme sont comparés sans tenir compte des majuscules ni des espaces en trop ; « 500 mg » et « 500mg » restent **différents** (sens prudent : signalé, jamais confondu).
+  - Une association (plusieurs DCI) n'est jamais l'équivalent d'une molécule seule, et inversement.
+
+Le catalogue est **national et unique**. Il n'est rempli que par un outil local de l'équipe LaafiCare (`importer_catalogue`), jamais par une route. **Il reste vide tant que la liste officielle n'est pas déposée** (D6).
+
+#### Lectures du stock
+
+- `GET /api/pharmacie/stock?limite=&apres=` : un élément par médicament qui a eu au moins un lot : le médicament, `quantite_disponible` (lots non périmés), `quantite_perimee`, `valeur_achat_fcfa` (tout le stock au prix d'achat), `seuil_min`, `seuil_max`, `prix_vente_unitaire_fcfa` (ou `null`). Pages : `{"medicaments": […], "suivant": "<id ou null>"}`, à passer en `apres`.
+- `GET /api/pharmacie/stock/{medicament_id}` : `{"medicament_id", "lots": [{"id", "numero_lot", "date_expiration", "mois_expiration_imprime", "prix_achat_unitaire_fcfa", "fournisseur", "quantite", "perime", "date_creation"}]}`, lots encore en stock, **dans l'ordre FEFO**. `mois_expiration_imprime` (`AAAA-MM` ou `null`) : le mois imprimé sur une boîte qui n'indiquait que le mois (voir « Entrée d'une boîte au mois seul »).
+- `GET /api/pharmacie/mouvements?limite=&avant=` : journal, le plus récent d'abord : `{"mouvements": [{"id", "nature", "lot_id", "medicament_id", "denomination", "numero_lot", "quantite", "prix_achat_unitaire_fcfa", "prix_vente_unitaire_fcfa", "vente_id", "inventaire_id", "motif_perte", "commentaire", "annule_mouvement_id", "annule_par", "date_mouvement", "auteur_nom", "auteur_prenom"}], "suivant": …}`. `nature` : `entree`, `vente`, `perte`, `inventaire`, `annulation`. `quantite` est positive pour ce qui entre, négative pour ce qui sort.
+- `GET /api/pharmacie/ventes/{id}` : `{"id", "sur_ordonnance_papier", "date_vente", "auteur_nom", "auteur_prenom", "lignes": [mouvements], "total_fcfa", "annulee"}`. `total_fcfa` ne compte que les lignes non annulées. 404 `vente_inconnue`.
+- `limite` : 1 à 100 (50 par défaut), sinon 400 `parametre_invalide`.
+
+#### Écritures
+
+| Route | Corps | Réponse |
+|---|---|---|
+| `POST /api/pharmacie/entrees` | `{"medicament_id", "numero_lot", "date_expiration": "2027-06-15", "quantite", "prix_achat_unitaire_fcfa", "fournisseur"}`, ou `"mois_expiration": "2027-06"` à la place de `date_expiration` (exactement l'un des deux) | 201, le lot |
+| `POST /api/pharmacie/ventes` | `{"sur_ordonnance_papier": false, "lignes": [{"medicament_id", "quantite", "lot_id": null}]}` | 201, la vente |
+| `POST /api/pharmacie/ventes/{id}/annuler` | `{"motif": "…"}` | 200, la vente annulée (toute la vente ; le stock revient dans ses lots) |
+| `POST /api/pharmacie/pertes` | `{"lot_id", "quantite", "motif": "peremption" \| "casse" \| "autre", "commentaire": null}` (commentaire obligatoire pour `autre`) | 201, le mouvement |
+| `POST /api/pharmacie/inventaires` | `{"lignes": [{"lot_id", "quantite_comptee"}]}` | 201, `{"inventaire_id", "ecarts": [mouvements]}` (un mouvement par lot dont le compte diffère du stock) |
+| `POST /api/pharmacie/mouvements/{id}/annuler` | `{"motif": "…"}` | 201, l'écriture inverse (une entrée, une perte ou un écart d'inventaire) |
+| `PUT /api/pharmacie/prix/{medicament_id}` (responsable) | `{"prix_unitaire_fcfa": 250}` | 200, `{"medicament_id", "prix_unitaire_fcfa", "date_effet"}` |
+| `PUT /api/pharmacie/seuils/{medicament_id}` | `{"seuil_min": 20, "seuil_max": null}` | 204 |
+
+**Entrée d'une boîte au mois seul** (« EXP 06/2027 ») : envoyer `"mois_expiration": "2027-06"`. Aucune source officielle burkinabè ni de l'UEMOA n'a été trouvée sur la convention ; la règle retenue est **la plus prudente pour le patient** : le lot est **périmé dès le premier jour du mois imprimé**. Le serveur enregistre donc `date_expiration` = **dernier jour du mois précédent** (`2027-06` donne `2027-05-31`) et rend `"mois_expiration_imprime": "2027-06"`. Une boîte du mois en cours est déjà périmée : 422 `donnees_invalides`. L'application doit afficher les deux : « Boîte : 06/2027, ne plus vendre à partir du 01/06/2027 ».
+| `PUT /api/pharmacie/reglages` (responsable) | `{"delai_alerte_peremption_jours": 90}` (1 à 365, `null` désactive) | 200, les réglages |
+
+Refus :
+
+- 404 `medicament_inconnu`, `lot_inconnu`, `vente_inconnue`, `mouvement_inconnu` (inexistant ou d'une autre pharmacie) ;
+- 409 `stock_insuffisant`, avec `medicament_id` (si connu) et `quantite_disponible` ;
+- 409 `prix_non_defini`, avec `medicament_id` ;
+- 409 `lot_perime` (lot choisi périmé) ;
+- 409 `deja_annule` ; 409 `annulation_impossible` (une vente s'annule par sa propre route ; une annulation ne s'annule pas) ;
+- 409 `stock_insuffisant` aussi pour l'annulation d'une entrée dont une partie est déjà sortie ;
+- 422 `donnees_invalides` (le message nomme le champ) ; 400 et 422 pour la clé d'idempotence (ci-dessus).
+
+#### Alertes (dans l'application, jamais par SMS, D11)
+
+`GET /api/pharmacie/alertes`, calculées à chaque lecture sur le stock réel :
+
+```json
+{
+  "sous_seuil_min": [{"medicament_id", "denomination", "quantite_disponible", "seuil_min", "seuil_max"}],
+  "au_dessus_seuil_max": […],
+  "alerte_peremption_active": false,
+  "delai_alerte_peremption_jours": null,
+  "bientot_perimes": [{"lot_id", "medicament_id", "denomination", "numero_lot", "date_expiration", "quantite", "jours_restants"}],
+  "perimes_en_stock": […]
+}
+```
+
+- `bientot_perimes` reste **vide tant que le responsable n'a pas réglé le délai** (D9 : aucune valeur par défaut).
+- `perimes_en_stock` : lots périmés encore en stock, à sortir en perte ; toujours affichés.
+
+### 2.16 Pharmacie : dépenses et bénéfice net (2026-11-16)
+
+> **Ce n'est pas la comptabilité officielle (SYSCOHADA).** C'est un tableau de gestion pour le responsable de la pharmacie, en FCFA entiers. **Aucun calcul d'impôt** : les impôts et taxes sont une dépense saisie (catégorie `impots_taxes`).
+
+**Responsable de la pharmacie seulement** (jeton en exercice, affectation `responsable` d'une pharmacie). Un pharmacien reçoit **403 `acces_refuse`**. Une dépense d'une autre pharmacie répond 404, comme une dépense qui n'existe pas.
+
+#### `POST /api/pharmacie/depenses`
+
+- **Corps** : `{"date_depense": "2026-11-16", "categorie": "loyer", "montant_fcfa": 50000, "libelle": "Loyer de novembre"}`.
+- `categorie` : `loyer`, `salaires`, `electricite`, `eau`, `transport`, `impots_taxes`, `entretien`, `autres`.
+- `date_depense` : jamais dans le futur (date du Burkina). `montant_fcfa` : entier positif. `libelle` : 1 à 200 caractères.
+- En-tête `Idempotency-Key` facultatif (section 2.15).
+- **Réponses** : 201 et la dépense `{"id", "date_depense", "categorie", "montant_fcfa", "libelle", "annule_depense_id", "motif_annulation", "annulee_par", "date_creation", "auteur_nom", "auteur_prenom"}` ; 422 `donnees_invalides`.
+
+**Une dépense ne se modifie ni ne s'efface jamais.** Une erreur se corrige par une annulation.
+
+#### `POST /api/pharmacie/depenses/{id}/annuler`
+
+- **Corps** : `{"motif": "Saisie en double"}` (obligatoire, 1 000 caractères au plus). En-tête `Idempotency-Key` facultatif.
+- Crée une écriture au **montant opposé**, avec la **même date** et la **même catégorie** : la dépense disparaît du rapport de **sa** période (règle commune des annulations, ci-dessous).
+- **Réponses** : 201 et l'annulation ; 404 `depense_inconnue` ; 409 `deja_annule` ; 409 `annulation_impossible` (une annulation ne s'annule pas).
+
+#### `GET /api/pharmacie/depenses?limite=&avant=`
+
+Le journal des dépenses, la plus récemment saisie d'abord, annulations comprises : `{"depenses": […], "suivant": …}`.
+
+#### `GET /api/pharmacie/rapport`
+
+Deux façons de choisir la période (dates du Burkina, comprises) :
+
+- `?periode=semaine` (du lundi au dimanche), `?periode=mois` ou `?periode=annee`, avec `&date=AAAA-MM-JJ` facultatif (la période qui contient cette date ; aujourd'hui par défaut) ;
+- ou `?du=AAAA-MM-JJ&au=AAAA-MM-JJ`.
+
+Autre chose (rien, les deux à la fois, `au` avant `du`, plus de 3 660 jours) : 422 `donnees_invalides`.
+
+```json
+{
+  "du": "2026-11-16", "au": "2026-11-22",
+  "ventes_fcfa": 600,
+  "cout_achat_vendu_fcfa": 300,
+  "marge_brute_fcfa": 300,
+  "pertes": {"peremption_fcfa": 200, "casse_fcfa": 100, "autre_fcfa": 0, "ecarts_inventaire_fcfa": -20, "total_fcfa": 280},
+  "depenses": {"par_categorie": [{"categorie": "loyer", "montant_fcfa": 50000}, …], "total_fcfa": 50000},
+  "benefice_net_fcfa": -49980,
+  "valeur_stock_fin_fcfa": 1320,
+  "dont_perime_fcfa": 100
+}
+```
+
+Comment chaque nombre est calculé :
+
+- **ventes** : les lignes de vente au prix de vente figé, moins les ventes annulées ;
+- **coût d'achat des produits vendus** : les mêmes lignes au prix d'achat de leur lot ;
+- **marge brute** = ventes − coût d'achat des produits vendus ;
+- **pertes**, au prix d'achat du lot : péremption, casse, autre, et **écarts d'inventaire** (un manque est une perte ; un excédent la diminue, d'où un nombre qui peut être négatif) ;
+- **dépenses** : le journal, par catégorie (les huit, même à 0) ;
+- **bénéfice net** = marge brute − pertes − dépenses ;
+- **valeur du stock restant** à la fin du dernier jour, au prix d'achat, **dont** les lots déjà périmés à cette date.
+
+À savoir :
+
+- **annulations, une seule règle** : toute annulation (vente, perte, écart d'inventaire, entrée, dépense) **corrige la période du mouvement d'origine**. Le journal ne change jamais : l'annulation y garde sa propre date ; mais le rapport la compte à la date du mouvement annulé. Exemple : une vente du 12 octobre annulée le 3 novembre disparaît des ventes d'octobre (et le produit revient dans le stock de fin octobre) ; novembre n'en garde aucune trace. **Le rapport d'une période passée peut donc changer** après une annulation ;
+- les **achats** (entrées en stock) ne sont pas des dépenses : leur coût compte quand le produit est vendu ou perdu ; le reste est dans la valeur du stock.
+
 ---
 
 ## 3. Codes d'erreur : index
@@ -1347,7 +1557,7 @@ La seule recherche de l'agent est le **numéro de carte** (de n'importe quelle a
 |---|---|---|
 | `authentification_requise` | 401 | routes protégées |
 | `jeton_invalide` | 401 | routes protégées |
-| `acces_refuse` | 403 | routes protégées (routes MUNASEB : pas agent MUNASEB, affectation désactivée, établissement suspendu, licence expirée ; invitations, membres et modification des paramètres MUNASEB : affectation qui n'est pas `responsable`) |
+| `acces_refuse` | 403 | routes protégées (routes MUNASEB : pas agent MUNASEB, affectation désactivée, établissement suspendu, licence expirée ; invitations, membres et modification des paramètres MUNASEB : affectation qui n'est pas `responsable` ; pharmacie : pas pharmacien ni responsable d'une pharmacie, et prix, réglages, dépenses et rapports pour un pharmacien) |
 | `affectation_non_exercable` | 403 | activation d'une affectation |
 | `affectation_inconnue` | 404 | activation et désactivation d'une affectation |
 | `dernier_responsable` | 409 | désactivation d'une affectation |
@@ -1367,7 +1577,12 @@ La seule recherche de l'agent est le **numéro de carte** (de n'importe quelle a
 | `lien_invalide` | 400 | vérification de l'email, réinitialisation du mot de passe |
 | `type_non_disponible`, `localisation_hors_burkina`, `nom_trop_long`, `nom_invalide` | 422 | création de structure |
 | `demande_deja_en_cours`, `email_different`, `email_deja_utilise`, `second_facteur_requis` | 409 | création de structure |
-| `structure_inconnue` | 404 | soumission et abandon d'une structure, routes administrateur des structures |
+| `structure_inconnue` | 404 | soumission et abandon d'une structure, pièces justificatives, routes administrateur des structures |
+| `pieces_manquantes` | 409 | soumission d'une structure (avec `pieces_manquantes`) |
+| `piece_non_prevue`, `fichier_vide` | 422 | dépôt d'une pièce |
+| `fichier_trop_grand` | 413 | dépôt d'une pièce |
+| `format_refuse` | 415 | dépôt d'une pièce |
+| `piece_inconnue` | 404 | téléchargement d'une pièce |
 | `decision_sur_sa_propre_structure` | 403 | validation, refus d'une structure |
 | `email_responsable_non_verifie`, `munaseb_deja_validee`, `autorisation_deja_validee` | 409 | validation d'une structure |
 | `licence_invalide` | 422 | validation d'une structure |
@@ -1388,6 +1603,11 @@ La seule recherche de l'agent est le **numéro de carte** (de n'importe quelle a
 | `notification_inconnue` | 404 | notification lue (inexistante ou d'une autre personne) |
 | `transition_invalide` | 409 | transitions, soumission, abandon, validation et refus d'une structure, désactivation d'une affectation |
 | `motif_vide`, `motif_trop_long` | 422 | rejet d'une demande de remboursement, refus d'une structure |
+| `medicament_inconnu`, `lot_inconnu`, `vente_inconnue`, `mouvement_inconnu` | 404 | pharmacie (section 2.15 ; aussi pour un objet d'une autre pharmacie) |
+| `stock_insuffisant`, `prix_non_defini`, `lot_perime`, `deja_annule`, `annulation_impossible` | 409 | pharmacie (avec `medicament_id`, et `quantite_disponible` pour le stock) ; `deja_annule` et `annulation_impossible` aussi pour les dépenses |
+| `depense_inconnue` | 404 | annulation d'une dépense (section 2.16 ; aussi pour une dépense d'une autre pharmacie) |
+| `cle_idempotence_invalide` | 400 | créations de la pharmacie (en-tête `Idempotency-Key`) |
+| `cle_idempotence_reutilisee` | 422 | créations de la pharmacie (même clé, autre requête) |
 | `erreur_interne` | 500 | toutes |
 
 ---

@@ -39,6 +39,12 @@ erDiagram
     partenaire_sante_munaseb ||--o{ demande_remboursement_munaseb : "émet"
     demande_remboursement_munaseb ||--o{ historique_statut_demande : "trace"
     utilisateur ||--o{ notification : "reçoit"
+    medicament }o--o{ dci : "contient"
+    structure ||--o{ lot_stock : "stocke (pharmacie)"
+    medicament ||--o{ lot_stock : "lot de"
+    lot_stock ||--o{ mouvement_stock : "journal"
+    vente ||--o{ mouvement_stock : "lignes"
+    affectation ||--o{ mouvement_stock : "auteur"
 ```
 
 ---
@@ -231,6 +237,8 @@ Règles garanties par la base :
 
 Le numéro d'autorisation est gardé **tel que saisi** et dans une **forme normalisée** pour les comparaisons : majuscules, sans espaces, tous les tirets ramenés au tiret simple, préfixe « N° » retiré. Le fichier lui-même (PDF, JPEG ou PNG, 5 Mo au plus) est rangé dans une table séparée, pour qu'aucune liste ne le lise par erreur.
 
+**Utilisées depuis le 2026-11-16** par les pharmacies, qui déposent leur **autorisation d'ouverture et d'exploitation** avant de soumettre leur demande. Le type du fichier est reconnu par ses premiers octets ; le nom envoyé n'est jamais gardé. Un nouveau dépôt du même type rend l'ancienne pièce inactive, sans l'effacer. Seule l'équipe LaafiCare télécharge un fichier. Fichier : [`piece_justificative.rs`](../backend/src/piece_justificative.rs).
+
 ### `autorisation_validee` : le registre des autorisations
 
 Une ligne par numéro d'autorisation validé. Elle garantit qu'**un même numéro ne peut servir qu'à un seul établissement validé**, sans qu'un simple brouillon puisse bloquer un vrai établissement.
@@ -289,6 +297,40 @@ Règles garanties par la base : **jamais modifiées ni supprimées** ; seulement
 
 ---
 
+## 6. Pharmacie (2026-11-16)
+
+### Le catalogue national : `dci`, `medicament`, `medicament_dci`, `import_catalogue`
+
+Un **seul catalogue pour tout le pays**, partagé par toutes les pharmacies (D6). Un médicament a une dénomination, une forme, un dosage, et **une ou plusieurs DCI** (molécules ; plusieurs pour une association). Chaque ajout est rattaché à un **import** : l'administrateur LaafiCare qui l'a lancé, la source officielle, l'empreinte SHA-256 du fichier, le nombre de lignes. Jamais modifié ni effacé ; le serveur le lit, seul l'outil `importer_catalogue` l'écrit. **Vide tant que la liste nationale officielle n'est pas déposée** dans `docs/Reglementation, loi et reference/`. Fichier : [`catalogue.rs`](../backend/src/catalogue.rs). Migration 0030.
+
+### `lot_stock` : un lot reçu par une pharmacie
+
+Numéro de lot, date d'expiration (dernier jour utilisable, compris), **prix d'achat unitaire**, fournisseur, médicament, pharmacie. La quantité n'est pas une colonne : c'est la somme des mouvements du lot. Jamais modifié ni effacé. Quand la boîte n'indique que le mois (« EXP 06/2027 »), `expiration_mois_seul` vaut vrai et la date enregistrée est le dernier jour du mois **précédent** (31/05/2027) : règle la plus prudente, faute de source officielle burkinabè (migration 0033 ; la base vérifie que la date est bien une fin de mois).
+
+### `mouvement_stock` : le journal
+
+Une ligne par entrée, vente, perte (`peremption`, `casse`, `autre`), écart d'inventaire ou annulation. Chaque ligne garde le **prix d'achat** de son lot, et une ligne de vente son **prix de vente** : figés. Auteur : l'affectation (pharmacien ou responsable de la même pharmacie). Une annulation désigne le mouvement annulé, une seule fois. Garanties de la base : **la quantité d'un lot n'est jamais négative** (trigger, même pour deux ventes simultanées) ; un mouvement ne vise que les lots et les ventes **de sa pharmacie** ; jamais modifié ni effacé. Fichier : [`stock_pharmacie.rs`](../backend/src/stock_pharmacie.rs). Migration 0031.
+
+### `vente` : l'en-tête d'une vente
+
+Pharmacie, auteur, date, case « sur ordonnance papier ». **Aucune donnée patient** (D10). Les lignes sont des mouvements.
+
+### `prix_vente_pharmacie`, `seuil_stock`, `reglage_pharmacie`
+
+- Prix de vente **par pharmacie et par médicament**, une version par changement, fixé par le **responsable** seulement (garanti par la base) ; jamais modifié.
+- Seuils minimal et maximal d'alerte, par médicament ; modifiables, jamais effacés.
+- Délai d'alerte de péremption de la pharmacie, réglé par le **responsable** (garanti par la base) ; vide = alerte désactivée (D9).
+
+### `depense_pharmacie` : les dépenses
+
+Une ligne par dépense : date (jamais future), catégorie (`loyer`, `salaires`, `electricite`, `eau`, `transport`, `impots_taxes`, `entretien`, `autres`), montant en FCFA entiers, libellé, auteur. L'auteur est **le responsable** de la pharmacie, garanti par la base. Jamais modifiée ni effacée : une **annulation** est une nouvelle ligne au montant opposé, même date et même catégorie, avec un motif, une seule par dépense, dans la même pharmacie. Sert au rapport du bénéfice net (`docs/api.md`, section 2.16), qui n'est pas la comptabilité officielle. Fichier : [`benefice_pharmacie.rs`](../backend/src/benefice_pharmacie.rs). Migration 0032.
+
+### `operation_idempotente` : les clés d'idempotence
+
+Une ligne par clé `Idempotency-Key` reçue : pharmacie, clé, opération, empreinte SHA-256 de la requête, objet créé. Sert à renvoyer le même objet quand une requête est renvoyée après une coupure. Jamais modifiée ni effacée.
+
+---
+
 ## Les migrations, une par une
 
 | N° | Ce qu'elle apporte |
@@ -322,5 +364,9 @@ Règles garanties par la base : **jamais modifiées ni supprimées** ; seulement
 | 0027 | Trace des interventions de l'équipe sur un compte compromis (`intervention_compte` : retrait d'une affectation, blocage, réactivation), jamais modifiée ni supprimée, jamais sur ses propres comptes ; écrite par le seul rôle des outils |
 | 0028 | Contrat MUNASEB tenu par les agents : paramètres de la mutuelle en base et historisés (`parametre_munaseb`), numéro de carte, antenne, niveau d'études et plafond sur chaque période, paiement de la cotisation (`paiement_cotisation_munaseb`) ; traces jamais modifiées |
 | 0029 | Paramètres MUNASEB modifiés par le seul responsable de la structure (colonnes de l'auteur renommées) ; trace des adhésions sans patient (`echec_adhesion_munaseb`), pour la limite d'échecs par agent |
+| 0030 | Catalogue national des médicaments (`import_catalogue`, `dci`, `medicament`, `medicament_dci`) : jamais modifié ni effacé ; lu par le serveur, rempli par le seul outil d'import |
+| 0031 | Stock des pharmacies : lots, ventes, journal des mouvements (jamais négatif, jamais modifié), prix de vente historisés, seuils, réglages, clés d'idempotence |
+| 0032 | Dépenses des pharmacies (`depense_pharmacie`), par le seul responsable, jamais modifiées : une correction est une annulation tracée |
+| 0033 | Lot saisi au mois seul (`lot_stock.expiration_mois_seul`) : la date enregistrée est alors la veille du mois imprimé (règle prudente) |
 
 Une migration déjà appliquée ne change plus jamais : toute évolution passe par une nouvelle migration. Un test vérifie aussi qu'aucun caractère invisible ne s'y glisse ([`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs)).

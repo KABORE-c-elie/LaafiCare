@@ -7,6 +7,7 @@ mod routes_invitation;
 mod routes_membres;
 mod routes_mot_de_passe;
 mod routes_patient;
+mod routes_pharmacie;
 mod routes_remboursement_munaseb;
 mod routes_professionnel;
 mod routes_session;
@@ -253,6 +254,19 @@ async fn main() {
         .route("/api/structures/mes-demandes", get(routes_structure::mes_demandes))
         .route("/api/structures/{id}/soumettre", post(routes_structure::soumettre))
         .route("/api/structures/{id}/abandonner", post(routes_structure::abandonner))
+        .route("/api/structures/{id}/pieces", get(routes_structure::lister_pieces))
+        .route(
+            "/api/structures/{id}/pieces/{type_piece}",
+            // Limite de 5 Mio sur cette seule route (§14) ; les autres
+            // gardent la limite par défaut d'axum (2 Mio).
+            post(routes_structure::deposer_piece).layer(axum::extract::DefaultBodyLimit::max(
+                laaficare_backend::piece_justificative::TAILLE_MAX_OCTETS,
+            )),
+        )
+        .route(
+            "/api/administrateurs/pieces/{id}/fichier",
+            get(routes_administrateur::telecharger_piece),
+        )
         .route("/api/professionnels/membres", get(routes_membres::lister))
         .route("/api/professionnels/membres/{id}/desactiver", post(routes_membres::desactiver))
         .route("/api/patients/munaseb/droits", get(routes_espace_patient::droits))
@@ -261,6 +275,62 @@ async fn main() {
         .route("/api/patients/notifications", get(routes_espace_patient::lister_notifications))
         .route("/api/patients/notifications/lues", post(routes_espace_patient::marquer_toutes_lues))
         .route("/api/patients/notifications/{id}/lue", post(routes_espace_patient::marquer_lue))
+        // Pharmacie (CLAUDE.md §15, docs/api.md §2.15).
+        .route(
+            "/api/pharmacie/medicaments",
+            get(routes_pharmacie::rechercher_medicaments),
+        )
+        .route(
+            "/api/pharmacie/medicaments/{id}/equivalents",
+            get(routes_pharmacie::equivalents),
+        )
+        .route("/api/pharmacie/stock", get(routes_pharmacie::etat))
+        .route(
+            "/api/pharmacie/stock/{medicament_id}",
+            get(routes_pharmacie::lots),
+        )
+        .route("/api/pharmacie/entrees", post(routes_pharmacie::entrer))
+        .route("/api/pharmacie/ventes", post(routes_pharmacie::vendre))
+        .route("/api/pharmacie/ventes/{id}", get(routes_pharmacie::vente))
+        .route(
+            "/api/pharmacie/ventes/{id}/annuler",
+            post(routes_pharmacie::annuler_vente),
+        )
+        .route(
+            "/api/pharmacie/pertes",
+            post(routes_pharmacie::declarer_perte),
+        )
+        .route(
+            "/api/pharmacie/inventaires",
+            post(routes_pharmacie::inventorier),
+        )
+        .route("/api/pharmacie/mouvements", get(routes_pharmacie::journal))
+        .route(
+            "/api/pharmacie/mouvements/{id}/annuler",
+            post(routes_pharmacie::annuler_mouvement),
+        )
+        .route(
+            "/api/pharmacie/prix/{medicament_id}",
+            axum::routing::put(routes_pharmacie::fixer_prix),
+        )
+        .route(
+            "/api/pharmacie/seuils/{medicament_id}",
+            axum::routing::put(routes_pharmacie::fixer_seuils),
+        )
+        .route(
+            "/api/pharmacie/reglages",
+            axum::routing::put(routes_pharmacie::regler),
+        )
+        .route("/api/pharmacie/alertes", get(routes_pharmacie::alertes))
+        .route(
+            "/api/pharmacie/depenses",
+            get(routes_pharmacie::lister_depenses).post(routes_pharmacie::enregistrer_depense),
+        )
+        .route(
+            "/api/pharmacie/depenses/{id}/annuler",
+            post(routes_pharmacie::annuler_depense),
+        )
+        .route("/api/pharmacie/rapport", get(routes_pharmacie::rapport))
         .with_state(AppState {
             db: pool,
             jwt,

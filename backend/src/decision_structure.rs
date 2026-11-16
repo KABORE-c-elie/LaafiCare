@@ -145,6 +145,10 @@ pub struct DetailStructure {
     /// les autres types.
     pub autres_demandes_munaseb_en_attente: Vec<Uuid>,
     pub munaseb_deja_validee: Option<Uuid>,
+    /// Pièces justificatives, anciennes comprises, sans leur contenu
+    /// (ajouté le 2026-11-16) ; avec, pour chacune, les autres demandes qui
+    /// portent le même numéro (avertissement de §14). Vide pour la MUNASEB.
+    pub pieces: Vec<crate::piece_justificative::PieceAdministrateur>,
 }
 
 /// Détail d'une structure, `None` si elle n'existe pas.
@@ -249,6 +253,7 @@ pub async fn detail(pool: &PgPool, structure_id: Uuid) -> Result<Option<DetailSt
         decisions,
         autres_demandes_munaseb_en_attente,
         munaseb_deja_validee,
+        pieces: crate::piece_justificative::lister_pour_administrateur(pool, structure_id).await?,
     }))
 }
 
