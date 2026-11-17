@@ -16,10 +16,13 @@ mod routes_structure;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::extract::DefaultBodyLimit;
+use axum::extract::{DefaultBodyLimit, MatchedPath};
+use axum::http::HeaderName;
 use axum::{Json, Router, extract::State, http::StatusCode, routing::get, routing::post};
 use serde::Serialize;
 use sqlx::PgPool;
+use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, RequestId, SetRequestIdLayer};
+use tower_http::trace::TraceLayer;
 
 use laaficare_backend::config::{self, CleTotp, Config, Programme};
 use laaficare_backend::db;
@@ -392,8 +395,59 @@ pub(crate) fn routeur(state: AppState) -> Router {
             post(routes_pharmacie::annuler_depense),
         )
         .route("/api/pharmacie/rapport", get(routes_pharmacie::rapport))
+        // Couches, de la plus intérieure à la plus extérieure : avec
+        // `Router::layer`, la dernière ajoutée est la première traversée par
+        // la requête (doc d'axum 0.8.9, module `middleware`, « Ordering »).
+        // Ordre suivi par une requête : en-tête reçu retiré, identifiant
+        // posé, journalisation, puis identifiant recopié dans la réponse.
         .layer(DefaultBodyLimit::max(TAILLE_MAX_CORPS_OCTETS))
+        .layer(PropagateRequestIdLayer::new(ENTETE_REQUEST_ID))
+        .layer(TraceLayer::new_for_http().make_span_with(span_de_requete))
+        .layer(SetRequestIdLayer::new(ENTETE_REQUEST_ID, MakeRequestUuid))
+        .layer(axum::middleware::map_request(retirer_request_id_recu))
         .with_state(state)
+}
+
+/// `x-request-id` : nom de l'en-tête utilisé par `tower-http` pour
+/// `x_request_id()`.
+const ENTETE_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
+
+/// Identifiant de requête (remédiation de l'audit, reprise le 2026-11-17) :
+/// un UUID tiré par le serveur (`MakeRequestUuid`, tower-http 0.6.11), rendu
+/// dans l'en-tête `X-Request-ID` de la réponse et porté par toutes les
+/// lignes de journal de la requête. Une personne qui signale une erreur
+/// donne ce numéro : l'équipe retrouve la ligne sans qu'aucune donnée
+/// personnelle n'ait été écrite.
+///
+/// `SetRequestIdLayer` garde l'en-tête s'il est déjà dans la requête
+/// (source de tower-http 0.6.11, `request_id.rs`, `SetRequestId::call`) :
+/// un client pourrait alors y mettre ce qu'il veut, un nom ou un numéro de
+/// téléphone, et le faire écrire dans nos journaux. L'en-tête reçu est donc
+/// toujours retiré : seul le serveur choisit l'identifiant.
+async fn retirer_request_id_recu(mut requete: axum::extract::Request) -> axum::extract::Request {
+    requete.headers_mut().remove(&ENTETE_REQUEST_ID);
+    requete
+}
+
+/// Ce que le journal garde d'une requête : la méthode, le **modèle** de la
+/// route (`/api/pharmacie/ventes/{id}`, `MatchedPath`, comme l'exemple de la
+/// doc d'axum 0.8.9 pour `MatchedPath` avec `TraceLayer`) et l'identifiant.
+/// **Jamais l'URI réelle** : le `make_span` par défaut de tower-http
+/// l'enregistre (source 0.6.11, `trace/make_span.rs`), or elle contient des
+/// identifiants et des paramètres comme `?numero_carte=` ou `?q=`. Une
+/// adresse qui ne correspond à aucune route n'est pas recopiée non plus.
+fn span_de_requete(requete: &axum::extract::Request) -> tracing::Span {
+    let route = requete
+        .extensions()
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str)
+        .unwrap_or("route_inconnue");
+    let request_id = requete
+        .extensions()
+        .get::<RequestId>()
+        .and_then(|id| id.header_value().to_str().ok())
+        .unwrap_or("");
+    tracing::info_span!("requete", methode = %requete.method(), route, request_id)
 }
 
 /// Attend Ctrl+C, ou SIGTERM (le signal qu'envoient Docker et systemd pour

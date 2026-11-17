@@ -122,6 +122,7 @@ Détail dans `web/docs/decisions.md` (branche `web`) :
 - **Trusted Types** : ils bloquent l'enregistrement du service worker d'Angular (le travail hors connexion). Leur activation dans la politique de sécurité du contenu (CSP) est à résoudre.
 - **Styles en ligne de la CDK d'Angular** : une CSP stricte, qui interdit les styles en ligne, les refuse. L'affichage reste correct, mais la console signale ces blocages ; leur traitement est à décider.
 - **Faille de `vite`** : elle ne touche que le serveur de développement, jamais l'application déployée. En attente d'`@angular/build` 22.2.4.
+- **CORS en production** (2026-11-17) : le serveur n'active aucun CORS (`docs/securite.md`, section 12). **Question** : en production, l'application web sera-t-elle servie depuis la même adresse que l'API (même domaine, ou même proxy) ? Si non, il faudra une liste fermée des origines permises, sans jamais accepter n'importe quelle origine avec les identifiants.
 
 ### À faire dans l'application web (étape 3.12)
 

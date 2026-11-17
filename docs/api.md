@@ -18,6 +18,7 @@ Toutes les valeurs des exemples sont fictives.
 - Dates : `AAAA-MM-JJ` (ex. `2026-10-08`). Dates avec heure : format RFC 3339 en UTC (ex. `2026-10-08T09:30:00Z`).
 - Identifiants : UUID sous forme de texte (ex. `0199b8e2-7c41-7a10-9f3e-2b6d1c0e4a55`).
 - Montants : entiers en FCFA, sans décimale.
+- **Identifiant de requête** : chaque réponse porte l'en-tête **`X-Request-ID`**, un UUID tiré par le serveur. L'application l'affiche (ou le garde) quand elle montre une erreur `erreur_interne` : avec ce numéro, l'équipe retrouve la requête dans les journaux. Un `X-Request-ID` envoyé par l'application est **ignoré** (jamais recopié dans les journaux ni dans la réponse).
 - **Taille d'un corps de requête** : **256 Kio au plus**, sauf le dépôt d'une pièce justificative (5 Mio, section 2.8). Au-delà : **413**, code `corps_illisible` (ou `fichier_trop_grand` pour une pièce). La plus grosse requête JSON de l'API (vente ou inventaire de 100 lignes) fait environ 10 Ko.
 
 ### 1.2 Jeton d'authentification

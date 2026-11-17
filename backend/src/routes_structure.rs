@@ -373,8 +373,8 @@ mod tests {
         .await
         .unwrap();
 
-        // Le routeur du serveur, avec toutes ses couches (limites de taille),
-        // pas une copie.
+        // Le routeur du serveur, avec toutes ses couches (limites de taille,
+        // identifiant de requête), pas une copie.
         let app = crate::routeur(state);
         let ecoute = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let adresse = ecoute.local_addr().unwrap();
@@ -433,6 +433,23 @@ mod tests {
         .await;
         assert_eq!(statut, 413, "{texte}");
         assert!(texte.contains("\"code\""), "{texte}");
+
+        // Identifiant de requête : tiré par le serveur (UUID), jamais repris
+        // de la requête (un client pourrait y mettre une donnée personnelle).
+        let (statut, texte) = envoyer_avec(
+            "GET",
+            "/health".into(),
+            "X-Request-ID: OUEDRAOGO-Awa-70000000\r\n".into(),
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(statut, 200, "{texte}");
+        let id = texte
+            .lines()
+            .find_map(|l| l.to_ascii_lowercase().strip_prefix("x-request-id: ").map(str::to_string))
+            .expect("en-tête x-request-id dans la réponse");
+        assert!(Uuid::parse_str(id.trim()).is_ok(), "{id}");
+        assert!(!texte.contains("OUEDRAOGO"), "{texte}");
 
         let (statut, texte) = envoyer(
             "POST",
