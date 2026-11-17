@@ -99,7 +99,15 @@ pub async fn controler_exercice(
     session_id: Uuid,
     affectation_id: Uuid,
 ) -> Result<ControleExercice, sqlx::Error> {
-    let ligne: Option<(bool, Option<bool>, Option<Uuid>, Option<String>, Option<String>)> = sqlx::query_as(concat!(
+    // Jeton valide, droit d'exercer, structure, type de structure, rôle.
+    type LigneControle = (
+        bool,
+        Option<bool>,
+        Option<Uuid>,
+        Option<String>,
+        Option<String>,
+    );
+    let ligne: Option<LigneControle> = sqlx::query_as(concat!(
         // `IS NOT DISTINCT FROM` et non `=` : une session sans affectation a
         // `affectation_id` vide, et `= $4` donnerait NULL ; la colonne, lue
         // en `bool`, ferait alors une erreur (500) au lieu d'un refus (401).
@@ -130,7 +138,8 @@ pub async fn controler_exercice(
     };
     // Une affectation qui n'est pas celle du compte ne donne aucune ligne
     // d'affectation : jeton invalide, comme un jeton forgé.
-    let (Some(droit), Some(structure_id), Some(type_structure), Some(role)) = (droit, structure_id, type_structure, role)
+    let (Some(droit), Some(structure_id), Some(type_structure), Some(role)) =
+        (droit, structure_id, type_structure, role)
     else {
         return Ok(ControleExercice::JetonInvalide);
     };
@@ -140,7 +149,13 @@ pub async fn controler_exercice(
     if !droit {
         return Ok(ControleExercice::DroitRetire);
     }
-    Ok(ControleExercice::Valide(Exercice { compte_id, affectation_id, structure_id, type_structure, role }))
+    Ok(ControleExercice::Valide(Exercice {
+        compte_id,
+        affectation_id,
+        structure_id,
+        type_structure,
+        role,
+    }))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -151,7 +166,9 @@ pub enum ErreurActivation {
     AffectationInconnue,
     /// Affectation désactivée, ou établissement qui ne permet pas d'exercer
     /// (D1, 403).
-    #[error("cette affectation ne permet pas d'exercer : affectation désactivée, établissement non validé ou licence expirée")]
+    #[error(
+        "cette affectation ne permet pas d'exercer : affectation désactivée, établissement non validé ou licence expirée"
+    )]
     NonExercable,
     /// La session du jeton a été fermée entre-temps (401).
     #[error("session fermée")]
@@ -284,10 +301,20 @@ mod tests {
         .unwrap();
     }
 
-    async fn controle(pool: &PgPool, session: &SessionActive, affectation_id: Uuid) -> ControleExercice {
-        controler_exercice(pool, session.compte_id, session.version_jeton, session.session_id, affectation_id)
-            .await
-            .unwrap()
+    async fn controle(
+        pool: &PgPool,
+        session: &SessionActive,
+        affectation_id: Uuid,
+    ) -> ControleExercice {
+        controler_exercice(
+            pool,
+            session.compte_id,
+            session.version_jeton,
+            session.session_id,
+            affectation_id,
+        )
+        .await
+        .unwrap()
     }
 
     #[sqlx::test]
@@ -305,8 +332,18 @@ mod tests {
         desactiver(&pool, ancienne, compte).await;
 
         let liste = lister(&pool, compte).await.unwrap();
-        let resume: Vec<_> = liste.iter().map(|a| (a.structure_nom.as_str(), a.exercable)).collect();
-        assert_eq!(resume, [("Clinique ouverte", true), ("Clinique suspendue", false), ("Clinique expirée", false)]);
+        let resume: Vec<_> = liste
+            .iter()
+            .map(|a| (a.structure_nom.as_str(), a.exercable))
+            .collect();
+        assert_eq!(
+            resume,
+            [
+                ("Clinique ouverte", true),
+                ("Clinique suspendue", false),
+                ("Clinique expirée", false)
+            ]
+        );
         assert_eq!(liste[0].id, medecin);
         assert_eq!(liste[1].structure_statut, "suspendue");
     }
@@ -326,36 +363,65 @@ mod tests {
         let fin = |id: Uuid| {
             let pool = pool.clone();
             async move {
-                sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>("SELECT expire_le FROM session WHERE id = $1")
-                    .bind(id)
-                    .fetch_one(&pool)
-                    .await
-                    .unwrap()
+                sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+                    "SELECT expire_le FROM session WHERE id = $1",
+                )
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
             }
         };
         let fin_initiale = fin(initiale.session_id).await;
 
-        let en_a = activer(&pool, compte, initiale.session_id, dans_a).await.unwrap();
-        assert_eq!(en_a.affectation_id, Some(dans_a));
-        assert_eq!(fin(en_a.session_id).await, fin_initiale, "même date de fin absolue");
-        let motif: Option<String> = sqlx::query_scalar("SELECT motif_revocation FROM session WHERE id = $1")
-            .bind(initiale.session_id)
-            .fetch_one(&pool)
+        let en_a = activer(&pool, compte, initiale.session_id, dans_a)
             .await
             .unwrap();
+        assert_eq!(en_a.affectation_id, Some(dans_a));
+        assert_eq!(
+            fin(en_a.session_id).await,
+            fin_initiale,
+            "même date de fin absolue"
+        );
+        let motif: Option<String> =
+            sqlx::query_scalar("SELECT motif_revocation FROM session WHERE id = $1")
+                .bind(initiale.session_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(motif.as_deref(), Some("changement_affectation"));
-        assert!(matches!(controle(&pool, &en_a, dans_a).await, ControleExercice::Valide(_)));
+        assert!(matches!(
+            controle(&pool, &en_a, dans_a).await,
+            ControleExercice::Valide(_)
+        ));
 
         // Changer de structure, depuis la session en exercice.
-        let en_b = activer(&pool, compte, en_a.session_id, dans_b).await.unwrap();
+        let en_b = activer(&pool, compte, en_a.session_id, dans_b)
+            .await
+            .unwrap();
         assert_eq!(fin(en_b.session_id).await, fin_initiale);
-        assert!(matches!(controle(&pool, &en_a, dans_a).await, ControleExercice::JetonInvalide), "ancienne session fermée");
-        assert!(matches!(controle(&pool, &en_b, dans_b).await, ControleExercice::Valide(_)));
+        assert!(
+            matches!(
+                controle(&pool, &en_a, dans_a).await,
+                ControleExercice::JetonInvalide
+            ),
+            "ancienne session fermée"
+        );
+        assert!(matches!(
+            controle(&pool, &en_b, dans_b).await,
+            ControleExercice::Valide(_)
+        ));
         // Le jeton doit porter l'affectation de sa session.
-        assert!(matches!(controle(&pool, &en_b, dans_a).await, ControleExercice::JetonInvalide));
+        assert!(matches!(
+            controle(&pool, &en_b, dans_a).await,
+            ControleExercice::JetonInvalide
+        ));
 
         // Session déjà fermée : refus.
-        assert!(matches!(activer(&pool, compte, en_a.session_id, dans_a).await, Err(ErreurActivation::SessionFermee)));
+        assert!(matches!(
+            activer(&pool, compte, en_a.session_id, dans_a).await,
+            Err(ErreurActivation::SessionFermee)
+        ));
     }
 
     #[sqlx::test]
@@ -386,11 +452,12 @@ mod tests {
             assert_eq!(obtenu, attendu);
         }
         // La session n'a pas été fermée par ces refus.
-        let ouverte_encore: bool = sqlx::query_scalar("SELECT revoquee_le IS NULL FROM session WHERE id = $1")
-            .bind(session.session_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let ouverte_encore: bool =
+            sqlx::query_scalar("SELECT revoquee_le IS NULL FROM session WHERE id = $1")
+                .bind(session.session_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert!(ouverte_encore);
     }
 
@@ -404,7 +471,10 @@ mod tests {
         let clinique = structure(&pool, compte, "Clinique", "validee").await;
         let medecin = affecter(&pool, compte, clinique, "medecin").await;
         let sans_affectation = session::ouvrir(&pool, compte, None).await.unwrap();
-        assert!(matches!(controle(&pool, &sans_affectation, medecin).await, ControleExercice::JetonInvalide));
+        assert!(matches!(
+            controle(&pool, &sans_affectation, medecin).await,
+            ControleExercice::JetonInvalide
+        ));
     }
 
     /// D4 : droit retiré (403) ou jeton révoqué (401), à chaque requête ;
@@ -416,21 +486,50 @@ mod tests {
         let clinique = structure(&pool, compte, "Clinique", "validee").await;
         let medecin = affecter(&pool, compte, clinique, "medecin").await;
         let initiale = session::ouvrir(&pool, compte, None).await.unwrap();
-        let session = activer(&pool, compte, initiale.session_id, medecin).await.unwrap();
+        let session = activer(&pool, compte, initiale.session_id, medecin)
+            .await
+            .unwrap();
 
         licence(&pool, clinique, 0).await;
         let ControleExercice::Valide(exercice) = controle(&pool, &session, medecin).await else {
             panic!("licence valable jusqu'à aujourd'hui compris");
         };
-        assert_eq!((exercice.structure_id, exercice.role.as_str(), exercice.type_structure.as_str()), (clinique, "medecin", "clinique"));
+        assert_eq!(
+            (
+                exercice.structure_id,
+                exercice.role.as_str(),
+                exercice.type_structure.as_str()
+            ),
+            (clinique, "medecin", "clinique")
+        );
 
         licence(&pool, clinique, -1).await;
-        assert!(matches!(controle(&pool, &session, medecin).await, ControleExercice::DroitRetire), "licence expirée");
+        assert!(
+            matches!(
+                controle(&pool, &session, medecin).await,
+                ControleExercice::DroitRetire
+            ),
+            "licence expirée"
+        );
         licence(&pool, clinique, 30).await;
 
-        sqlx::query("UPDATE structure SET statut = 'suspendue' WHERE id = $1").bind(clinique).execute(&pool).await.unwrap();
-        assert!(matches!(controle(&pool, &session, medecin).await, ControleExercice::DroitRetire), "établissement suspendu");
-        sqlx::query("UPDATE structure SET statut = 'validee' WHERE id = $1").bind(clinique).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE structure SET statut = 'suspendue' WHERE id = $1")
+            .bind(clinique)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                controle(&pool, &session, medecin).await,
+                ControleExercice::DroitRetire
+            ),
+            "établissement suspendu"
+        );
+        sqlx::query("UPDATE structure SET statut = 'validee' WHERE id = $1")
+            .bind(clinique)
+            .execute(&pool)
+            .await
+            .unwrap();
 
         // Email plus vérifié (R0) : jeton invalide.
         sqlx::query("UPDATE utilisateur SET email_verifie_le = NULL FROM compte c WHERE c.id = $1 AND utilisateur.id = c.utilisateur_id")
@@ -438,7 +537,13 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        assert!(matches!(controle(&pool, &session, medecin).await, ControleExercice::JetonInvalide), "email");
+        assert!(
+            matches!(
+                controle(&pool, &session, medecin).await,
+                ControleExercice::JetonInvalide
+            ),
+            "email"
+        );
         sqlx::query("UPDATE utilisateur SET email_verifie_le = now() FROM compte c WHERE c.id = $1 AND utilisateur.id = c.utilisateur_id")
             .bind(compte)
             .execute(&pool)
@@ -446,13 +551,31 @@ mod tests {
             .unwrap();
 
         // Version augmentée : jeton invalide.
-        let ancienne_version = SessionActive { version_jeton: session.version_jeton - 1, ..session };
-        assert!(matches!(controle(&pool, &ancienne_version, medecin).await, ControleExercice::JetonInvalide));
+        let ancienne_version = SessionActive {
+            version_jeton: session.version_jeton - 1,
+            ..session
+        };
+        assert!(matches!(
+            controle(&pool, &ancienne_version, medecin).await,
+            ControleExercice::JetonInvalide
+        ));
 
         // Affectation désactivée : droit retiré.
         desactiver(&pool, medecin, compte).await;
-        assert!(matches!(controle(&pool, &ancienne_version, medecin).await, ControleExercice::JetonInvalide));
-        let actuelle = SessionActive { version_jeton: ancienne_version.version_jeton + 1, ..ancienne_version };
-        assert!(matches!(controle(&pool, &actuelle, medecin).await, ControleExercice::DroitRetire), "affectation désactivée");
+        assert!(matches!(
+            controle(&pool, &ancienne_version, medecin).await,
+            ControleExercice::JetonInvalide
+        ));
+        let actuelle = SessionActive {
+            version_jeton: ancienne_version.version_jeton + 1,
+            ..ancienne_version
+        };
+        assert!(
+            matches!(
+                controle(&pool, &actuelle, medecin).await,
+                ControleExercice::DroitRetire
+            ),
+            "affectation désactivée"
+        );
     }
 }

@@ -75,11 +75,21 @@ fn interne(erreur: impl std::fmt::Display) -> ErreurTotp {
 /// 16 octets est ajoutée à la fin du texte chiffré (« postfix tag »,
 /// implémentation par défaut de `Aead::encrypt`) : 20 + 16 = 36 octets, le
 /// CHECK de la migration 0013.
-fn chiffrer_secret(cle: &[u8; 32], compte_id: Uuid, secret: &[u8]) -> Result<(Vec<u8>, Vec<u8>), ErreurTotp> {
+fn chiffrer_secret(
+    cle: &[u8; 32],
+    compte_id: Uuid,
+    secret: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>), ErreurTotp> {
     let chiffreur = Aes256Gcm::new_from_slice(cle).map_err(interne)?;
     let nonce = Nonce::<Aes256Gcm>::try_generate().map_err(interne)?;
     let chiffre = chiffreur
-        .encrypt(&nonce, Payload { msg: secret, aad: compte_id.as_bytes() })
+        .encrypt(
+            &nonce,
+            Payload {
+                msg: secret,
+                aad: compte_id.as_bytes(),
+            },
+        )
         .map_err(interne)?;
     Ok((chiffre, nonce.to_vec()))
 }
@@ -97,12 +107,23 @@ fn chiffrer_secret(cle: &[u8; 32], compte_id: Uuid, secret: &[u8]) -> Result<(Ve
 /// erreur comprise), et `Secret` reçoit une copie allouée à la taille exacte
 /// (`Box::from(&[u8])`), qu'il efface lui-même (fonctionnalité zeroize de
 /// totp-rs).
-fn dechiffrer_secret(cle: &[u8; 32], compte_id: Uuid, chiffre: &[u8], nonce: &[u8]) -> Result<Secret, ErreurTotp> {
+fn dechiffrer_secret(
+    cle: &[u8; 32],
+    compte_id: Uuid,
+    chiffre: &[u8],
+    nonce: &[u8],
+) -> Result<Secret, ErreurTotp> {
     let chiffreur = Aes256Gcm::new_from_slice(cle).map_err(interne)?;
     let nonce = Nonce::<Aes256Gcm>::try_from(nonce).map_err(interne)?;
     let clair = Zeroizing::new(
         chiffreur
-            .decrypt(&nonce, Payload { msg: chiffre, aad: compte_id.as_bytes() })
+            .decrypt(
+                &nonce,
+                Payload {
+                    msg: chiffre,
+                    aad: compte_id.as_bytes(),
+                },
+            )
             .map_err(interne)?,
     );
     Ok(Secret::new(Box::from(clair.as_slice())))
@@ -110,7 +131,9 @@ fn dechiffrer_secret(cle: &[u8; 32], compte_id: Uuid, chiffre: &[u8], nonce: &[u
 
 fn verifier_version_cle(version_cle: i16) -> Result<(), ErreurTotp> {
     if version_cle != VERSION_CLE {
-        return Err(ErreurTotp::Interne(format!("version de clé TOTP inconnue : {version_cle}")));
+        return Err(ErreurTotp::Interne(format!(
+            "version de clé TOTP inconnue : {version_cle}"
+        )));
     }
     Ok(())
 }
@@ -198,7 +221,11 @@ pub async fn commencer_activation(
         "patient" => "Patient",
         "professionnel" => "Professionnel",
         "administrateur_laaficare" => "Administrateur",
-        autre => return Err(ErreurTotp::Interne(format!("type de compte inconnu : {autre}"))),
+        autre => {
+            return Err(ErreurTotp::Interne(format!(
+                "type de compte inconnu : {autre}"
+            )));
+        }
     };
 
     // Sans `with_secret`, `build` génère le secret (fonctionnalité
@@ -284,7 +311,7 @@ async fn confirmer_activation_a(
 
     // Hachés avant la transaction : 10 hachages Argon2id ne doivent pas
     // garder des verrous ouverts.
-    let (codes, hachages) = generer_codes_secours()?;
+    let (codes, hachages) = generer_codes_secours().await?;
 
     let mut transaction = pool.begin().await?;
     // Réenrôlement : la fenêtre est vidée en premier, en une requête
@@ -356,7 +383,12 @@ async fn confirmer_activation_a(
 /// 6238 « MUST NOT accept the second attempt », NIST « SHALL accept a given
 /// OTP only once ») : son pas doit être strictement plus grand que le
 /// dernier accepté, vérifié et enregistré en une seule requête atomique.
-pub async fn verifier_code(pool: &PgPool, cle: &[u8; 32], compte_id: Uuid, code: &str) -> Result<(), ErreurTotp> {
+pub async fn verifier_code(
+    pool: &PgPool,
+    cle: &[u8; 32],
+    compte_id: Uuid,
+    code: &str,
+) -> Result<(), ErreurTotp> {
     verifier_code_a(pool, cle, compte_id, code, maintenant()?).await
 }
 
@@ -409,17 +441,25 @@ async fn verifier_code_a(
 /// cryptographique selon la doc de rand 0.10, comme dans `otp.rs`). Affichés
 /// `XXXXX-XXXXX` ; hachés sans le tiret, en Argon2id (NIST §3.1.2 : sous
 /// 112 bits, hachage de mot de passe salé exigé).
-fn generer_codes_secours() -> Result<(Vec<String>, Vec<String>), ErreurTotp> {
-    let mut codes = Vec::with_capacity(NOMBRE_CODES_SECOURS);
-    let mut hachages = Vec::with_capacity(NOMBRE_CODES_SECOURS);
-    for _ in 0..NOMBRE_CODES_SECOURS {
-        let brut: String = (0..LONGUEUR_CODE_SECOURS)
-            .map(|_| ALPHABET_BASE32[random_range(0..ALPHABET_BASE32.len())] as char)
-            .collect();
-        hachages.push(mot_de_passe::hacher(&brut).map_err(interne)?);
-        codes.push(format!("{}-{}", &brut[..5], &brut[5..]));
-    }
-    Ok((codes, hachages))
+///
+/// Les 10 hachages Argon2id sont faits hors des fils de tokio, un calcul par
+/// cœur au plus (`mot_de_passe::calcul_argon2`) : ils occuperaient sinon un
+/// fil du moteur pendant une à deux secondes.
+async fn generer_codes_secours() -> Result<(Vec<String>, Vec<String>), ErreurTotp> {
+    mot_de_passe::calcul_argon2(|| {
+        let mut codes = Vec::with_capacity(NOMBRE_CODES_SECOURS);
+        let mut hachages = Vec::with_capacity(NOMBRE_CODES_SECOURS);
+        for _ in 0..NOMBRE_CODES_SECOURS {
+            let brut: String = (0..LONGUEUR_CODE_SECOURS)
+                .map(|_| ALPHABET_BASE32[random_range(0..ALPHABET_BASE32.len())] as char)
+                .collect();
+            hachages.push(mot_de_passe::hacher(&brut).map_err(interne)?);
+            codes.push(format!("{}-{}", &brut[..5], &brut[5..]));
+        }
+        Ok((codes, hachages))
+    })
+    .await
+    .map_err(|e| ErreurTotp::Interne(e.to_string()))?
 }
 
 /// Accepte la saisie avec ou sans tiret ni espaces, en minuscules ou en
@@ -430,7 +470,8 @@ fn normaliser_code_secours(saisie: &str) -> Option<String> {
         .filter(|c| *c != '-' && !c.is_whitespace())
         .map(|c| c.to_ascii_uppercase())
         .collect();
-    let valide = code.len() == LONGUEUR_CODE_SECOURS && code.bytes().all(|b| ALPHABET_BASE32.contains(&b));
+    let valide =
+        code.len() == LONGUEUR_CODE_SECOURS && code.bytes().all(|b| ALPHABET_BASE32.contains(&b));
     valide.then_some(code)
 }
 
@@ -438,7 +479,22 @@ fn normaliser_code_secours(saisie: &str) -> Option<String> {
 /// les codes non utilisés (au plus 10 vérifications Argon2id), sans
 /// s'arrêter au premier trouvé. Usage unique garanti par la base : la
 /// condition `utilise_le IS NULL` de la mise à jour.
-pub async fn verifier_code_secours(pool: &PgPool, compte_id: Uuid, saisie: &str) -> Result<(), ErreurTotp> {
+///
+/// Remédiation de l'audit (reprise le 2026-11-17) :
+/// - la boucle entière tourne hors des fils de tokio, un calcul par cœur au
+///   plus (`mot_de_passe::calcul_argon2`) :
+///   jusqu'à 10 vérifications Argon2id d'affilée bloqueraient sinon un fil
+///   du moteur, et avec lui les autres requêtes ;
+/// - un hachage illisible en base n'arrête plus la boucle : il est compté
+///   comme « ne correspond pas » et signalé dans les journaux par son seul
+///   identifiant. Avant, l'erreur sortait au milieu de la boucle : le temps
+///   de réponse dépendait de la position de ce code, et un seul code abîmé
+///   rendait tous les autres codes du compte inutilisables.
+pub async fn verifier_code_secours(
+    pool: &PgPool,
+    compte_id: Uuid,
+    saisie: &str,
+) -> Result<(), ErreurTotp> {
     compter_essai(pool, compte_id).await?;
     let Some(code) = normaliser_code_secours(saisie) else {
         return Err(ErreurTotp::Refuse);
@@ -453,21 +509,35 @@ pub async fn verifier_code_secours(pool: &PgPool, compte_id: Uuid, saisie: &str)
     .fetch_all(pool)
     .await?;
 
-    let mut trouve = None;
-    for (id, hachage) in &disponibles {
-        if mot_de_passe::verifier(&code, hachage).map_err(interne)? {
-            trouve = Some(*id);
+    // Le code saisi est un secret : sa copie est effacée de la mémoire à la
+    // fin du calcul (crate `zeroize`).
+    let code = zeroize::Zeroizing::new(code);
+    let trouve = mot_de_passe::calcul_argon2(move || {
+        let mut trouve = None;
+        for (id, hachage) in &disponibles {
+            match mot_de_passe::verifier(&code, hachage) {
+                Ok(true) => trouve = Some(*id),
+                Ok(false) => {}
+                Err(_) => {
+                    tracing::error!(code_secours_id = %id, "hachage de code de secours illisible")
+                }
+            }
         }
-    }
+        trouve
+    })
+    .await
+    .map_err(|e| ErreurTotp::Interne(e.to_string()))?;
     let Some(id) = trouve else {
         return Err(ErreurTotp::Refuse);
     };
 
-    let utilise = sqlx::query("UPDATE code_secours SET utilise_le = now() WHERE id = $1 AND utilise_le IS NULL")
-        .bind(id)
-        .execute(pool)
-        .await?
-        .rows_affected()
+    let utilise = sqlx::query(
+        "UPDATE code_secours SET utilise_le = now() WHERE id = $1 AND utilise_le IS NULL",
+    )
+    .bind(id)
+    .execute(pool)
+    .await?
+    .rows_affected()
         == 1;
     if !utilise {
         return Err(ErreurTotp::Refuse);
@@ -495,7 +565,12 @@ mod tests {
         assert_eq!(secret.as_bytes().len(), 20);
         assert_eq!(chiffre.len(), 36);
         assert_eq!(nonce.len(), 12);
-        assert_eq!(dechiffrer_secret(&CLE, compte, &chiffre, &nonce).unwrap().as_bytes(), secret.as_bytes());
+        assert_eq!(
+            dechiffrer_secret(&CLE, compte, &chiffre, &nonce)
+                .unwrap()
+                .as_bytes(),
+            secret.as_bytes()
+        );
 
         // Deux chiffrements du même secret : nonces et textes différents.
         let (chiffre_bis, nonce_bis) = chiffrer_secret(&CLE, compte, secret.as_bytes()).unwrap();
@@ -506,7 +581,8 @@ mod tests {
     #[test]
     fn dechiffrement_refuse_avec_autre_compte_ou_autre_cle() {
         let compte = Uuid::from_u128(1);
-        let (chiffre, nonce) = chiffrer_secret(&CLE, compte, Secret::generate().as_bytes()).unwrap();
+        let (chiffre, nonce) =
+            chiffrer_secret(&CLE, compte, Secret::generate().as_bytes()).unwrap();
         assert!(matches!(
             dechiffrer_secret(&CLE, Uuid::from_u128(2), &chiffre, &nonce),
             Err(ErreurTotp::Interne(_))
@@ -524,12 +600,24 @@ mod tests {
     fn vecteurs_de_la_rfc_6238() {
         let totp = totp_depuis(Secret::from(b"12345678901234567890".to_vec())).unwrap();
         assert_eq!(pas_valide(&totp, "287082", 59).unwrap(), 1); // 94287082
-        assert_eq!(pas_valide(&totp, "081804", 1_111_111_109).unwrap(), 37_037_036); // 07081804, zéro initial
-        assert_eq!(pas_valide(&totp, "005924", 1_234_567_890).unwrap(), 41_152_263); // 89005924
-        assert!(matches!(pas_valide(&totp, "287083", 59), Err(ErreurTotp::Refuse)));
+        assert_eq!(
+            pas_valide(&totp, "081804", 1_111_111_109).unwrap(),
+            37_037_036
+        ); // 07081804, zéro initial
+        assert_eq!(
+            pas_valide(&totp, "005924", 1_234_567_890).unwrap(),
+            41_152_263
+        ); // 89005924
+        assert!(matches!(
+            pas_valide(&totp, "287083", 59),
+            Err(ErreurTotp::Refuse)
+        ));
         // Tolérance d'un pas (Z3) : accepté 30 s après, refusé 60 s après.
         assert_eq!(pas_valide(&totp, "287082", 89).unwrap(), 1);
-        assert!(matches!(pas_valide(&totp, "287082", 119), Err(ErreurTotp::Refuse)));
+        assert!(matches!(
+            pas_valide(&totp, "287082", 119),
+            Err(ErreurTotp::Refuse)
+        ));
     }
 
     #[test]
@@ -540,13 +628,16 @@ mod tests {
             .build()
             .unwrap();
         let url = totp.to_url().unwrap();
-        assert!(url.starts_with("otpauth://totp/LaafiCare:Patient?secret="), "{url}");
+        assert!(
+            url.starts_with("otpauth://totp/LaafiCare:Patient?secret="),
+            "{url}"
+        );
         assert!(url.contains("issuer=LaafiCare"), "{url}");
     }
 
-    #[test]
-    fn codes_de_secours_formats_et_saisie() {
-        let (codes, hachages) = generer_codes_secours().unwrap();
+    #[tokio::test]
+    async fn codes_de_secours_formats_et_saisie() {
+        let (codes, hachages) = generer_codes_secours().await.unwrap();
         assert_eq!(codes.len(), NOMBRE_CODES_SECOURS);
         assert_eq!(hachages.len(), NOMBRE_CODES_SECOURS);
         for code in &codes {
@@ -558,8 +649,14 @@ mod tests {
         distincts.dedup();
         assert_eq!(distincts.len(), NOMBRE_CODES_SECOURS);
 
-        assert_eq!(normaliser_code_secours("abcde-fgh23").unwrap(), "ABCDEFGH23");
-        assert_eq!(normaliser_code_secours(" ABCDE FGH23 ").unwrap(), "ABCDEFGH23");
+        assert_eq!(
+            normaliser_code_secours("abcde-fgh23").unwrap(),
+            "ABCDEFGH23"
+        );
+        assert_eq!(
+            normaliser_code_secours(" ABCDE FGH23 ").unwrap(),
+            "ABCDEFGH23"
+        );
         // Trop court, trop long, hors de l'alphabet (0, 1, 8 et 9 n'y sont pas).
         for saisie in ["ABCDE-FGH2", "ABCDE-FGH234", "ABCDE-FGH01"] {
             assert!(normaliser_code_secours(saisie).is_none(), "{saisie}");
@@ -595,11 +692,24 @@ mod tests {
             .to_string()
     }
 
-    async fn activer(pool: &PgPool, compte: Uuid, instant: u64) -> (ActivationEnCours, Vec<String>) {
-        let activation = commencer_activation(pool, &CLE, compte, MOT_DE_PASSE).await.unwrap();
-        let codes = confirmer_activation_a(pool, &CLE, compte, &code_a(&activation, instant), Autorisation::Libre, instant)
+    async fn activer(
+        pool: &PgPool,
+        compte: Uuid,
+        instant: u64,
+    ) -> (ActivationEnCours, Vec<String>) {
+        let activation = commencer_activation(pool, &CLE, compte, MOT_DE_PASSE)
             .await
             .unwrap();
+        let codes = confirmer_activation_a(
+            pool,
+            &CLE,
+            compte,
+            &code_a(&activation, instant),
+            Autorisation::Libre,
+            instant,
+        )
+        .await
+        .unwrap();
         (activation, codes)
     }
 
@@ -621,34 +731,65 @@ mod tests {
         let compte = compte_patient(&pool, "+22670300001").await;
 
         // Z7 : mauvais mot de passe, aucune demande créée.
-        assert!(refuse(commencer_activation(&pool, &CLE, compte, "Mauvais-mot-de-passe-2").await));
+        assert!(refuse(
+            commencer_activation(&pool, &CLE, compte, "Mauvais-mot-de-passe-2").await
+        ));
 
-        let activation = commencer_activation(&pool, &CLE, compte, MOT_DE_PASSE).await.unwrap();
-        assert!(activation.url_otpauth.starts_with("otpauth://totp/LaafiCare:Patient?"));
+        let activation = commencer_activation(&pool, &CLE, compte, MOT_DE_PASSE)
+            .await
+            .unwrap();
+        assert!(
+            activation
+                .url_otpauth
+                .starts_with("otpauth://totp/LaafiCare:Patient?")
+        );
 
         // Tant que l'activation n'est pas confirmée, aucun code n'est accepté.
         let code = code_a(&activation, INSTANT);
-        assert!(refuse(verifier_code_a(&pool, &CLE, compte, &code, INSTANT).await));
+        assert!(refuse(
+            verifier_code_a(&pool, &CLE, compte, &code, INSTANT).await
+        ));
 
-        let codes = confirmer_activation_a(&pool, &CLE, compte, &code, Autorisation::Libre, INSTANT).await.unwrap();
+        let codes =
+            confirmer_activation_a(&pool, &CLE, compte, &code, Autorisation::Libre, INSTANT)
+                .await
+                .unwrap();
         assert_eq!(codes.len(), NOMBRE_CODES_SECOURS);
-        assert_eq!(tentatives(&pool, compte).await, 0, "compteur remis à zéro après le bon code");
+        assert_eq!(
+            tentatives(&pool, compte).await,
+            0,
+            "compteur remis à zéro après le bon code"
+        );
 
         // Le code de confirmation ne resert pas, même dans la même fenêtre.
-        assert!(refuse(verifier_code_a(&pool, &CLE, compte, &code, INSTANT).await));
+        assert!(refuse(
+            verifier_code_a(&pool, &CLE, compte, &code, INSTANT).await
+        ));
 
         // Code du pas suivant : accepté une fois, puis refusé.
         let suivant = code_a(&activation, INSTANT + 30);
-        verifier_code_a(&pool, &CLE, compte, &suivant, INSTANT + 30).await.unwrap();
-        assert!(refuse(verifier_code_a(&pool, &CLE, compte, &suivant, INSTANT + 30).await));
+        verifier_code_a(&pool, &CLE, compte, &suivant, INSTANT + 30)
+            .await
+            .unwrap();
+        assert!(refuse(
+            verifier_code_a(&pool, &CLE, compte, &suivant, INSTANT + 30).await
+        ));
 
         // Un code plus ancien que le dernier accepté est refusé, même dans
         // la tolérance d'un pas.
         let ancien = code_a(&activation, INSTANT + 60);
-        verifier_code_a(&pool, &CLE, compte, &code_a(&activation, INSTANT + 90), INSTANT + 90)
-            .await
-            .unwrap();
-        assert!(refuse(verifier_code_a(&pool, &CLE, compte, &ancien, INSTANT + 90).await));
+        verifier_code_a(
+            &pool,
+            &CLE,
+            compte,
+            &code_a(&activation, INSTANT + 90),
+            INSTANT + 90,
+        )
+        .await
+        .unwrap();
+        assert!(refuse(
+            verifier_code_a(&pool, &CLE, compte, &ancien, INSTANT + 90).await
+        ));
     }
 
     #[sqlx::test]
@@ -659,11 +800,17 @@ mod tests {
 
         let instant = INSTANT + 300;
         for _ in 0..5 {
-            assert!(refuse(verifier_code_a(&pool, &CLE, compte, "000000", instant).await));
+            assert!(refuse(
+                verifier_code_a(&pool, &CLE, compte, "000000", instant).await
+            ));
         }
         // Verrouillé : le bon code et un bon code de secours sont refusés.
-        assert!(refuse(verifier_code_a(&pool, &CLE, compte, &code_a(&activation, instant), instant).await));
-        assert!(refuse(verifier_code_secours(&pool, compte, &codes[0]).await));
+        assert!(refuse(
+            verifier_code_a(&pool, &CLE, compte, &code_a(&activation, instant), instant).await
+        ));
+        assert!(refuse(
+            verifier_code_secours(&pool, compte, &codes[0]).await
+        ));
     }
 
     #[sqlx::test]
@@ -675,9 +822,32 @@ mod tests {
         // Saisie en minuscules, sans tiret : acceptée.
         let saisie = codes[0].replace('-', "").to_lowercase();
         verifier_code_secours(&pool, compte, &saisie).await.unwrap();
-        assert!(refuse(verifier_code_secours(&pool, compte, &codes[0]).await));
-        verifier_code_secours(&pool, compte, &codes[1]).await.unwrap();
-        assert!(refuse(verifier_code_secours(&pool, compte, "AAAAA-AAAAA").await));
+        assert!(refuse(
+            verifier_code_secours(&pool, compte, &codes[0]).await
+        ));
+        verifier_code_secours(&pool, compte, &codes[1])
+            .await
+            .unwrap();
+        assert!(refuse(
+            verifier_code_secours(&pool, compte, "AAAAA-AAAAA").await
+        ));
+
+        // Un hachage illisible en base (remédiation de l'audit) n'empêche
+        // plus les autres codes de servir, et ne donne aucun accès.
+        sqlx::query(
+            "INSERT INTO code_secours (second_facteur_id, hash) \
+             SELECT id, 'hachage-abime' FROM second_facteur_totp WHERE compte_id = $1",
+        )
+        .bind(compte)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(refuse(
+            verifier_code_secours(&pool, compte, "AAAAA-AAAAA").await
+        ));
+        verifier_code_secours(&pool, compte, &codes[2])
+            .await
+            .unwrap();
     }
 
     #[sqlx::test]
@@ -687,26 +857,52 @@ mod tests {
         let (ancien, anciens_codes) = activer(&pool, compte, INSTANT).await;
 
         // X3 : deux demandes de suite, seule la dernière reste en attente.
-        let abandonnee = commencer_activation(&pool, &CLE, compte, MOT_DE_PASSE).await.unwrap();
-        let nouveau = commencer_activation(&pool, &CLE, compte, MOT_DE_PASSE).await.unwrap();
+        let abandonnee = commencer_activation(&pool, &CLE, compte, MOT_DE_PASSE)
+            .await
+            .unwrap();
+        let nouveau = commencer_activation(&pool, &CLE, compte, MOT_DE_PASSE)
+            .await
+            .unwrap();
         let instant = INSTANT + 300;
         assert!(refuse(
-            confirmer_activation_a(&pool, &CLE, compte, &code_a(&abandonnee, instant), Autorisation::Libre, instant).await
+            confirmer_activation_a(
+                &pool,
+                &CLE,
+                compte,
+                &code_a(&abandonnee, instant),
+                Autorisation::Libre,
+                instant
+            )
+            .await
         ));
 
         // Pendant le remplacement, l'ancien TOTP fonctionne toujours.
-        verifier_code_a(&pool, &CLE, compte, &code_a(&ancien, instant), instant).await.unwrap();
-
-        let nouveaux_codes =
-            confirmer_activation_a(&pool, &CLE, compte, &code_a(&nouveau, instant + 30), Autorisation::Libre, instant + 30)
+        verifier_code_a(&pool, &CLE, compte, &code_a(&ancien, instant), instant)
             .await
             .unwrap();
 
+        let nouveaux_codes = confirmer_activation_a(
+            &pool,
+            &CLE,
+            compte,
+            &code_a(&nouveau, instant + 30),
+            Autorisation::Libre,
+            instant + 30,
+        )
+        .await
+        .unwrap();
+
         // Y1 : l'ancien secret et ses codes de secours ont disparu.
         let instant = instant + 60;
-        assert!(refuse(verifier_code_a(&pool, &CLE, compte, &code_a(&ancien, instant), instant).await));
-        assert!(refuse(verifier_code_secours(&pool, compte, &anciens_codes[0]).await));
-        verifier_code_secours(&pool, compte, &nouveaux_codes[0]).await.unwrap();
+        assert!(refuse(
+            verifier_code_a(&pool, &CLE, compte, &code_a(&ancien, instant), instant).await
+        ));
+        assert!(refuse(
+            verifier_code_secours(&pool, compte, &anciens_codes[0]).await
+        ));
+        verifier_code_secours(&pool, compte, &nouveaux_codes[0])
+            .await
+            .unwrap();
         let (totp, codes): (i64, i64) = sqlx::query_as(
             "SELECT (SELECT count(*) FROM second_facteur_totp), (SELECT count(*) FROM code_secours)",
         )

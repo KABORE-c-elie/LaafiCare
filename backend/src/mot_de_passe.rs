@@ -17,6 +17,9 @@ use argon2::{
     Algorithm, Argon2, Params, Version,
     password_hash::{Error, PasswordHasher, PasswordVerifier, phc::PasswordHash},
 };
+use std::sync::OnceLock;
+
+use tokio::sync::Semaphore;
 use unicode_normalization::UnicodeNormalization;
 
 // Longueurs, référence NIST SP 800-63B révision 4 (26 août 2025), §3.1.1.2,
@@ -108,8 +111,9 @@ pub fn controler(mot_de_passe: &str) -> Result<(), MotDePasseNonConforme> {
     if !normalise.chars().any(|c| c.is_ascii_digit()) {
         regles_non_respectees.push(RegleMotDePasse::Chiffre);
     }
-    let est_special =
-        |c: char| !c.is_alphabetic() && !c.is_ascii_digit() && !c.is_whitespace() && !c.is_control();
+    let est_special = |c: char| {
+        !c.is_alphabetic() && !c.is_ascii_digit() && !c.is_whitespace() && !c.is_control()
+    };
     if !normalise.chars().any(est_special) {
         regles_non_respectees.push(RegleMotDePasse::CaractereSpecial);
     }
@@ -117,7 +121,9 @@ pub fn controler(mot_de_passe: &str) -> Result<(), MotDePasseNonConforme> {
     if regles_non_respectees.is_empty() {
         Ok(())
     } else {
-        Err(MotDePasseNonConforme { regles_non_respectees })
+        Err(MotDePasseNonConforme {
+            regles_non_respectees,
+        })
     }
 }
 
@@ -179,6 +185,68 @@ pub fn verifier(mot_de_passe: &str, hash: &str) -> Result<bool, Error> {
     }
 }
 
+/// Erreur des versions asynchrones : celle d'Argon2, ou la tâche bloquante
+/// interrompue (panique ou arrêt du moteur d'exécution).
+#[derive(Debug, thiserror::Error)]
+pub enum ErreurHachage {
+    #[error("argon2 : {0}")]
+    Argon2(#[from] Error),
+    #[error("tâche de hachage interrompue : {0}")]
+    TacheInterrompue(#[from] tokio::task::JoinError),
+}
+
+/// `hacher`, hors des fils du moteur asynchrone (remédiation de l'audit,
+/// reprise le 2026-11-17). Argon2id avec m = 19 MiB et t = 2 est un calcul
+/// long, sans point d'attente : exécuté dans une requête, il occupe un fil de
+/// tokio et retarde toutes les autres requêtes de ce fil. Source : doc de
+/// tokio, `tokio::task::spawn_blocking` (« runs the provided closure on a
+/// thread where blocking is acceptable ») et chapitre « CPU-bound tasks and
+/// blocking code » du module `tokio::task`.
+///
+/// La copie du mot de passe (la fermeture doit posséder ses données) est
+/// gardée dans `Zeroizing` : effacée de la mémoire à la fin du calcul (crate
+/// `zeroize`, déjà utilisée pour les secrets).
+pub async fn hacher_async(mot_de_passe: &str) -> Result<String, ErreurHachage> {
+    let copie = zeroize::Zeroizing::new(mot_de_passe.to_owned());
+    Ok(calcul_argon2(move || hacher(&copie)).await??)
+}
+
+/// `verifier`, hors des fils du moteur asynchrone (même raison que
+/// `hacher_async`).
+pub async fn verifier_async(mot_de_passe: &str, hash: &str) -> Result<bool, ErreurHachage> {
+    let copie = zeroize::Zeroizing::new(mot_de_passe.to_owned());
+    let hash = hash.to_owned();
+    Ok(calcul_argon2(move || verifier(&copie, &hash)).await??)
+}
+
+/// Nombre de calculs Argon2id menés en même temps, au plus : un par cœur.
+static CALCULS_SIMULTANES: OnceLock<Semaphore> = OnceLock::new();
+
+/// Exécute un calcul Argon2id (un ou plusieurs hachages) hors des fils de
+/// tokio, **jamais plus d'un par cœur à la fois**.
+///
+/// Doc de tokio 1.53, `spawn_blocking` : la limite des fils bloquants est
+/// « very large by default » (512, `Builder::max_blocking_threads`) ; « When
+/// running many CPU-bound computations, a semaphore or some other
+/// synchronization primitive should be used to limit the number of
+/// computations executed in parallel ». Sans cette limite, chaque calcul
+/// prenant 19 Mio, une rafale de connexions pourrait réserver jusqu'à
+/// 512 × 19 Mio de mémoire. Avec elle, la borne redevient celle d'avant le
+/// déport (19 Mio par cœur), et les demandes en trop attendent leur tour
+/// sans bloquer le reste du serveur.
+pub(crate) async fn calcul_argon2<R: Send + 'static>(
+    calcul: impl FnOnce() -> R + Send + 'static,
+) -> Result<R, tokio::task::JoinError> {
+    let semaphore = CALCULS_SIMULTANES.get_or_init(|| {
+        Semaphore::new(std::thread::available_parallelism().map_or(1, |n| n.get()))
+    });
+    // `acquire` n'échoue que sur un sémaphore fermé (doc de tokio,
+    // `Semaphore::acquire`) ; celui-ci ne l'est jamais. Le permis est rendu
+    // quand `_permis` disparaît, après le calcul.
+    let _permis = semaphore.acquire().await.ok();
+    tokio::task::spawn_blocking(calcul).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,7 +305,10 @@ mod tests {
     }
 
     fn regles(mot_de_passe: &str) -> Vec<RegleMotDePasse> {
-        controler(mot_de_passe).err().map(|e| e.regles_non_respectees).unwrap_or_default()
+        controler(mot_de_passe)
+            .err()
+            .map(|e| e.regles_non_respectees)
+            .unwrap_or_default()
     }
 
     #[test]
@@ -255,26 +326,39 @@ mod tests {
     fn regles_non_respectees_toutes_listees() {
         assert_eq!(
             regles("abc"),
-            vec![RegleMotDePasse::LongueurMin, RegleMotDePasse::Chiffre, RegleMotDePasse::CaractereSpecial]
+            vec![
+                RegleMotDePasse::LongueurMin,
+                RegleMotDePasse::Chiffre,
+                RegleMotDePasse::CaractereSpecial
+            ]
         );
         assert_eq!(regles("12345678!"), vec![RegleMotDePasse::Lettre]);
     }
 
     #[test]
     fn espace_permise_mais_pas_caractere_special() {
-        assert_eq!(regles("mon fils Ali 12"), vec![RegleMotDePasse::CaractereSpecial]);
+        assert_eq!(
+            regles("mon fils Ali 12"),
+            vec![RegleMotDePasse::CaractereSpecial]
+        );
     }
 
     #[test]
     fn chiffre_de_0_a_9_seulement() {
         // « ² » et « ¾ » ne sont pas des chiffres ; ils comptent comme
         // caractères spéciaux.
-        assert_eq!(regles("Bonjour\u{b2}\u{be}"), vec![RegleMotDePasse::Chiffre]);
+        assert_eq!(
+            regles("Bonjour\u{b2}\u{be}"),
+            vec![RegleMotDePasse::Chiffre]
+        );
     }
 
     #[test]
     fn caractere_de_controle_refuse() {
-        assert_eq!(regles("Bonjour1!\t"), vec![RegleMotDePasse::CaractereDeControle]);
+        assert_eq!(
+            regles("Bonjour1!\t"),
+            vec![RegleMotDePasse::CaractereDeControle]
+        );
     }
 
     #[test]
@@ -285,13 +369,20 @@ mod tests {
         assert!(controler("Abcdef1!").is_ok());
         let max = format!("Ab1!{}", "x".repeat(LONGUEUR_MOT_DE_PASSE_MAX - 4));
         assert!(controler(&max).is_ok());
-        assert_eq!(regles(&format!("{max}x")), vec![RegleMotDePasse::LongueurMax]);
+        assert_eq!(
+            regles(&format!("{max}x")),
+            vec![RegleMotDePasse::LongueurMax]
+        );
     }
 
     #[test]
     fn noms_envoyes_aux_applications() {
         assert_eq!(
-            serde_json::to_string(&vec![RegleMotDePasse::Chiffre, RegleMotDePasse::CaractereSpecial]).unwrap(),
+            serde_json::to_string(&vec![
+                RegleMotDePasse::Chiffre,
+                RegleMotDePasse::CaractereSpecial
+            ])
+            .unwrap(),
             r#"["chiffre","caractere_special"]"#
         );
     }
@@ -300,5 +391,53 @@ mod tests {
     fn hachage_corrompu_renvoie_une_erreur_pas_un_faux() {
         let resultat = verifier("peu-importe", "pas-un-hachage-valide");
         assert!(resultat.is_err());
+    }
+
+    /// Jamais plus d'un calcul par cœur à la fois, même avec beaucoup de
+    /// demandes simultanées (doc de tokio, `spawn_blocking`).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn calculs_limites_au_nombre_de_coeurs() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let en_cours = Arc::new(AtomicUsize::new(0));
+        let maximum = Arc::new(AtomicUsize::new(0));
+        let taches: Vec<_> = (0..64)
+            .map(|_| {
+                let (en_cours, maximum) = (en_cours.clone(), maximum.clone());
+                tokio::spawn(calcul_argon2(move || {
+                    let n = en_cours.fetch_add(1, Ordering::SeqCst) + 1;
+                    maximum.fetch_max(n, Ordering::SeqCst);
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    en_cours.fetch_sub(1, Ordering::SeqCst);
+                }))
+            })
+            .collect();
+        for tache in taches {
+            tache.await.unwrap().unwrap();
+        }
+        let coeurs = std::thread::available_parallelism().map_or(1, |n| n.get());
+        assert!(
+            maximum.load(Ordering::SeqCst) <= coeurs,
+            "{} > {coeurs}",
+            maximum.load(Ordering::SeqCst)
+        );
+    }
+
+    /// Les versions asynchrones donnent les mêmes résultats, normalisation
+    /// NFC comprise (« é » composé et décomposé).
+    #[tokio::test]
+    async fn versions_asynchrones() {
+        let hash = hacher_async("Caf\u{e9}#2026").await.unwrap();
+        assert!(verifier_async("Cafe\u{301}#2026", &hash).await.unwrap());
+        assert!(!verifier_async("Autre#2026", &hash).await.unwrap());
+        assert!(
+            verifier("Caf\u{e9}#2026", &hash).unwrap(),
+            "compatible avec la version synchrone"
+        );
+        assert!(matches!(
+            verifier_async("x", "pas-un-hachage-valide").await,
+            Err(ErreurHachage::Argon2(_))
+        ));
     }
 }

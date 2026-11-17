@@ -158,7 +158,9 @@ pub enum ErreurStructure {
     /// Un TOTP est actif sur le compte professionnel : cette route ne
     /// demande pas encore le code (aucun professionnel n'a de TOTP avant
     /// l'étape 3.11, J10).
-    #[error("Votre compte professionnel a un second facteur : cette opération ne le prend pas encore en charge.")]
+    #[error(
+        "Votre compte professionnel a un second facteur : cette opération ne le prend pas encore en charge."
+    )]
     SecondFacteurRequis,
     #[error("Votre identité a déjà un autre email : il ne peut pas être changé ici.")]
     EmailDifferent,
@@ -203,7 +205,10 @@ fn controler_nom(nom: &str) -> Result<(), ErreurStructure> {
     if nom.chars().count() > NOM_LONGUEUR_MAX {
         return Err(ErreurStructure::NomTropLong);
     }
-    if nom.chars().any(|c| c.is_control() || c == '\u{2028}' || c == '\u{2029}') {
+    if nom
+        .chars()
+        .any(|c| c.is_control() || c == '\u{2028}' || c == '\u{2029}')
+    {
         return Err(ErreurStructure::NomInvalide);
     }
     Ok(())
@@ -211,12 +216,16 @@ fn controler_nom(nom: &str) -> Result<(), ErreurStructure> {
 
 /// Texte facultatif : vide ou absent devient `None`.
 fn facultatif(valeur: Option<&str>) -> Option<String> {
-    valeur.map(str::trim).filter(|v| !v.is_empty()).map(str::to_string)
+    valeur
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
 }
 
 fn dans_le_territoire(latitude: f64, longitude: f64) -> bool {
     // `contains` est faux pour NaN : un nombre non fini est refusé.
-    (LATITUDE_MIN..=LATITUDE_MAX).contains(&latitude) && (LONGITUDE_MIN..=LONGITUDE_MAX).contains(&longitude)
+    (LATITUDE_MIN..=LATITUDE_MAX).contains(&latitude)
+        && (LONGITUDE_MIN..=LONGITUDE_MAX).contains(&longitude)
 }
 
 /// Structure créée.
@@ -232,9 +241,13 @@ pub struct StructureCreee {
 impl From<ErreurComptePro> for ErreurStructure {
     fn from(erreur: ErreurComptePro) -> Self {
         match erreur {
-            ErreurComptePro::EmailObligatoire => ErreurStructure::ChampObligatoire("email_professionnel"),
+            ErreurComptePro::EmailObligatoire => {
+                ErreurStructure::ChampObligatoire("email_professionnel")
+            }
             ErreurComptePro::EmailInvalide => ErreurStructure::EmailInvalide("email_professionnel"),
-            ErreurComptePro::MotDePasseNonConforme(regles) => ErreurStructure::MotDePasseNonConforme(regles),
+            ErreurComptePro::MotDePasseNonConforme(regles) => {
+                ErreurStructure::MotDePasseNonConforme(regles)
+            }
             ErreurComptePro::MotDePasseIncorrect => ErreurStructure::MotDePasseIncorrect,
             ErreurComptePro::SecondFacteurRequis => ErreurStructure::SecondFacteurRequis,
             ErreurComptePro::EmailDifferent => ErreurStructure::EmailDifferent,
@@ -267,15 +280,17 @@ pub async fn creer(
     let commune = obligatoire("commune", saisie.commune)?;
     // Même normalisation que tous les numéros (C3, T1 à T4) ; les deux
     // numéros peuvent être identiques (décision du porteur).
-    let telephone = telephone::normaliser(saisie.telephone).map_err(|_| ErreurStructure::TelephoneServiceInvalide)?;
-    let telephone_urgence =
-        telephone::normaliser(saisie.telephone_urgence).map_err(|_| ErreurStructure::TelephoneUrgenceInvalide)?;
+    let telephone = telephone::normaliser(saisie.telephone)
+        .map_err(|_| ErreurStructure::TelephoneServiceInvalide)?;
+    let telephone_urgence = telephone::normaliser(saisie.telephone_urgence)
+        .map_err(|_| ErreurStructure::TelephoneUrgenceInvalide)?;
     if !dans_le_territoire(saisie.latitude, saisie.longitude) {
         return Err(ErreurStructure::LocalisationHorsBurkina);
     }
     // Contrôle commun de toutes les adresses (`adresse_email.rs`).
     let email_structure = obligatoire("email", saisie.email)?;
-    adresse_email::controler(&email_structure).map_err(|_| ErreurStructure::EmailInvalide("email"))?;
+    adresse_email::controler(&email_structure)
+        .map_err(|_| ErreurStructure::EmailInvalide("email"))?;
 
     // --- Compte professionnel (commun avec l'acceptation d'une invitation) --
     let preparation = compte_professionnel::preparer(
@@ -290,7 +305,10 @@ pub async fn creer(
     let email_verifie = preparation.email_verifie();
 
     // --- Écriture, en une transaction ------------------------------------
-    let mut tx = pool.begin().await.map_err(|e| interne_sqlx("transaction", &e))?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| interne_sqlx("transaction", &e))?;
     // Les comptes d'abord (le compte avant le reste, section 12).
     let compte = compte_professionnel::ecrire(&mut tx, patient_compte_id, preparation).await?;
     let compte_pro_id = compte.compte_id;
@@ -326,14 +344,18 @@ pub async fn creer(
     })?;
 
     // E3 : responsable dès la création, dans la même transaction.
-    sqlx::query("INSERT INTO affectation (compte_id, structure_id, role) VALUES ($1, $2, 'responsable')")
-        .bind(compte_pro_id)
-        .bind(structure_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| interne_sqlx("affectation du responsable", &e))?;
+    sqlx::query(
+        "INSERT INTO affectation (compte_id, structure_id, role) VALUES ($1, $2, 'responsable')",
+    )
+    .bind(compte_pro_id)
+    .bind(structure_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| interne_sqlx("affectation du responsable", &e))?;
 
-    tx.commit().await.map_err(|e| interne_sqlx("validation de la transaction", &e))?;
+    tx.commit()
+        .await
+        .map_err(|e| interne_sqlx("validation de la transaction", &e))?;
 
     // Après le commit : un échec d'envoi laisse la structure créée. Lien
     // seulement pour un compte qui vient d'être créé avec un email non
@@ -341,7 +363,10 @@ pub async fn creer(
     if let Some(emise) = &compte.verification {
         verification_email::envoyer_lien(email_sender, url_application_web, emise);
     }
-    Ok(StructureCreee { structure_id, email_a_verifier: !email_verifie })
+    Ok(StructureCreee {
+        structure_id,
+        email_a_verifier: !email_verifie,
+    })
 }
 
 // ---------------------------------------------------------------------
@@ -355,7 +380,9 @@ pub enum ErreurSoumission {
     StructureInconnue,
     #[error("Cette demande ne peut pas être soumise dans son état actuel.")]
     TransitionInvalide { statut_actuel: String },
-    #[error("Votre email n'est pas encore vérifié. Ouvrez le lien que nous vous avons envoyé, ou demandez-en un nouveau.")]
+    #[error(
+        "Votre email n'est pas encore vérifié. Ouvrez le lien que nous vous avons envoyé, ou demandez-en un nouveau."
+    )]
     EmailNonVerifie,
     #[error("Votre compte professionnel est désactivé.")]
     CompteProfessionnelDesactive,
@@ -372,7 +399,11 @@ pub enum ErreurSoumission {
 /// `POST /api/structures/{id}/soumettre` : `brouillon` → `en_attente`,
 /// par le créateur seulement (son compte patient), avec un email
 /// professionnel vérifié (R0). La MUNASEB se soumet sans pièce (U6 b).
-pub async fn soumettre(pool: &PgPool, patient_compte_id: Uuid, structure_id: Uuid) -> Result<(), ErreurSoumission> {
+pub async fn soumettre(
+    pool: &PgPool,
+    patient_compte_id: Uuid,
+    structure_id: Uuid,
+) -> Result<(), ErreurSoumission> {
     let interne = |etape: &'static str, e: sqlx::Error| {
         tracing::error!(etape, nature = %nature_sqlx(&e), "soumission : erreur interne");
         ErreurSoumission::Interne(etape)
@@ -394,10 +425,13 @@ pub async fn soumettre(pool: &PgPool, patient_compte_id: Uuid, structure_id: Uui
     .fetch_optional(&mut *tx)
     .await
     .map_err(|e| interne("lecture de la structure", e))?;
-    let (statut, type_structure, statut_pro, email_verifie) = ligne.ok_or(ErreurSoumission::StructureInconnue)?;
+    let (statut, type_structure, statut_pro, email_verifie) =
+        ligne.ok_or(ErreurSoumission::StructureInconnue)?;
 
     if statut != "brouillon" {
-        return Err(ErreurSoumission::TransitionInvalide { statut_actuel: statut });
+        return Err(ErreurSoumission::TransitionInvalide {
+            statut_actuel: statut,
+        });
     }
     if statut_pro != "actif" {
         return Err(ErreurSoumission::CompteProfessionnelDesactive);
@@ -433,7 +467,9 @@ pub async fn soumettre(pool: &PgPool, patient_compte_id: Uuid, structure_id: Uui
         .execute(&mut *tx)
         .await
         .map_err(|e| interne("soumission", e))?;
-    tx.commit().await.map_err(|e| interne("validation de la transaction", e))
+    tx.commit()
+        .await
+        .map_err(|e| interne("validation de la transaction", e))
 }
 
 // ---------------------------------------------------------------------
@@ -462,7 +498,11 @@ pub enum ErreurAbandon {
 /// active) est close dans la même transaction, datée et attribuée au compte
 /// professionnel du créateur ; sinon elle resterait active sur une
 /// structure morte. Ordre des verrous (§12) : structure, puis affectations.
-pub async fn abandonner(pool: &PgPool, patient_compte_id: Uuid, structure_id: Uuid) -> Result<(), ErreurAbandon> {
+pub async fn abandonner(
+    pool: &PgPool,
+    patient_compte_id: Uuid,
+    structure_id: Uuid,
+) -> Result<(), ErreurAbandon> {
     let interne = |etape: &'static str, e: sqlx::Error| {
         tracing::error!(etape, nature = %nature_sqlx(&e), "abandon : erreur interne");
         ErreurAbandon::Interne(etape)
@@ -483,7 +523,9 @@ pub async fn abandonner(pool: &PgPool, patient_compte_id: Uuid, structure_id: Uu
     .map_err(|e| interne("lecture de la structure", e))?;
     let (statut, createur) = ligne.ok_or(ErreurAbandon::StructureInconnue)?;
     if statut != "brouillon" && statut != "refusee" {
-        return Err(ErreurAbandon::TransitionInvalide { statut_actuel: statut });
+        return Err(ErreurAbandon::TransitionInvalide {
+            statut_actuel: statut,
+        });
     }
     sqlx::query("UPDATE structure SET statut = 'abandonnee' WHERE id = $1")
         .bind(structure_id)
@@ -502,7 +544,9 @@ pub async fn abandonner(pool: &PgPool, patient_compte_id: Uuid, structure_id: Uu
     .execute(&mut *tx)
     .await
     .map_err(|e| interne("clôture des affectations", e))?;
-    tx.commit().await.map_err(|e| interne("validation de la transaction", e))
+    tx.commit()
+        .await
+        .map_err(|e| interne("validation de la transaction", e))
 }
 
 // ---------------------------------------------------------------------
@@ -537,8 +581,19 @@ pub struct MesDemandes {
 }
 
 /// `GET /api/structures/mes-demandes`.
-pub async fn mes_demandes(pool: &PgPool, patient_compte_id: Uuid) -> Result<MesDemandes, sqlx::Error> {
-    type Ligne = (Uuid, String, String, String, DateTime<Utc>, Option<NaiveDate>, Option<String>);
+pub async fn mes_demandes(
+    pool: &PgPool,
+    patient_compte_id: Uuid,
+) -> Result<MesDemandes, sqlx::Error> {
+    type Ligne = (
+        Uuid,
+        String,
+        String,
+        String,
+        DateTime<Utc>,
+        Option<NaiveDate>,
+        Option<String>,
+    );
     let lignes: Vec<Ligne> = sqlx::query_as(
         "SELECT s.id, s.type_structure, s.nom, s.statut, s.date_creation, s.licence_expire_le, \
                 CASE WHEN s.statut = 'refusee' THEN \
@@ -568,12 +623,22 @@ pub async fn mes_demandes(pool: &PgPool, patient_compte_id: Uuid) -> Result<MesD
     let mut demandes = Vec::with_capacity(lignes.len());
     for (id, type_structure, nom, statut, date_creation, licence_expire_le, motif_refus) in lignes {
         // La base n'admet que les cinq valeurs (CHECK de la 0012).
-        let type_structure = TypeStructure::depuis_base(&type_structure).ok_or_else(|| {
-            sqlx::Error::Decode("type de structure inconnu".into())
-        })?;
-        demandes.push(DemandeStructure { id, type_structure, nom, statut, date_creation, licence_expire_le, motif_refus });
+        let type_structure = TypeStructure::depuis_base(&type_structure)
+            .ok_or_else(|| sqlx::Error::Decode("type de structure inconnu".into()))?;
+        demandes.push(DemandeStructure {
+            id,
+            type_structure,
+            nom,
+            statut,
+            date_creation,
+            licence_expire_le,
+            motif_refus,
+        });
     }
-    Ok(MesDemandes { email_a_verifier, demandes })
+    Ok(MesDemandes {
+        email_a_verifier,
+        demandes,
+    })
 }
 
 #[cfg(test)]
@@ -627,7 +692,11 @@ mod tests {
         }
     }
 
-    async fn soumettre_ok(pool: &PgPool, patient_id: Uuid, structure_id: Uuid) -> Result<(), ErreurSoumission> {
+    async fn soumettre_ok(
+        pool: &PgPool,
+        patient_id: Uuid,
+        structure_id: Uuid,
+    ) -> Result<(), ErreurSoumission> {
         soumettre(pool, patient_id, structure_id).await
     }
 
@@ -640,7 +709,15 @@ mod tests {
         let emails = EmailsRecus::default();
         let patient_id = patient(&pool, "+22670150001", None).await;
 
-        let creee = creer(&pool, &emails, URL, patient_id, &saisie(Some(" Responsable@Example.org "), PRO)).await.unwrap();
+        let creee = creer(
+            &pool,
+            &emails,
+            URL,
+            patient_id,
+            &saisie(Some(" Responsable@Example.org "), PRO),
+        )
+        .await
+        .unwrap();
         assert!(creee.email_a_verifier);
 
         // Ce qui a été enregistré : valeurs nettoyées, numéros normalisés,
@@ -655,20 +732,41 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            (nom.as_str(), telephone.as_str(), urgence.as_str(), parcelle, section.as_deref(), latitude.as_str(), statut.as_str()),
-            ("MUNASEB (test)", "+22670000001", "+22670000001", None, Some("B"), "12.371428", "brouillon")
+            (
+                nom.as_str(),
+                telephone.as_str(),
+                urgence.as_str(),
+                parcelle,
+                section.as_deref(),
+                latitude.as_str(),
+                statut.as_str()
+            ),
+            (
+                "MUNASEB (test)",
+                "+22670000001",
+                "+22670000001",
+                None,
+                Some("B"),
+                "12.371428",
+                "brouillon"
+            )
         );
-        let email_structure: String = sqlx::query_scalar("SELECT email FROM structure WHERE id = $1")
-            .bind(creee.structure_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(email_structure, "contact.structure@example.org", "email de la structure, sans les espaces autour");
-        let role: String = sqlx::query_scalar("SELECT role FROM affectation WHERE structure_id = $1")
-            .bind(creee.structure_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let email_structure: String =
+            sqlx::query_scalar("SELECT email FROM structure WHERE id = $1")
+                .bind(creee.structure_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            email_structure, "contact.structure@example.org",
+            "email de la structure, sans les espaces autour"
+        );
+        let role: String =
+            sqlx::query_scalar("SELECT role FROM affectation WHERE structure_id = $1")
+                .bind(creee.structure_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(role, "responsable");
         let email: String = sqlx::query_scalar(
             "SELECT u.email FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id WHERE c.id = $1",
@@ -677,7 +775,10 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(email, "Responsable@Example.org", "enregistré sans les espaces autour");
+        assert_eq!(
+            email, "Responsable@Example.org",
+            "enregistré sans les espaces autour"
+        );
 
         // Soumission refusée : email non vérifié.
         assert!(matches!(
@@ -690,9 +791,15 @@ mod tests {
         // Lien envoyé à l'adresse, jeton après `#`.
         let (destinataire, corps) = emails.0.lock().unwrap()[0].clone();
         assert_eq!(destinataire, "Responsable@Example.org");
-        assert!(verification_email::verifier(&pool, &jeton_du_lien(&corps)).await.unwrap());
+        assert!(
+            verification_email::verifier(&pool, &jeton_du_lien(&corps))
+                .await
+                .unwrap()
+        );
 
-        soumettre_ok(&pool, patient_id, creee.structure_id).await.unwrap();
+        soumettre_ok(&pool, patient_id, creee.structure_id)
+            .await
+            .unwrap();
         assert!(matches!(
             soumettre_ok(&pool, patient_id, creee.structure_id).await,
             Err(ErreurSoumission::TransitionInvalide { statut_actuel }) if statut_actuel == "en_attente"
@@ -702,7 +809,11 @@ mod tests {
         assert!(!suivi.email_a_verifier);
         assert_eq!(suivi.demandes.len(), 1);
         assert_eq!(
-            (suivi.demandes[0].id, suivi.demandes[0].type_structure, suivi.demandes[0].statut.as_str()),
+            (
+                suivi.demandes[0].id,
+                suivi.demandes[0].type_structure,
+                suivi.demandes[0].statut.as_str()
+            ),
             (creee.structure_id, TypeStructure::Munaseb, "en_attente")
         );
     }
@@ -715,7 +826,15 @@ mod tests {
     async fn seconde_demande_refusee_et_mot_de_passe_existant(pool: PgPool) {
         let emails = EmailsRecus::default();
         let patient_id = patient(&pool, "+22670150002", None).await;
-        creer(&pool, &emails, URL, patient_id, &saisie(Some("seconde@example.org"), PRO)).await.unwrap();
+        creer(
+            &pool,
+            &emails,
+            URL,
+            patient_id,
+            &saisie(Some("seconde@example.org"), PRO),
+        )
+        .await
+        .unwrap();
 
         assert!(matches!(
             creer(&pool, &emails, URL, patient_id, &saisie(None, "Faux#2026")).await,
@@ -725,9 +844,16 @@ mod tests {
             creer(&pool, &emails, URL, patient_id, &saisie(None, PRO)).await,
             Err(ErreurStructure::DemandeDejaEnCours)
         ));
-        let structures: i64 = sqlx::query_scalar("SELECT count(*) FROM structure").fetch_one(&pool).await.unwrap();
+        let structures: i64 = sqlx::query_scalar("SELECT count(*) FROM structure")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(structures, 1);
-        assert_eq!(emails.0.lock().unwrap().len(), 1, "pas de nouveau lien pour un compte existant");
+        assert_eq!(
+            emails.0.lock().unwrap().len(),
+            1,
+            "pas de nouveau lien pour un compte existant"
+        );
     }
 
     /// Une structure abandonnée libère la place (M5) ; le compte existant
@@ -737,18 +863,29 @@ mod tests {
     async fn compte_professionnel_existant_reutilise(pool: PgPool) {
         let emails = EmailsRecus::default();
         let patient_id = patient(&pool, "+22670150003", None).await;
-        let premiere = creer(&pool, &emails, URL, patient_id, &saisie(Some("reutilise@example.org"), PRO)).await.unwrap();
+        let premiere = creer(
+            &pool,
+            &emails,
+            URL,
+            patient_id,
+            &saisie(Some("reutilise@example.org"), PRO),
+        )
+        .await
+        .unwrap();
         sqlx::query("UPDATE structure SET statut = 'abandonnee' WHERE id = $1")
             .bind(premiere.structure_id)
             .execute(&pool)
             .await
             .unwrap();
-        let seconde = creer(&pool, &emails, URL, patient_id, &saisie(None, PRO)).await.unwrap();
-        assert_ne!(premiere.structure_id, seconde.structure_id);
-        let comptes_pro: i64 = sqlx::query_scalar("SELECT count(*) FROM compte WHERE type_compte = 'professionnel'")
-            .fetch_one(&pool)
+        let seconde = creer(&pool, &emails, URL, patient_id, &saisie(None, PRO))
             .await
             .unwrap();
+        assert_ne!(premiere.structure_id, seconde.structure_id);
+        let comptes_pro: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM compte WHERE type_compte = 'professionnel'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(comptes_pro, 1);
     }
 
@@ -762,61 +899,168 @@ mod tests {
         // octets.
         let nom_trop_long = "é".repeat(NOM_LONGUEUR_MAX + 1);
 
-        let cas: Vec<(NouvelleStructure, fn(&ErreurStructure) -> bool)> = vec![
-            (NouvelleStructure { type_structure: TypeStructure::Clinique, ..base() }, |e| {
-                matches!(e, ErreurStructure::TypeNonDisponible)
-            }),
-            (NouvelleStructure { nom: "  ", ..base() }, |e| matches!(e, ErreurStructure::ChampObligatoire("nom"))),
-            (NouvelleStructure { region: "", ..base() }, |e| matches!(e, ErreurStructure::ChampObligatoire("region"))),
+        // Une saisie, et le contrôle de l'erreur attendue.
+        type Cas<'a> = (NouvelleStructure<'a>, fn(&ErreurStructure) -> bool);
+        let cas: Vec<Cas<'_>> = vec![
+            (
+                NouvelleStructure {
+                    type_structure: TypeStructure::Clinique,
+                    ..base()
+                },
+                |e| matches!(e, ErreurStructure::TypeNonDisponible),
+            ),
+            (
+                NouvelleStructure {
+                    nom: "  ",
+                    ..base()
+                },
+                |e| matches!(e, ErreurStructure::ChampObligatoire("nom")),
+            ),
+            (
+                NouvelleStructure {
+                    region: "",
+                    ..base()
+                },
+                |e| matches!(e, ErreurStructure::ChampObligatoire("region")),
+            ),
             // Migration 0023 : 100 caractères au plus, ni retour à la ligne
             // ni caractère de contrôle.
-            (NouvelleStructure { nom: &nom_trop_long, ..base() }, |e| matches!(e, ErreurStructure::NomTropLong)),
-            (NouvelleStructure { nom: "MUNASEB\nCentre", ..base() }, |e| matches!(e, ErreurStructure::NomInvalide)),
-            (NouvelleStructure { nom: "MUNASEB\u{2028}Centre", ..base() }, |e| matches!(e, ErreurStructure::NomInvalide)),
-            (NouvelleStructure { nom: "MUNASEB\u{7}", ..base() }, |e| matches!(e, ErreurStructure::NomInvalide)),
-            (NouvelleStructure { telephone: "12", ..base() }, |e| {
-                matches!(e, ErreurStructure::TelephoneServiceInvalide)
-            }),
-            (NouvelleStructure { telephone_urgence: "12", ..base() }, |e| {
-                matches!(e, ErreurStructure::TelephoneUrgenceInvalide)
-            }),
+            (
+                NouvelleStructure {
+                    nom: &nom_trop_long,
+                    ..base()
+                },
+                |e| matches!(e, ErreurStructure::NomTropLong),
+            ),
+            (
+                NouvelleStructure {
+                    nom: "MUNASEB\nCentre",
+                    ..base()
+                },
+                |e| matches!(e, ErreurStructure::NomInvalide),
+            ),
+            (
+                NouvelleStructure {
+                    nom: "MUNASEB\u{2028}Centre",
+                    ..base()
+                },
+                |e| matches!(e, ErreurStructure::NomInvalide),
+            ),
+            (
+                NouvelleStructure {
+                    nom: "MUNASEB\u{7}",
+                    ..base()
+                },
+                |e| matches!(e, ErreurStructure::NomInvalide),
+            ),
+            (
+                NouvelleStructure {
+                    telephone: "12",
+                    ..base()
+                },
+                |e| matches!(e, ErreurStructure::TelephoneServiceInvalide),
+            ),
+            (
+                NouvelleStructure {
+                    telephone_urgence: "12",
+                    ..base()
+                },
+                |e| matches!(e, ErreurStructure::TelephoneUrgenceInvalide),
+            ),
             // Coordonnées inversées, puis hors du rectangle (IGB 2014).
-            (NouvelleStructure { latitude: -1.52, longitude: 12.37, ..base() }, |e| {
-                matches!(e, ErreurStructure::LocalisationHorsBurkina)
-            }),
-            (NouvelleStructure { latitude: 16.5, ..base() }, |e| matches!(e, ErreurStructure::LocalisationHorsBurkina)),
-            (NouvelleStructure { longitude: 3.01, ..base() }, |e| matches!(e, ErreurStructure::LocalisationHorsBurkina)),
+            (
+                NouvelleStructure {
+                    latitude: -1.52,
+                    longitude: 12.37,
+                    ..base()
+                },
+                |e| matches!(e, ErreurStructure::LocalisationHorsBurkina),
+            ),
+            (
+                NouvelleStructure {
+                    latitude: 16.5,
+                    ..base()
+                },
+                |e| matches!(e, ErreurStructure::LocalisationHorsBurkina),
+            ),
+            (
+                NouvelleStructure {
+                    longitude: 3.01,
+                    ..base()
+                },
+                |e| matches!(e, ErreurStructure::LocalisationHorsBurkina),
+            ),
             // Email de la structure : obligatoire, bien formé.
-            (NouvelleStructure { email: "  ", ..base() }, |e| matches!(e, ErreurStructure::ChampObligatoire("email"))),
-            (NouvelleStructure { email: "contact sans arobase", ..base() }, |e| {
-                matches!(e, ErreurStructure::EmailInvalide("email"))
-            }),
+            (
+                NouvelleStructure {
+                    email: "  ",
+                    ..base()
+                },
+                |e| matches!(e, ErreurStructure::ChampObligatoire("email")),
+            ),
+            (
+                NouvelleStructure {
+                    email: "contact sans arobase",
+                    ..base()
+                },
+                |e| matches!(e, ErreurStructure::EmailInvalide("email")),
+            ),
             // Contrôle commun (`adresse_email.rs`) : ASCII seulement.
-            (NouvelleStructure { email: "contact@exemplé.bf", ..base() }, |e| {
-                matches!(e, ErreurStructure::EmailInvalide("email"))
-            }),
+            (
+                NouvelleStructure {
+                    email: "contact@exemplé.bf",
+                    ..base()
+                },
+                |e| matches!(e, ErreurStructure::EmailInvalide("email")),
+            ),
             // Email professionnel : exigé sans compte professionnel.
-            (NouvelleStructure { email_professionnel: None, ..base() }, |e| {
-                matches!(e, ErreurStructure::ChampObligatoire("email_professionnel"))
-            }),
-            (NouvelleStructure { email_professionnel: Some("sans-arobase"), ..base() }, |e| {
-                matches!(e, ErreurStructure::EmailInvalide("email_professionnel"))
-            }),
-            (NouvelleStructure { email_professionnel: Some("a@b@c"), ..base() }, |e| {
-                matches!(e, ErreurStructure::EmailInvalide("email_professionnel"))
-            }),
-            (NouvelleStructure { email_professionnel: Some("autre@example.org"), ..base() }, |e| {
-                matches!(e, ErreurStructure::EmailDifferent)
-            }),
-            (NouvelleStructure { email_professionnel: Some("élodie@example.org"), ..base() }, |e| {
-                matches!(e, ErreurStructure::EmailInvalide("email_professionnel"))
-            }),
-            (NouvelleStructure { mot_de_passe_professionnel: "court", ..base() }, |e| {
-                matches!(e, ErreurStructure::MotDePasseNonConforme(_))
-            }),
+            (
+                NouvelleStructure {
+                    email_professionnel: None,
+                    ..base()
+                },
+                |e| matches!(e, ErreurStructure::ChampObligatoire("email_professionnel")),
+            ),
+            (
+                NouvelleStructure {
+                    email_professionnel: Some("sans-arobase"),
+                    ..base()
+                },
+                |e| matches!(e, ErreurStructure::EmailInvalide("email_professionnel")),
+            ),
+            (
+                NouvelleStructure {
+                    email_professionnel: Some("a@b@c"),
+                    ..base()
+                },
+                |e| matches!(e, ErreurStructure::EmailInvalide("email_professionnel")),
+            ),
+            (
+                NouvelleStructure {
+                    email_professionnel: Some("autre@example.org"),
+                    ..base()
+                },
+                |e| matches!(e, ErreurStructure::EmailDifferent),
+            ),
+            (
+                NouvelleStructure {
+                    email_professionnel: Some("élodie@example.org"),
+                    ..base()
+                },
+                |e| matches!(e, ErreurStructure::EmailInvalide("email_professionnel")),
+            ),
+            (
+                NouvelleStructure {
+                    mot_de_passe_professionnel: "court",
+                    ..base()
+                },
+                |e| matches!(e, ErreurStructure::MotDePasseNonConforme(_)),
+            ),
         ];
         for (saisie, attendu) in cas {
-            let erreur = creer(&pool, &emails, URL, patient_id, &saisie).await.unwrap_err();
+            let erreur = creer(&pool, &emails, URL, patient_id, &saisie)
+                .await
+                .unwrap_err();
             assert!(attendu(&erreur), "{erreur:?}");
         }
         let (structures, comptes): (i64, i64) = sqlx::query_as(
@@ -836,7 +1080,15 @@ mod tests {
     async fn mot_de_passe_identique_au_patient_accepte(pool: PgPool) {
         let emails = EmailsRecus::default();
         let patient_id = patient(&pool, "+22670150011", None).await;
-        creer(&pool, &emails, URL, patient_id, &saisie(Some("meme.mdp@example.org"), PATIENT)).await.unwrap();
+        creer(
+            &pool,
+            &emails,
+            URL,
+            patient_id,
+            &saisie(Some("meme.mdp@example.org"), PATIENT),
+        )
+        .await
+        .unwrap();
     }
 
     /// Bornes comprises : un point exactement sur la limite est accepté.
@@ -856,7 +1108,14 @@ mod tests {
         patient(&pool, "+22670150005", Some("pris@example.org")).await;
         let patient_id = patient(&pool, "+22670150006", None).await;
         assert!(matches!(
-            creer(&pool, &emails, URL, patient_id, &saisie(Some("PRIS@example.org"), PRO)).await,
+            creer(
+                &pool,
+                &emails,
+                URL,
+                patient_id,
+                &saisie(Some("PRIS@example.org"), PRO)
+            )
+            .await,
             Err(ErreurStructure::EmailDejaUtilise)
         ));
     }
@@ -869,15 +1128,37 @@ mod tests {
         let emails = EmailsRecus::default();
         let createur = patient(&pool, "+22670150007", None).await;
         let autre = patient(&pool, "+22670150008", None).await;
-        let creee = creer(&pool, &emails, URL, createur, &saisie(Some("createur@example.org"), PRO)).await.unwrap();
-        sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE email = 'createur@example.org'")
-            .execute(&pool)
-            .await
-            .unwrap();
+        let creee = creer(
+            &pool,
+            &emails,
+            URL,
+            createur,
+            &saisie(Some("createur@example.org"), PRO),
+        )
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE utilisateur SET email_verifie_le = now() WHERE email = 'createur@example.org'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
-        assert!(matches!(soumettre_ok(&pool, autre, creee.structure_id).await, Err(ErreurSoumission::StructureInconnue)));
-        assert!(matches!(soumettre_ok(&pool, createur, Uuid::nil()).await, Err(ErreurSoumission::StructureInconnue)));
-        assert!(mes_demandes(&pool, autre).await.unwrap().demandes.is_empty());
+        assert!(matches!(
+            soumettre_ok(&pool, autre, creee.structure_id).await,
+            Err(ErreurSoumission::StructureInconnue)
+        ));
+        assert!(matches!(
+            soumettre_ok(&pool, createur, Uuid::nil()).await,
+            Err(ErreurSoumission::StructureInconnue)
+        ));
+        assert!(
+            mes_demandes(&pool, autre)
+                .await
+                .unwrap()
+                .demandes
+                .is_empty()
+        );
 
         sqlx::query("UPDATE compte SET statut = 'desactive' WHERE type_compte = 'professionnel'")
             .execute(&pool)
@@ -895,12 +1176,21 @@ mod tests {
     async fn suivi_avec_motif_de_refus(pool: PgPool) {
         let emails = EmailsRecus::default();
         let patient_id = patient(&pool, "+22670150009", None).await;
-        let creee = creer(&pool, &emails, URL, patient_id, &saisie(Some("refus@example.org"), PRO)).await.unwrap();
-        let admin_utilisateur: Uuid =
-            sqlx::query_scalar("INSERT INTO utilisateur (telephone) VALUES ('+22670150010') RETURNING id")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let creee = creer(
+            &pool,
+            &emails,
+            URL,
+            patient_id,
+            &saisie(Some("refus@example.org"), PRO),
+        )
+        .await
+        .unwrap();
+        let admin_utilisateur: Uuid = sqlx::query_scalar(
+            "INSERT INTO utilisateur (telephone) VALUES ('+22670150010') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         let admin: Uuid = sqlx::query_scalar(
             "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) \
              VALUES ($1, 'administrateur_laaficare', 'x') RETURNING id",
@@ -924,12 +1214,22 @@ mod tests {
             .await
             .unwrap();
         let suivi = mes_demandes(&pool, patient_id).await.unwrap();
-        assert_eq!(suivi.demandes[0].motif_refus.as_deref(), Some("Informations incomplètes (fictif)"));
-        assert_eq!(serde_json::to_value(&suivi.demandes[0]).unwrap()["type"], "munaseb");
+        assert_eq!(
+            suivi.demandes[0].motif_refus.as_deref(),
+            Some("Informations incomplètes (fictif)")
+        );
+        assert_eq!(
+            serde_json::to_value(&suivi.demandes[0]).unwrap()["type"],
+            "munaseb"
+        );
     }
 
     async fn statut_structure(pool: &PgPool, structure_id: Uuid) -> String {
-        sqlx::query_scalar("SELECT statut FROM structure WHERE id = $1").bind(structure_id).fetch_one(pool).await.unwrap()
+        sqlx::query_scalar("SELECT statut FROM structure WHERE id = $1")
+            .bind(structure_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
     }
 
     /// AB1 à AB3 : abandon d'un brouillon par son créateur ; l'affectation
@@ -941,14 +1241,36 @@ mod tests {
         let emails = EmailsRecus::default();
         let createur = patient(&pool, "+22670150011", None).await;
         let autre = patient(&pool, "+22670150012", None).await;
-        let creee = creer(&pool, &emails, URL, createur, &saisie(Some("abandon@example.org"), PRO)).await.unwrap();
+        let creee = creer(
+            &pool,
+            &emails,
+            URL,
+            createur,
+            &saisie(Some("abandon@example.org"), PRO),
+        )
+        .await
+        .unwrap();
 
-        assert!(matches!(abandonner(&pool, autre, creee.structure_id).await, Err(ErreurAbandon::StructureInconnue)));
-        assert!(matches!(abandonner(&pool, createur, Uuid::nil()).await, Err(ErreurAbandon::StructureInconnue)));
-        assert_eq!(statut_structure(&pool, creee.structure_id).await, "brouillon");
+        assert!(matches!(
+            abandonner(&pool, autre, creee.structure_id).await,
+            Err(ErreurAbandon::StructureInconnue)
+        ));
+        assert!(matches!(
+            abandonner(&pool, createur, Uuid::nil()).await,
+            Err(ErreurAbandon::StructureInconnue)
+        ));
+        assert_eq!(
+            statut_structure(&pool, creee.structure_id).await,
+            "brouillon"
+        );
 
-        abandonner(&pool, createur, creee.structure_id).await.unwrap();
-        assert_eq!(statut_structure(&pool, creee.structure_id).await, "abandonnee");
+        abandonner(&pool, createur, creee.structure_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            statut_structure(&pool, creee.structure_id).await,
+            "abandonnee"
+        );
         let (statut, par, pro): (String, Option<Uuid>, Uuid) = sqlx::query_as(
             "SELECT a.statut, a.desactivee_par_compte_id, s.createur_compte_id \
              FROM affectation a JOIN structure s ON s.id = a.structure_id WHERE a.structure_id = $1",
@@ -964,7 +1286,9 @@ mod tests {
             Err(ErreurAbandon::TransitionInvalide { ref statut_actuel }) if statut_actuel == "abandonnee"
         ));
         // La place est libre : une nouvelle demande est acceptée.
-        creer(&pool, &emails, URL, createur, &saisie(None, PRO)).await.unwrap();
+        creer(&pool, &emails, URL, createur, &saisie(None, PRO))
+            .await
+            .unwrap();
     }
 
     /// AB2 : une demande refusée s'abandonne ; une demande en attente ou
@@ -974,7 +1298,15 @@ mod tests {
     async fn abandon_selon_le_statut(pool: PgPool) {
         let emails = EmailsRecus::default();
         let createur = patient(&pool, "+22670150013", None).await;
-        let creee = creer(&pool, &emails, URL, createur, &saisie(Some("statuts@example.org"), PRO)).await.unwrap();
+        let creee = creer(
+            &pool,
+            &emails,
+            URL,
+            createur,
+            &saisie(Some("statuts@example.org"), PRO),
+        )
+        .await
+        .unwrap();
         for statut in ["en_attente", "validee"] {
             sqlx::query("UPDATE structure SET statut = $2 WHERE id = $1")
                 .bind(creee.structure_id)
@@ -992,7 +1324,12 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        abandonner(&pool, createur, creee.structure_id).await.unwrap();
-        assert_eq!(statut_structure(&pool, creee.structure_id).await, "abandonnee");
+        abandonner(&pool, createur, creee.structure_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            statut_structure(&pool, creee.structure_id).await,
+            "abandonnee"
+        );
     }
 }

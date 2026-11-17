@@ -8,17 +8,23 @@ mod routes_membres;
 mod routes_mot_de_passe;
 mod routes_patient;
 mod routes_pharmacie;
-mod routes_remboursement_munaseb;
 mod routes_professionnel;
+mod routes_remboursement_munaseb;
 mod routes_session;
 mod routes_structure;
 
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 
+use axum::extract::{DefaultBodyLimit, MatchedPath};
+use axum::http::HeaderName;
 use axum::{Json, Router, extract::State, http::StatusCode, routing::get, routing::post};
 use serde::Serialize;
 use sqlx::PgPool;
+use tower_http::request_id::{
+    MakeRequestUuid, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
+};
+use tower_http::trace::TraceLayer;
 
 use laaficare_backend::config::{self, CleTotp, Config, Programme};
 use laaficare_backend::db;
@@ -126,7 +132,7 @@ async fn main() {
     // l'abandon. Le message ci-dessous couvre les deux causes réelles vues en
     // test (base arrêtée, mauvais identifiants), car l'erreur de sqlx seule
     // (« pool timed out ») ne les distingue pas.
-    let pool = db::connecter(&config.database_url)
+    let pool = db::connecter_avec(&config.database_url, &config.pool)
         .await
         .unwrap_or_else(|_| {
             tracing::error!(
@@ -142,7 +148,10 @@ async fn main() {
     match db::migrations_manquantes(&pool).await {
         Ok(0) => tracing::info!("base à jour"),
         Ok(manquantes) => {
-            tracing::error!(manquantes, "base pas à jour : lancer `cargo run --bin migrer`");
+            tracing::error!(
+                manquantes,
+                "base pas à jour : lancer `cargo run --bin migrer`"
+            );
             std::process::exit(1);
         }
         Err(erreur) => {
@@ -157,21 +166,90 @@ async fn main() {
     // B2 (décision du porteur, 2026-10-18) : en production, refus de
     // démarrer tant qu'un envoi est simulé.
     let email: Arc<dyn EmailSender> = Arc::new(EmailSenderConsole);
-    if let Err(erreur) =
-        config::verifier_envois(config.environnement, &[("SMS", sms.simule()), ("email", email.simule())])
-    {
+    if let Err(erreur) = config::verifier_envois(
+        config.environnement,
+        &[("SMS", sms.simule()), ("email", email.simule())],
+    ) {
         tracing::error!(%erreur, "configuration invalide");
         std::process::exit(1);
     }
 
-    let app = Router::new()
+    let app = routeur(AppState {
+        db: pool.clone(),
+        jwt,
+        sms,
+        cle_totp: Arc::new(config.totp_cle_chiffrement),
+        email,
+        url_application_web: Arc::from(config.url_application_web),
+        contact_securite: Arc::from(config.contact_securite),
+        taches_reinitialisation: Arc::new(
+            laaficare_backend::reinitialisation::LimiteTaches::default(),
+        ),
+    });
+
+    // 127.0.0.1 par défaut (SERVER_HOST, `config.rs`) : cohérent avec
+    // PostgreSQL exposé en local seulement. Une autre adresse est un choix
+    // explicite de la configuration.
+    let adresse = SocketAddr::from((config.server_host, config.server_port));
+    let listener = tokio::net::TcpListener::bind(adresse)
+        .await
+        .unwrap_or_else(|erreur| {
+            tracing::error!(%erreur, %adresse, "impossible d'écouter sur cette adresse");
+            std::process::exit(1)
+        });
+
+    tracing::info!(%adresse, "serveur démarré");
+
+    // Arrêt propre (remédiation de l'audit, reprise le 2026-11-17) : doc
+    // d'axum 0.8.9, `serve::Serve::with_graceful_shutdown`, et exemple
+    // officiel `examples/graceful-shutdown`. Au signal, le serveur n'accepte
+    // plus de connexion et laisse finir les requêtes en cours : une vente,
+    // une validation ou un paiement n'est pas coupé au milieu de sa
+    // transaction.
+    if let Err(erreur) = axum::serve(listener, app)
+        .with_graceful_shutdown(signal_d_arret())
+        .await
+    {
+        tracing::error!(%erreur, "le serveur s'est arrêté sur une erreur");
+        std::process::exit(1);
+    }
+
+    // Connexions à PostgreSQL fermées proprement (doc de sqlx 0.9,
+    // `Pool::close` : attend que les connexions empruntées soient rendues).
+    pool.close().await;
+    tracing::info!("serveur arrêté proprement");
+}
+
+/// Taille maximale du corps d'une requête, pour toutes les routes sauf le
+/// dépôt d'une pièce justificative (remédiation de l'audit, reprise le
+/// 2026-11-17 ; OWASP API Security Top 10 2023, API4 *Unrestricted Resource
+/// Consumption*, « maximum allowed payload size »). Axum applique déjà
+/// 2 Mo par défaut (doc d'axum 0.8.9, `DefaultBodyLimit`) ; la plus grosse
+/// requête JSON de l'API (vente ou inventaire de 100 lignes) fait une dizaine
+/// de Ko : 256 Kio laissent une large marge et réduisent ce qu'un appelant
+/// peut faire lire au serveur. La route des pièces garde sa propre limite de
+/// 5 Mio (`piece_justificative::TAILLE_MAX_OCTETS`) : la couche posée sur la
+/// route est plus près du handler, elle l'emporte (même doc, « … can be
+/// overridden for specific routes »).
+const TAILLE_MAX_CORPS_OCTETS: usize = 256 * 1024;
+
+/// Toutes les routes de l'API et leurs couches. Séparé de `main` pour que
+/// les tests exercent exactement le routeur du serveur.
+pub(crate) fn routeur(state: AppState) -> Router {
+    Router::new()
         .route("/health", get(health))
-        .route("/api/assurance-munaseb/remboursements", get(routes_remboursement_munaseb::lister))
+        .route(
+            "/api/assurance-munaseb/remboursements",
+            get(routes_remboursement_munaseb::lister),
+        )
         .route(
             "/api/assurance-munaseb/remboursements/simuler-acte",
             post(routes_remboursement_munaseb::simuler_acte),
         )
-        .route("/api/assurance-munaseb/remboursements/{id}", get(routes_remboursement_munaseb::detail))
+        .route(
+            "/api/assurance-munaseb/remboursements/{id}",
+            get(routes_remboursement_munaseb::detail),
+        )
         .route(
             "/api/assurance-munaseb/remboursements/{id}/prendre-en-charge",
             post(routes_remboursement_munaseb::prendre_en_charge),
@@ -190,7 +268,8 @@ async fn main() {
         )
         .route(
             "/api/assurance-munaseb/parametres",
-            get(routes_contrat_munaseb::parametres).put(routes_contrat_munaseb::modifier_parametres),
+            get(routes_contrat_munaseb::parametres)
+                .put(routes_contrat_munaseb::modifier_parametres),
         )
         .route(
             "/api/assurance-munaseb/parametres/historique",
@@ -200,25 +279,52 @@ async fn main() {
             "/api/assurance-munaseb/contrats",
             get(routes_contrat_munaseb::rechercher).post(routes_contrat_munaseb::adherer),
         )
-        .route("/api/assurance-munaseb/contrats/{id}", get(routes_contrat_munaseb::detail))
+        .route(
+            "/api/assurance-munaseb/contrats/{id}",
+            get(routes_contrat_munaseb::detail),
+        )
         .route(
             "/api/assurance-munaseb/contrats/{id}/renouvellements",
             post(routes_contrat_munaseb::renouveler),
         )
-        .route("/api/patients/connexion", post(routes_patient::se_connecter))
+        .route(
+            "/api/patients/connexion",
+            post(routes_patient::se_connecter),
+        )
         .route("/api/patients/moi", get(routes_patient::moi))
         .route("/api/sessions/renouveler", post(routes_session::renouveler))
-        .route("/api/sessions/deconnexion", post(routes_session::deconnexion))
-        .route("/api/sessions/deconnexion-partout", post(routes_session::deconnexion_partout))
-        .route("/api/professionnels/connexion", post(routes_professionnel::se_connecter))
-        .route("/api/professionnels/connexion/second-facteur", post(routes_professionnel::second_facteur))
-        .route("/api/professionnels/affectations", get(routes_professionnel::lister_affectations))
+        .route(
+            "/api/sessions/deconnexion",
+            post(routes_session::deconnexion),
+        )
+        .route(
+            "/api/sessions/deconnexion-partout",
+            post(routes_session::deconnexion_partout),
+        )
+        .route(
+            "/api/professionnels/connexion",
+            post(routes_professionnel::se_connecter),
+        )
+        .route(
+            "/api/professionnels/connexion/second-facteur",
+            post(routes_professionnel::second_facteur),
+        )
+        .route(
+            "/api/professionnels/affectations",
+            get(routes_professionnel::lister_affectations),
+        )
         .route(
             "/api/professionnels/affectations/{id}/activer",
             post(routes_professionnel::activer_affectation),
         )
-        .route("/api/administrateurs/connexion", post(routes_administrateur::se_connecter))
-        .route("/api/administrateurs/connexion/second-facteur", post(routes_administrateur::second_facteur))
+        .route(
+            "/api/administrateurs/connexion",
+            post(routes_administrateur::se_connecter),
+        )
+        .route(
+            "/api/administrateurs/connexion/second-facteur",
+            post(routes_administrateur::second_facteur),
+        )
         .route(
             "/api/administrateurs/reenrolement/commencer",
             post(routes_administrateur::commencer_reenrolement),
@@ -228,37 +334,91 @@ async fn main() {
             post(routes_administrateur::confirmer_reenrolement),
         )
         .route("/api/patients/otp", post(routes_patient::demander_otp))
-        .route("/api/patients/inscription", post(routes_patient::creer_compte))
+        .route(
+            "/api/patients/inscription",
+            post(routes_patient::creer_compte),
+        )
         .route(
             "/api/patients/mot-de-passe/reinitialiser",
             post(routes_patient::reinitialiser_mot_de_passe),
         )
-        .route("/api/professionnels/email/verifier", post(routes_professionnel::verifier_email))
-        .route("/api/professionnels/email/renvoyer", post(routes_professionnel::renvoyer_lien_email))
-        .route("/api/administrateurs/structures", get(routes_administrateur::lister_structures))
-        .route("/api/administrateurs/structures/{id}", get(routes_administrateur::detail_structure))
-        .route("/api/administrateurs/structures/{id}/valider", post(routes_administrateur::valider_structure))
-        .route("/api/administrateurs/structures/{id}/refuser", post(routes_administrateur::refuser_structure))
+        .route(
+            "/api/professionnels/email/verifier",
+            post(routes_professionnel::verifier_email),
+        )
+        .route(
+            "/api/professionnels/email/renvoyer",
+            post(routes_professionnel::renvoyer_lien_email),
+        )
+        .route(
+            "/api/administrateurs/structures",
+            get(routes_administrateur::lister_structures),
+        )
+        .route(
+            "/api/administrateurs/structures/{id}",
+            get(routes_administrateur::detail_structure),
+        )
+        .route(
+            "/api/administrateurs/structures/{id}/valider",
+            post(routes_administrateur::valider_structure),
+        )
+        .route(
+            "/api/administrateurs/structures/{id}/refuser",
+            post(routes_administrateur::refuser_structure),
+        )
         .route(
             "/api/professionnels/invitations",
             get(routes_invitation::lister).post(routes_invitation::creer),
         )
-        .route("/api/professionnels/invitations/{id}/annuler", post(routes_invitation::annuler))
-        .route("/api/patients/invitations", get(routes_invitation::lister_recues))
-        .route("/api/patients/invitations/{id}/accepter", post(routes_invitation::accepter))
-        .route("/api/patients/invitations/{id}/refuser", post(routes_invitation::refuser))
-        .route("/api/professionnels/mot-de-passe/oubli", post(routes_mot_de_passe::oubli_professionnel))
-        .route("/api/administrateurs/mot-de-passe/oubli", post(routes_mot_de_passe::oubli_administrateur))
-        .route("/api/mot-de-passe/reinitialiser", post(routes_mot_de_passe::reinitialiser))
+        .route(
+            "/api/professionnels/invitations/{id}/annuler",
+            post(routes_invitation::annuler),
+        )
+        .route(
+            "/api/patients/invitations",
+            get(routes_invitation::lister_recues),
+        )
+        .route(
+            "/api/patients/invitations/{id}/accepter",
+            post(routes_invitation::accepter),
+        )
+        .route(
+            "/api/patients/invitations/{id}/refuser",
+            post(routes_invitation::refuser),
+        )
+        .route(
+            "/api/professionnels/mot-de-passe/oubli",
+            post(routes_mot_de_passe::oubli_professionnel),
+        )
+        .route(
+            "/api/administrateurs/mot-de-passe/oubli",
+            post(routes_mot_de_passe::oubli_administrateur),
+        )
+        .route(
+            "/api/mot-de-passe/reinitialiser",
+            post(routes_mot_de_passe::reinitialiser),
+        )
         .route("/api/structures", post(routes_structure::creer))
-        .route("/api/structures/mes-demandes", get(routes_structure::mes_demandes))
-        .route("/api/structures/{id}/soumettre", post(routes_structure::soumettre))
-        .route("/api/structures/{id}/abandonner", post(routes_structure::abandonner))
-        .route("/api/structures/{id}/pieces", get(routes_structure::lister_pieces))
+        .route(
+            "/api/structures/mes-demandes",
+            get(routes_structure::mes_demandes),
+        )
+        .route(
+            "/api/structures/{id}/soumettre",
+            post(routes_structure::soumettre),
+        )
+        .route(
+            "/api/structures/{id}/abandonner",
+            post(routes_structure::abandonner),
+        )
+        .route(
+            "/api/structures/{id}/pieces",
+            get(routes_structure::lister_pieces),
+        )
         .route(
             "/api/structures/{id}/pieces/{type_piece}",
-            // Limite de 5 Mio sur cette seule route (§14) ; les autres
-            // gardent la limite par défaut d'axum (2 Mio).
+            // Limite de 5 Mio sur cette seule route (§14) ; les autres ont
+            // celle du routeur (`TAILLE_MAX_CORPS_OCTETS`, 256 Kio).
             post(routes_structure::deposer_piece).layer(axum::extract::DefaultBodyLimit::max(
                 laaficare_backend::piece_justificative::TAILLE_MAX_OCTETS,
             )),
@@ -268,13 +428,34 @@ async fn main() {
             get(routes_administrateur::telecharger_piece),
         )
         .route("/api/professionnels/membres", get(routes_membres::lister))
-        .route("/api/professionnels/membres/{id}/desactiver", post(routes_membres::desactiver))
-        .route("/api/patients/munaseb/droits", get(routes_espace_patient::droits))
-        .route("/api/patients/munaseb/demandes", get(routes_espace_patient::lister_demandes))
-        .route("/api/patients/munaseb/demandes/{id}", get(routes_espace_patient::detail_demande))
-        .route("/api/patients/notifications", get(routes_espace_patient::lister_notifications))
-        .route("/api/patients/notifications/lues", post(routes_espace_patient::marquer_toutes_lues))
-        .route("/api/patients/notifications/{id}/lue", post(routes_espace_patient::marquer_lue))
+        .route(
+            "/api/professionnels/membres/{id}/desactiver",
+            post(routes_membres::desactiver),
+        )
+        .route(
+            "/api/patients/munaseb/droits",
+            get(routes_espace_patient::droits),
+        )
+        .route(
+            "/api/patients/munaseb/demandes",
+            get(routes_espace_patient::lister_demandes),
+        )
+        .route(
+            "/api/patients/munaseb/demandes/{id}",
+            get(routes_espace_patient::detail_demande),
+        )
+        .route(
+            "/api/patients/notifications",
+            get(routes_espace_patient::lister_notifications),
+        )
+        .route(
+            "/api/patients/notifications/lues",
+            post(routes_espace_patient::marquer_toutes_lues),
+        )
+        .route(
+            "/api/patients/notifications/{id}/lue",
+            post(routes_espace_patient::marquer_lue),
+        )
         // Pharmacie (CLAUDE.md §15, docs/api.md §2.15).
         .route(
             "/api/pharmacie/medicaments",
@@ -331,32 +512,92 @@ async fn main() {
             post(routes_pharmacie::annuler_depense),
         )
         .route("/api/pharmacie/rapport", get(routes_pharmacie::rapport))
-        .with_state(AppState {
-            db: pool,
-            jwt,
-            sms,
-            cle_totp: Arc::new(config.totp_cle_chiffrement),
-            email,
-            url_application_web: Arc::from(config.url_application_web),
-            contact_securite: Arc::from(config.contact_securite),
-            taches_reinitialisation: Arc::new(laaficare_backend::reinitialisation::LimiteTaches::default()),
-        });
+        // Couches, de la plus intérieure à la plus extérieure : avec
+        // `Router::layer`, la dernière ajoutée est la première traversée par
+        // la requête (doc d'axum 0.8.9, module `middleware`, « Ordering »).
+        // Ordre suivi par une requête : en-tête reçu retiré, identifiant
+        // posé, journalisation, puis identifiant recopié dans la réponse.
+        .layer(DefaultBodyLimit::max(TAILLE_MAX_CORPS_OCTETS))
+        .layer(PropagateRequestIdLayer::new(ENTETE_REQUEST_ID))
+        .layer(TraceLayer::new_for_http().make_span_with(span_de_requete))
+        .layer(SetRequestIdLayer::new(ENTETE_REQUEST_ID, MakeRequestUuid))
+        .layer(axum::middleware::map_request(retirer_request_id_recu))
+        .with_state(state)
+}
 
-    // 127.0.0.1 : cohérent avec PostgreSQL exposé en local seulement. À
-    // élargir quand l'app mobile aura besoin d'un accès depuis le réseau.
-    let adresse = SocketAddr::from((Ipv4Addr::LOCALHOST, config.server_port));
-    let listener = tokio::net::TcpListener::bind(adresse)
-        .await
-        .unwrap_or_else(|erreur| {
-            tracing::error!(%erreur, %adresse, "impossible d'écouter sur cette adresse");
-            std::process::exit(1)
-        });
+/// `x-request-id` : nom de l'en-tête utilisé par `tower-http` pour
+/// `x_request_id()`.
+const ENTETE_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 
-    tracing::info!(%adresse, "serveur démarré");
+/// Identifiant de requête (remédiation de l'audit, reprise le 2026-11-17) :
+/// un UUID tiré par le serveur (`MakeRequestUuid`, tower-http 0.6.11), rendu
+/// dans l'en-tête `X-Request-ID` de la réponse et porté par toutes les
+/// lignes de journal de la requête. Une personne qui signale une erreur
+/// donne ce numéro : l'équipe retrouve la ligne sans qu'aucune donnée
+/// personnelle n'ait été écrite.
+///
+/// `SetRequestIdLayer` garde l'en-tête s'il est déjà dans la requête
+/// (source de tower-http 0.6.11, `request_id.rs`, `SetRequestId::call`) :
+/// un client pourrait alors y mettre ce qu'il veut, un nom ou un numéro de
+/// téléphone, et le faire écrire dans nos journaux. L'en-tête reçu est donc
+/// toujours retiré : seul le serveur choisit l'identifiant.
+async fn retirer_request_id_recu(mut requete: axum::extract::Request) -> axum::extract::Request {
+    requete.headers_mut().remove(&ENTETE_REQUEST_ID);
+    requete
+}
 
-    // Exemple officiel d'axum::serve (docs.rs, axum 0.8.9).
-    if let Err(erreur) = axum::serve(listener, app).await {
-        tracing::error!(%erreur, "le serveur s'est arrêté sur une erreur");
-        std::process::exit(1);
+/// Ce que le journal garde d'une requête : la méthode, le **modèle** de la
+/// route (`/api/pharmacie/ventes/{id}`, `MatchedPath`, comme l'exemple de la
+/// doc d'axum 0.8.9 pour `MatchedPath` avec `TraceLayer`) et l'identifiant.
+/// **Jamais l'URI réelle** : le `make_span` par défaut de tower-http
+/// l'enregistre (source 0.6.11, `trace/make_span.rs`), or elle contient des
+/// identifiants et des paramètres comme `?numero_carte=` ou `?q=`. Une
+/// adresse qui ne correspond à aucune route n'est pas recopiée non plus.
+fn span_de_requete(requete: &axum::extract::Request) -> tracing::Span {
+    let route = requete
+        .extensions()
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str)
+        .unwrap_or("route_inconnue");
+    let request_id = requete
+        .extensions()
+        .get::<RequestId>()
+        .and_then(|id| id.header_value().to_str().ok())
+        .unwrap_or("");
+    tracing::info_span!("requete", methode = %requete.method(), route, request_id)
+}
+
+/// Attend Ctrl+C, ou SIGTERM (le signal qu'envoient Docker et systemd pour
+/// arrêter un service), comme l'exemple officiel d'axum. L'exemple fait
+/// `expect` si l'écoute d'un signal ne peut pas être installée ; ici, pas de
+/// panique (règle du démarrage, BNF-03) : l'erreur est journalisée et ce
+/// signal-là est ignoré, l'autre reste écouté.
+async fn signal_d_arret() {
+    let ctrl_c = async {
+        if let Err(erreur) = tokio::signal::ctrl_c().await {
+            tracing::error!(%erreur, "écoute de Ctrl+C impossible");
+            std::future::pending::<()>().await;
+        }
+    };
+
+    #[cfg(unix)]
+    let terminaison = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(erreur) => {
+                tracing::error!(%erreur, "écoute de SIGTERM impossible");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminaison = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminaison => {},
     }
+    tracing::info!("signal d'arrêt reçu : fin des requêtes en cours");
 }

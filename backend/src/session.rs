@@ -48,7 +48,9 @@ impl TypeCompte {
             "patient" => Ok(TypeCompte::Patient),
             "professionnel" => Ok(TypeCompte::Professionnel),
             "administrateur_laaficare" => Ok(TypeCompte::Administrateur),
-            autre => Err(ErreurSession::Interne(format!("type de compte inconnu : {autre}"))),
+            autre => Err(ErreurSession::Interne(format!(
+                "type de compte inconnu : {autre}"
+            ))),
         }
     }
 
@@ -414,7 +416,14 @@ pub async fn ouvrir(
     let (_, jeton_renouvellement) = inserer_jeton(&mut tx, session_id, type_compte).await?;
     tx.commit().await?;
 
-    Ok(SessionActive { session_id, compte_id, affectation_id, type_compte, version_jeton, jeton_renouvellement })
+    Ok(SessionActive {
+        session_id,
+        compte_id,
+        affectation_id,
+        type_compte,
+        version_jeton,
+        jeton_renouvellement,
+    })
 }
 
 /// Échange un jeton de renouvellement contre un nouveau (rotation, RFC 9700
@@ -451,22 +460,24 @@ pub async fn renouveler(pool: &PgPool, jeton: &str) -> Result<SessionActive, Err
     .bind(TOLERANCE_REUTILISATION_SECS)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((jeton_id, session_id, utilise, successeur_id, reutilise, annule, dans_tolerance)) = jeton_present
+    let Some((jeton_id, session_id, utilise, successeur_id, reutilise, annule, dans_tolerance)) =
+        jeton_present
     else {
         return Err(ErreurSession::JetonInvalide);
     };
 
     // 2. Son successeur, verrouillé avant la session (ordre « jeton avant
     //    session ») : a-t-il déjà servi ?
-    let successeur_a_servi = match successeur_id {
-        Some(successeur) => sqlx::query_scalar::<_, bool>(
-            "SELECT utilise_le IS NOT NULL FROM jeton_renouvellement WHERE id = $1 FOR UPDATE",
-        )
-        .bind(successeur)
-        .fetch_one(&mut *tx)
-        .await?,
-        None => false,
-    };
+    let successeur_a_servi =
+        match successeur_id {
+            Some(successeur) => sqlx::query_scalar::<_, bool>(
+                "SELECT utilise_le IS NOT NULL FROM jeton_renouvellement WHERE id = $1 FOR UPDATE",
+            )
+            .bind(successeur)
+            .fetch_one(&mut *tx)
+            .await?,
+            None => false,
+        };
 
     // 3. La session, puis le compte et l'identité en simple lecture (jamais
     //    verrouillés ici : l'ordre des verrous reste « jeton avant session »).
@@ -516,7 +527,8 @@ pub async fn renouveler(pool: &PgPool, jeton: &str) -> Result<SessionActive, Err
         return Err(ErreurSession::RejeuDetecte);
     }
 
-    let (nouveau_id, jeton_renouvellement) = inserer_jeton(&mut tx, session_id, type_compte).await?;
+    let (nouveau_id, jeton_renouvellement) =
+        inserer_jeton(&mut tx, session_id, type_compte).await?;
     if tolerance {
         // Le successeur jamais reçu est annulé ; le jeton réutilisé pointe
         // vers le nouveau, pour que la chaîne reste traçable.
@@ -538,7 +550,14 @@ pub async fn renouveler(pool: &PgPool, jeton: &str) -> Result<SessionActive, Err
     }
     tx.commit().await?;
 
-    Ok(SessionActive { session_id, compte_id, affectation_id, type_compte, version_jeton, jeton_renouvellement })
+    Ok(SessionActive {
+        session_id,
+        compte_id,
+        affectation_id,
+        type_compte,
+        version_jeton,
+        jeton_renouvellement,
+    })
 }
 
 /// Déconnexion de l'appareil : révoque la session du jeton. Ne renvoie
@@ -598,7 +617,11 @@ mod tests {
         let (octets, jeton) = nouveau_jeton();
         let texte = jeton.en_clair();
         assert_eq!(texte.len(), 64);
-        assert!(texte.bytes().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(
+            texte
+                .bytes()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
         assert_eq!(decoder(texte).as_deref(), Some(&*octets));
         assert_eq!(decoder(&texte.to_uppercase()).as_deref(), Some(&*octets));
         assert!(decoder("abc").is_none());
@@ -611,8 +634,16 @@ mod tests {
         let jwt = JwtService::new(&"a".repeat(32));
         for (type_compte, affectation, sorte) in [
             (TypeCompte::Patient, None, SorteJeton::Patient),
-            (TypeCompte::Professionnel, None, SorteJeton::ProfessionnelSansAffectation),
-            (TypeCompte::Professionnel, Some(Uuid::from_u128(7)), SorteJeton::ProfessionnelEnExercice),
+            (
+                TypeCompte::Professionnel,
+                None,
+                SorteJeton::ProfessionnelSansAffectation,
+            ),
+            (
+                TypeCompte::Professionnel,
+                Some(Uuid::from_u128(7)),
+                SorteJeton::ProfessionnelEnExercice,
+            ),
             (TypeCompte::Administrateur, None, SorteJeton::Administrateur),
         ] {
             let session = SessionActive {
@@ -664,11 +695,12 @@ mod tests {
     // Base temporaire par test ; données fictives.
 
     async fn compte(pool: &PgPool, telephone: &str, type_compte: &str) -> Uuid {
-        let utilisateur_id: Uuid = sqlx::query_scalar("INSERT INTO utilisateur (telephone) VALUES ($1) RETURNING id")
-            .bind(telephone)
-            .fetch_one(pool)
-            .await
-            .unwrap();
+        let utilisateur_id: Uuid =
+            sqlx::query_scalar("INSERT INTO utilisateur (telephone) VALUES ($1) RETURNING id")
+                .bind(telephone)
+                .fetch_one(pool)
+                .await
+                .unwrap();
         sqlx::query_scalar(
             "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, $2, 'x') RETURNING id",
         )
@@ -680,11 +712,13 @@ mod tests {
     }
 
     async fn id_du_jeton(pool: &PgPool, jeton: &str) -> Uuid {
-        sqlx::query_scalar("SELECT id FROM jeton_renouvellement WHERE empreinte = sha256(decode($1, 'hex'))")
-            .bind(jeton)
-            .fetch_one(pool)
-            .await
-            .unwrap()
+        sqlx::query_scalar(
+            "SELECT id FROM jeton_renouvellement WHERE empreinte = sha256(decode($1, 'hex'))",
+        )
+        .bind(jeton)
+        .fetch_one(pool)
+        .await
+        .unwrap()
     }
 
     async fn motif(pool: &PgPool, session_id: Uuid) -> Option<String> {
@@ -709,7 +743,12 @@ mod tests {
         for (telephone, type_compte, absolue, inactivite) in [
             ("+22670030001", "patient", "30 days", "30 days"),
             ("+22670030002", "professionnel", "12 hours", "1 hour"),
-            ("+22670030003", "administrateur_laaficare", "24 hours", "1 hour"),
+            (
+                "+22670030003",
+                "administrateur_laaficare",
+                "24 hours",
+                "1 hour",
+            ),
         ] {
             let compte_id = compte(&pool, telephone, type_compte).await;
             let session = ouvrir(&pool, compte_id, None).await.unwrap();
@@ -737,8 +776,18 @@ mod tests {
     #[ignore]
     async fn rotation_normale(pool: PgPool) {
         let compte_id = compte(&pool, "+22670030010", "patient").await;
-        let a = ouvrir(&pool, compte_id, None).await.unwrap().jeton_renouvellement.en_clair().to_owned();
-        let b = renouveler(&pool, &a).await.unwrap().jeton_renouvellement.en_clair().to_owned();
+        let a = ouvrir(&pool, compte_id, None)
+            .await
+            .unwrap()
+            .jeton_renouvellement
+            .en_clair()
+            .to_owned();
+        let b = renouveler(&pool, &a)
+            .await
+            .unwrap()
+            .jeton_renouvellement
+            .en_clair()
+            .to_owned();
         assert_ne!(a, b);
         let id_b = id_du_jeton(&pool, &b).await;
         let (utilise, remplace_par): (bool, Option<Uuid>) = sqlx::query_as(
@@ -764,7 +813,12 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let b = renouveler(&pool, session.jeton_renouvellement.en_clair()).await.unwrap().jeton_renouvellement.en_clair().to_owned();
+        let b = renouveler(&pool, session.jeton_renouvellement.en_clair())
+            .await
+            .unwrap()
+            .jeton_renouvellement
+            .en_clair()
+            .to_owned();
         let borne: bool = sqlx::query_scalar(
             "SELECT j.expire_le = s.expire_le FROM jeton_renouvellement j JOIN session s ON s.id = j.session_id \
              WHERE j.id = $1",
@@ -773,17 +827,35 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert!(borne, "le jeton expire au plus tard avec sa session (LEAST)");
+        assert!(
+            borne,
+            "le jeton expire au plus tard avec sa session (LEAST)"
+        );
     }
 
     #[sqlx::test]
     #[ignore]
     async fn tolerance_une_fois_successeur_jamais_utilise(pool: PgPool) {
         let compte_id = compte(&pool, "+22670030012", "patient").await;
-        let a = ouvrir(&pool, compte_id, None).await.unwrap().jeton_renouvellement.en_clair().to_owned();
-        let b = renouveler(&pool, &a).await.unwrap().jeton_renouvellement.en_clair().to_owned();
+        let a = ouvrir(&pool, compte_id, None)
+            .await
+            .unwrap()
+            .jeton_renouvellement
+            .en_clair()
+            .to_owned();
+        let b = renouveler(&pool, &a)
+            .await
+            .unwrap()
+            .jeton_renouvellement
+            .en_clair()
+            .to_owned();
         // La réponse « b » est perdue : le client renvoie « a ».
-        let c = renouveler(&pool, &a).await.unwrap().jeton_renouvellement.en_clair().to_owned();
+        let c = renouveler(&pool, &a)
+            .await
+            .unwrap()
+            .jeton_renouvellement
+            .en_clair()
+            .to_owned();
         let (id_b, id_c) = (id_du_jeton(&pool, &b).await, id_du_jeton(&pool, &c).await);
 
         let (remplace_par, reutilise): (Option<Uuid>, bool) = sqlx::query_as(
@@ -793,13 +865,19 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(remplace_par, Some(id_c), "la chaîne pointe vers le dernier jeton émis");
+        assert_eq!(
+            remplace_par,
+            Some(id_c),
+            "la chaîne pointe vers le dernier jeton émis"
+        );
         assert!(reutilise);
-        let b_annule: bool = sqlx::query_scalar("SELECT revoque_le IS NOT NULL FROM jeton_renouvellement WHERE id = $1")
-            .bind(id_b)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let b_annule: bool = sqlx::query_scalar(
+            "SELECT revoque_le IS NOT NULL FROM jeton_renouvellement WHERE id = $1",
+        )
+        .bind(id_b)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert!(b_annule);
         renouveler(&pool, &c).await.unwrap();
     }
@@ -812,12 +890,28 @@ mod tests {
         let compte_id = compte(&pool, "+22670030013", "patient").await;
         let session = ouvrir(&pool, compte_id, None).await.unwrap();
         let a = session.jeton_renouvellement.en_clair().to_owned();
-        let b = renouveler(&pool, &a).await.unwrap().jeton_renouvellement.en_clair().to_owned();
-        let c = renouveler(&pool, &a).await.unwrap().jeton_renouvellement.en_clair().to_owned();
+        let b = renouveler(&pool, &a)
+            .await
+            .unwrap()
+            .jeton_renouvellement
+            .en_clair()
+            .to_owned();
+        let c = renouveler(&pool, &a)
+            .await
+            .unwrap()
+            .jeton_renouvellement
+            .en_clair()
+            .to_owned();
 
         assert!(est_rejeu(renouveler(&pool, &b).await));
-        assert_eq!(motif(&pool, session.session_id).await.as_deref(), Some("rejeu_detecte"));
-        assert!(est_invalide(renouveler(&pool, &c).await), "la session révoquée n'accepte plus rien");
+        assert_eq!(
+            motif(&pool, session.session_id).await.as_deref(),
+            Some("rejeu_detecte")
+        );
+        assert!(
+            est_invalide(renouveler(&pool, &c).await),
+            "la session révoquée n'accepte plus rien"
+        );
     }
 
     #[sqlx::test]
@@ -826,10 +920,18 @@ mod tests {
         let compte_id = compte(&pool, "+22670030014", "patient").await;
         let session = ouvrir(&pool, compte_id, None).await.unwrap();
         let a = session.jeton_renouvellement.en_clair().to_owned();
-        let b = renouveler(&pool, &a).await.unwrap().jeton_renouvellement.en_clair().to_owned();
+        let b = renouveler(&pool, &a)
+            .await
+            .unwrap()
+            .jeton_renouvellement
+            .en_clair()
+            .to_owned();
         renouveler(&pool, &b).await.unwrap();
         assert!(est_rejeu(renouveler(&pool, &a).await));
-        assert_eq!(motif(&pool, session.session_id).await.as_deref(), Some("rejeu_detecte"));
+        assert_eq!(
+            motif(&pool, session.session_id).await.as_deref(),
+            Some("rejeu_detecte")
+        );
     }
 
     #[sqlx::test]
@@ -845,7 +947,10 @@ mod tests {
             .await
             .unwrap();
         assert!(est_rejeu(renouveler(&pool, &a).await));
-        assert_eq!(motif(&pool, session.session_id).await.as_deref(), Some("rejeu_detecte"));
+        assert_eq!(
+            motif(&pool, session.session_id).await.as_deref(),
+            Some("rejeu_detecte")
+        );
     }
 
     #[sqlx::test]
@@ -857,7 +962,10 @@ mod tests {
         renouveler(&pool, &a).await.unwrap();
         renouveler(&pool, &a).await.unwrap();
         assert!(est_rejeu(renouveler(&pool, &a).await));
-        assert_eq!(motif(&pool, session.session_id).await.as_deref(), Some("rejeu_detecte"));
+        assert_eq!(
+            motif(&pool, session.session_id).await.as_deref(),
+            Some("rejeu_detecte")
+        );
     }
 
     #[sqlx::test]
@@ -874,7 +982,10 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        assert!(est_invalide(renouveler(&pool, premiere.jeton_renouvellement.en_clair()).await), "inactivité dépassée");
+        assert!(
+            est_invalide(renouveler(&pool, premiere.jeton_renouvellement.en_clair()).await),
+            "inactivité dépassée"
+        );
 
         let seconde = ouvrir(&pool, compte_id, None).await.unwrap();
         sqlx::query(
@@ -884,7 +995,10 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        assert!(est_invalide(renouveler(&pool, seconde.jeton_renouvellement.en_clair()).await), "session expirée");
+        assert!(
+            est_invalide(renouveler(&pool, seconde.jeton_renouvellement.en_clair()).await),
+            "session expirée"
+        );
 
         // Jeton mal formé ou inconnu.
         assert!(est_invalide(renouveler(&pool, "pas-un-jeton").await));
@@ -925,21 +1039,42 @@ mod tests {
         let compte_id = compte(&pool, "+22670030019", "patient").await;
 
         let une = ouvrir(&pool, compte_id, None).await.unwrap();
-        fermer(&pool, une.jeton_renouvellement.en_clair()).await.unwrap();
-        assert_eq!(motif(&pool, une.session_id).await.as_deref(), Some("deconnexion"));
-        assert!(est_invalide(renouveler(&pool, une.jeton_renouvellement.en_clair()).await));
+        fermer(&pool, une.jeton_renouvellement.en_clair())
+            .await
+            .unwrap();
+        assert_eq!(
+            motif(&pool, une.session_id).await.as_deref(),
+            Some("deconnexion")
+        );
+        assert!(est_invalide(
+            renouveler(&pool, une.jeton_renouvellement.en_clair()).await
+        ));
         fermer(&pool, "pas-un-jeton").await.unwrap();
         fermer(&pool, &"0".repeat(64)).await.unwrap();
 
         let deux = ouvrir(&pool, compte_id, None).await.unwrap();
         let trois = ouvrir(&pool, compte_id, None).await.unwrap();
         let mut tx = pool.begin().await.unwrap();
-        fermer_toutes(&mut tx, compte_id, MotifRevocation::DeconnexionPartout, true).await.unwrap();
+        fermer_toutes(
+            &mut tx,
+            compte_id,
+            MotifRevocation::DeconnexionPartout,
+            true,
+        )
+        .await
+        .unwrap();
         tx.commit().await.unwrap();
         for session in [&deux, &trois] {
-            assert_eq!(motif(&pool, session.session_id).await.as_deref(), Some("deconnexion_partout"));
+            assert_eq!(
+                motif(&pool, session.session_id).await.as_deref(),
+                Some("deconnexion_partout")
+            );
         }
-        assert_eq!(motif(&pool, une.session_id).await.as_deref(), Some("deconnexion"), "motif d'origine gardé");
+        assert_eq!(
+            motif(&pool, une.session_id).await.as_deref(),
+            Some("deconnexion"),
+            "motif d'origine gardé"
+        );
         let version: i32 = sqlx::query_scalar("SELECT version_jeton FROM compte WHERE id = $1")
             .bind(compte_id)
             .fetch_one(&pool)
@@ -964,25 +1099,41 @@ mod tests {
                     .bind(compte_id)
                     .execute(&mut *tx)
                     .await?;
-                sqlx::query("SELECT pg_sleep(0.05)").execute(&mut *tx).await?;
-                fermer_toutes(&mut tx, compte_id, MotifRevocation::ReinitialisationMotDePasse, false).await?;
+                sqlx::query("SELECT pg_sleep(0.05)")
+                    .execute(&mut *tx)
+                    .await?;
+                fermer_toutes(
+                    &mut tx,
+                    compte_id,
+                    MotifRevocation::ReinitialisationMotDePasse,
+                    false,
+                )
+                .await?;
                 tx.commit().await
             });
             let p2 = pool.clone();
             let partout = tokio::spawn(async move {
                 let mut tx = p2.begin().await?;
-                fermer_toutes(&mut tx, compte_id, MotifRevocation::DeconnexionPartout, true).await?;
+                fermer_toutes(
+                    &mut tx,
+                    compte_id,
+                    MotifRevocation::DeconnexionPartout,
+                    true,
+                )
+                .await?;
                 tx.commit().await
             });
             // Aucun interblocage (PostgreSQL renverrait l'erreur 40P01).
             reinitialisation.await.unwrap().unwrap();
             partout.await.unwrap().unwrap();
         }
-        let ouvertes: i64 = sqlx::query_scalar("SELECT count(*) FROM session WHERE compte_id = $1 AND revoquee_le IS NULL")
-            .bind(compte_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let ouvertes: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM session WHERE compte_id = $1 AND revoquee_le IS NULL",
+        )
+        .bind(compte_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(ouvertes, 0);
     }
 
@@ -993,11 +1144,11 @@ mod tests {
         let mut sessions = Vec::new();
         // (fin, motif) ; la date de création est mise 8 mois avant.
         for (revoquee, expire, motif_revocation) in [
-            (Some("31 days"), "1 day", Some("deconnexion")),    // effacée
-            (None, "31 days", None),                            // expirée, effacée
-            (Some("31 days"), "1 day", Some("rejeu_detecte")),  // gardée (moins de 6 mois)
+            (Some("31 days"), "1 day", Some("deconnexion")), // effacée
+            (None, "31 days", None),                         // expirée, effacée
+            (Some("31 days"), "1 day", Some("rejeu_detecte")), // gardée (moins de 6 mois)
             (Some("7 months"), "1 day", Some("rejeu_detecte")), // effacée
-            (Some("10 days"), "1 day", Some("deconnexion")),    // gardée
+            (Some("10 days"), "1 day", Some("deconnexion")), // gardée
         ] {
             let session = ouvrir(&pool, compte_id, None).await.unwrap();
             sqlx::query(
@@ -1019,25 +1170,33 @@ mod tests {
 
         let mut restantes = Vec::new();
         for session_id in &sessions {
-            let existe: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM session WHERE id = $1)")
-                .bind(session_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+            let existe: bool =
+                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM session WHERE id = $1)")
+                    .bind(session_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
             restantes.push(existe);
         }
         assert_eq!(restantes, vec![false, false, true, false, true]);
     }
 
     /// Identité avec un email, vérifié ou non, et un compte du type donné.
-    async fn compte_avec_email(pool: &PgPool, telephone: &str, email: &str, verifie: bool, type_compte: &str) -> Uuid {
-        let utilisateur_id: Uuid =
-            sqlx::query_scalar("INSERT INTO utilisateur (telephone, email) VALUES ($1, $2) RETURNING id")
-                .bind(telephone)
-                .bind(email)
-                .fetch_one(pool)
-                .await
-                .unwrap();
+    async fn compte_avec_email(
+        pool: &PgPool,
+        telephone: &str,
+        email: &str,
+        verifie: bool,
+        type_compte: &str,
+    ) -> Uuid {
+        let utilisateur_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO utilisateur (telephone, email) VALUES ($1, $2) RETURNING id",
+        )
+        .bind(telephone)
+        .bind(email)
+        .fetch_one(pool)
+        .await
+        .unwrap();
         if verifie {
             sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1")
                 .bind(utilisateur_id)
@@ -1061,19 +1220,40 @@ mod tests {
     #[sqlx::test]
     #[ignore]
     async fn email_non_verifie_ferme_la_session_professionnelle(pool: PgPool) {
-        let compte_id = compte_avec_email(&pool, "+22670030023", "pro.session@example.org", true, "professionnel").await;
+        let compte_id = compte_avec_email(
+            &pool,
+            "+22670030023",
+            "pro.session@example.org",
+            true,
+            "professionnel",
+        )
+        .await;
         let session = ouvrir(&pool, compte_id, None).await.unwrap();
         let a = session.jeton_renouvellement.en_clair().to_owned();
-        let b = renouveler(&pool, &a).await.unwrap().jeton_renouvellement.en_clair().to_owned();
+        let b = renouveler(&pool, &a)
+            .await
+            .unwrap()
+            .jeton_renouvellement
+            .en_clair()
+            .to_owned();
 
         sqlx::query("UPDATE utilisateur SET email_verifie_le = NULL WHERE id = (SELECT utilisateur_id FROM compte WHERE id = $1)")
             .bind(compte_id)
             .execute(&pool)
             .await
             .unwrap();
-        assert!(matches!(renouveler(&pool, &b).await, Err(ErreurSession::EmailNonVerifie)));
-        assert_eq!(motif(&pool, session.session_id).await.as_deref(), Some("email_non_verifie"));
-        assert!(est_invalide(renouveler(&pool, &b).await), "la session fermée n'accepte plus rien");
+        assert!(matches!(
+            renouveler(&pool, &b).await,
+            Err(ErreurSession::EmailNonVerifie)
+        ));
+        assert_eq!(
+            motif(&pool, session.session_id).await.as_deref(),
+            Some("email_non_verifie")
+        );
+        assert!(
+            est_invalide(renouveler(&pool, &b).await),
+            "la session fermée n'accepte plus rien"
+        );
     }
 
     /// L'email d'un patient est facultatif et jamais vérifié : il renouvelle
@@ -1081,8 +1261,20 @@ mod tests {
     #[sqlx::test]
     #[ignore]
     async fn patient_avec_email_non_verifie_renouvelle(pool: PgPool) {
-        let compte_id = compte_avec_email(&pool, "+22670030024", "patient.session@example.org", false, "patient").await;
-        let a = ouvrir(&pool, compte_id, None).await.unwrap().jeton_renouvellement.en_clair().to_owned();
+        let compte_id = compte_avec_email(
+            &pool,
+            "+22670030024",
+            "patient.session@example.org",
+            false,
+            "patient",
+        )
+        .await;
+        let a = ouvrir(&pool, compte_id, None)
+            .await
+            .unwrap()
+            .jeton_renouvellement
+            .en_clair()
+            .to_owned();
         renouveler(&pool, &a).await.unwrap();
     }
 
@@ -1092,15 +1284,26 @@ mod tests {
         let compte_id = compte(&pool, "+22670030022", "patient").await;
         let session = ouvrir(&pool, compte_id, None).await.unwrap();
         let a = session.jeton_renouvellement.en_clair().to_owned();
-        let b = renouveler(&pool, &a).await.unwrap().jeton_renouvellement.en_clair().to_owned();
-        let c = renouveler(&pool, &a).await.unwrap().jeton_renouvellement.en_clair().to_owned(); // tolérance : A → C, B annulé
+        let b = renouveler(&pool, &a)
+            .await
+            .unwrap()
+            .jeton_renouvellement
+            .en_clair()
+            .to_owned();
+        let c = renouveler(&pool, &a)
+            .await
+            .unwrap()
+            .jeton_renouvellement
+            .en_clair()
+            .to_owned(); // tolérance : A → C, B annulé
         renouveler(&pool, &c).await.unwrap(); // C → D
         let _ = b;
-        let jetons: i64 = sqlx::query_scalar("SELECT count(*) FROM jeton_renouvellement WHERE session_id = $1")
-            .bind(session.session_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let jetons: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM jeton_renouvellement WHERE session_id = $1")
+                .bind(session.session_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(jetons, 4);
 
         sqlx::query(
@@ -1115,11 +1318,12 @@ mod tests {
         // remplace_par_id ne doit pas être bloquée (NO ACTION).
         ouvrir(&pool, compte_id, None).await.unwrap();
 
-        let restants: i64 = sqlx::query_scalar("SELECT count(*) FROM jeton_renouvellement WHERE session_id = $1")
-            .bind(session.session_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let restants: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM jeton_renouvellement WHERE session_id = $1")
+                .bind(session.session_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(restants, 0);
     }
 }

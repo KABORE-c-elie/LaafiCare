@@ -21,6 +21,13 @@ use laaficare_backend::notification::{self, NotificationPatient};
 const LIMITE_PAR_DEFAUT: i64 = 50;
 const LIMITE_MAX: i64 = 100;
 
+// `clippy::result_large_err` (le résultat déplace jusqu'à 128 octets) :
+// l'erreur est la `Response` d'axum (128 octets), aussitôt renvoyée par le
+// handler, qui doit de toute façon produire une `Response`. La mettre dans
+// une boîte ajouterait une allocation sans rien éviter. Exception
+// documentée, comme les deux autres de l'API (routes_invitation.rs,
+// routes_professionnel.rs).
+#[allow(clippy::result_large_err)]
 fn limite_valide(limite: Option<i64>) -> Result<i64, Response> {
     let limite = limite.unwrap_or(LIMITE_PAR_DEFAUT);
     if (1..=LIMITE_MAX).contains(&limite) {
@@ -39,7 +46,9 @@ fn limite_valide(limite: Option<i64>) -> Result<i64, Response> {
 pub async fn droits(patient: PatientAuthentifie, State(state): State<AppState>) -> Response {
     match espace::droits(&state.db, patient.compte_id).await {
         Ok(droits) => (StatusCode::OK, Json(droits)).into_response(),
-        Err(erreur) => reponse_erreur_interne("droits MUNASEB du patient", &erreur.to_string()).into_response(),
+        Err(erreur) => {
+            reponse_erreur_interne("droits MUNASEB du patient", &erreur.to_string()).into_response()
+        }
     }
 }
 
@@ -67,12 +76,25 @@ pub async fn lister_demandes(
         Ok(l) => l,
         Err(reponse) => return reponse,
     };
-    match espace::lister_demandes(&state.db, patient.compte_id, filtre.statut, filtre.avant, limite).await {
+    match espace::lister_demandes(
+        &state.db,
+        patient.compte_id,
+        filtre.statut,
+        filtre.avant,
+        limite,
+    )
+    .await
+    {
         Ok(demandes) => {
-            let suivant = if demandes.len() as i64 == limite { demandes.last().map(|d| d.id) } else { None };
+            let suivant = if demandes.len() as i64 == limite {
+                demandes.last().map(|d| d.id)
+            } else {
+                None
+            };
             (StatusCode::OK, Json(ListeDemandes { demandes, suivant })).into_response()
         }
-        Err(erreur) => reponse_erreur_interne("demandes MUNASEB du patient", &erreur.to_string()).into_response(),
+        Err(erreur) => reponse_erreur_interne("demandes MUNASEB du patient", &erreur.to_string())
+            .into_response(),
     }
 }
 
@@ -85,8 +107,16 @@ pub async fn detail_demande(
 ) -> Response {
     match espace::detail_demande(&state.db, patient.compte_id, demande_id).await {
         Ok(Some(detail)) => (StatusCode::OK, Json(detail)).into_response(),
-        Ok(None) => reponse_erreur(StatusCode::NOT_FOUND, "demande_inconnue", "Demande inconnue.").into_response(),
-        Err(erreur) => reponse_erreur_interne("détail d'une demande du patient", &erreur.to_string()).into_response(),
+        Ok(None) => reponse_erreur(
+            StatusCode::NOT_FOUND,
+            "demande_inconnue",
+            "Demande inconnue.",
+        )
+        .into_response(),
+        Err(erreur) => {
+            reponse_erreur_interne("détail d'une demande du patient", &erreur.to_string())
+                .into_response()
+        }
     }
 }
 
@@ -113,12 +143,28 @@ pub async fn lister_notifications(
         Ok(l) => l,
         Err(reponse) => return reponse,
     };
-    match notification::lister_pour_patient(&state.db, patient.compte_id, filtre.avant, limite).await {
+    match notification::lister_pour_patient(&state.db, patient.compte_id, filtre.avant, limite)
+        .await
+    {
         Ok((notifications, non_lues)) => {
-            let suivant = if notifications.len() as i64 == limite { notifications.last().map(|n| n.id) } else { None };
-            (StatusCode::OK, Json(ListeNotifications { notifications, non_lues, suivant })).into_response()
+            let suivant = if notifications.len() as i64 == limite {
+                notifications.last().map(|n| n.id)
+            } else {
+                None
+            };
+            (
+                StatusCode::OK,
+                Json(ListeNotifications {
+                    notifications,
+                    non_lues,
+                    suivant,
+                }),
+            )
+                .into_response()
         }
-        Err(_) => reponse_erreur_interne("notifications du patient", "erreur de la base").into_response(),
+        Err(_) => {
+            reponse_erreur_interne("notifications du patient", "erreur de la base").into_response()
+        }
     }
 }
 
@@ -131,15 +177,21 @@ pub async fn marquer_lue(
 ) -> Response {
     match notification::marquer_lue(&state.db, patient.compte_id, notification_id).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => {
-            reponse_erreur(StatusCode::NOT_FOUND, "notification_inconnue", "Notification inconnue.").into_response()
-        }
+        Ok(false) => reponse_erreur(
+            StatusCode::NOT_FOUND,
+            "notification_inconnue",
+            "Notification inconnue.",
+        )
+        .into_response(),
         Err(_) => reponse_erreur_interne("notification lue", "erreur de la base").into_response(),
     }
 }
 
 /// `POST /api/patients/notifications/lues` : 204.
-pub async fn marquer_toutes_lues(patient: PatientAuthentifie, State(state): State<AppState>) -> Response {
+pub async fn marquer_toutes_lues(
+    patient: PatientAuthentifie,
+    State(state): State<AppState>,
+) -> Response {
     match notification::marquer_toutes_lues(&state.db, patient.compte_id).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(_) => reponse_erreur_interne("notifications lues", "erreur de la base").into_response(),
@@ -151,7 +203,9 @@ mod tests {
     use super::*;
     use axum::body::to_bytes;
     use laaficare_backend::config::CleTotp;
-    use laaficare_backend::demande_remboursement_munaseb::{self as remboursement, Acte, AffectationAgent, TypeActeMunaseb};
+    use laaficare_backend::demande_remboursement_munaseb::{
+        self as remboursement, Acte, AffectationAgent, TypeActeMunaseb,
+    };
     use laaficare_backend::jwt::JwtService;
     use laaficare_backend::nip;
     use laaficare_backend::sms::SmsSenderConsole;
@@ -175,12 +229,20 @@ mod tests {
     }
 
     fn nip_valide(payload: &str) -> String {
-        (0..=9).map(|d| format!("{payload}{d}")).find(|n| nip::valider(n)).unwrap()
+        (0..=9)
+            .map(|d| format!("{payload}{d}"))
+            .find(|n| nip::valider(n))
+            .unwrap()
     }
 
     /// Compte patient, dossier, contrat et période en cours. Renvoie
     /// (compte, NIP).
-    async fn adherent(pool: &PgPool, telephone: &str, payload_nip: &str, carte: &str) -> (Uuid, String) {
+    async fn adherent(
+        pool: &PgPool,
+        telephone: &str,
+        payload_nip: &str,
+        carte: &str,
+    ) -> (Uuid, String) {
         let nip = nip_valide(payload_nip);
         let u: Uuid =
             sqlx::query_scalar("INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('OUEDRAOGO', 'Awa', $1) RETURNING id")
@@ -257,7 +319,10 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap();
-        AffectationAgent { affectation_id, structure_id }
+        AffectationAgent {
+            affectation_id,
+            structure_id,
+        }
     }
 
     async fn demande(pool: &PgPool, nip: &str, partenaire_id: Uuid, reference: &str) -> Uuid {
@@ -291,11 +356,23 @@ mod tests {
     async fn lire(reponse: Response) -> (StatusCode, Value) {
         let statut = reponse.status();
         let octets = to_bytes(reponse.into_body(), usize::MAX).await.unwrap();
-        (statut, if octets.is_empty() { Value::Null } else { serde_json::from_slice(&octets).unwrap() })
+        (
+            statut,
+            if octets.is_empty() {
+                Value::Null
+            } else {
+                serde_json::from_slice(&octets).unwrap()
+            },
+        )
     }
 
     fn ids(valeur: &Value, cle: &str) -> Vec<String> {
-        valeur[cle].as_array().unwrap().iter().map(|e| e["id"].as_str().unwrap().to_string()).collect()
+        valeur[cle]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["id"].as_str().unwrap().to_string())
+            .collect()
     }
 
     /// E2 et E9, par les six routes, avec deux adhérents A et B qui ont
@@ -324,21 +401,36 @@ mod tests {
         let (b, nip_b) = adherent(&pool, "+22670030002", "900000000030002", "CARTE-B").await;
         let a1 = demande(&pool, &nip_a, partenaire, "REF-SECRETE-A1").await;
         let a2 = demande(&pool, &nip_a, partenaire, "REF-SECRETE-A2").await;
-        remboursement::rejeter(&pool, a2, ag, "Motif fictif A").await.unwrap();
+        remboursement::rejeter(&pool, a2, ag, "Motif fictif A")
+            .await
+            .unwrap();
         let b1 = demande(&pool, &nip_b, partenaire, "REF-SECRETE-B1").await;
         let notif_a = notifications_de(&pool, &nip_a).await;
         let notif_b = notifications_de(&pool, &nip_b).await;
-        assert_eq!((notif_a.len(), notif_b.len()), (3, 1), "création ×2 et rejet pour A, création pour B");
+        assert_eq!(
+            (notif_a.len(), notif_b.len()),
+            (3, 1),
+            "création ×2 et rejet pour A, création pour B"
+        );
 
         let pa = || PatientAuthentifie { compte_id: a };
         let pb = || PatientAuthentifie { compte_id: b };
-        let filtre = |limite, avant| RequeteApi(FiltreDemandes { statut: None, limite, avant });
+        let filtre = |limite, avant| {
+            RequeteApi(FiltreDemandes {
+                statut: None,
+                limite,
+                avant,
+            })
+        };
         let filtre_n = |limite, avant| RequeteApi(FiltreNotifications { limite, avant });
         let mut corps = Vec::new();
 
         // 1. Droits : chacun sa carte.
         let (s, v) = lire(droits(pb(), State(state.clone())).await).await;
-        assert_eq!((s, v["etat"].as_str(), v["numero_carte"].as_str()), (StatusCode::OK, Some("couvert"), Some("CARTE-B")));
+        assert_eq!(
+            (s, v["etat"].as_str(), v["numero_carte"].as_str()),
+            (StatusCode::OK, Some("couvert"), Some("CARTE-B"))
+        );
         corps.push(v);
         let (_, v) = lire(droits(pa(), State(state.clone())).await).await;
         assert_eq!(v["numero_carte"].as_str(), Some("CARTE-A"));
@@ -346,61 +438,101 @@ mod tests {
 
         // 2. Liste : B ne voit que la sienne ; A, les siennes, sans motif ;
         // pagination.
-        let (_, v) = lire(lister_demandes(pb(), State(state.clone()), filtre(None, None)).await).await;
+        let (_, v) =
+            lire(lister_demandes(pb(), State(state.clone()), filtre(None, None)).await).await;
         assert_eq!(ids(&v, "demandes"), [b1.to_string()]);
         corps.push(v);
-        let (_, p1) = lire(lister_demandes(pa(), State(state.clone()), filtre(Some(1), None)).await).await;
+        let (_, p1) =
+            lire(lister_demandes(pa(), State(state.clone()), filtre(Some(1), None)).await).await;
         assert_eq!(ids(&p1, "demandes"), [a2.to_string()]);
         let suivant: Uuid = p1["suivant"].as_str().unwrap().parse().unwrap();
-        let (_, p2) = lire(lister_demandes(pa(), State(state.clone()), filtre(Some(1), Some(suivant))).await).await;
+        let (_, p2) =
+            lire(lister_demandes(pa(), State(state.clone()), filtre(Some(1), Some(suivant))).await)
+                .await;
         assert_eq!(ids(&p2, "demandes"), [a1.to_string()]);
         let suivant: Uuid = p2["suivant"].as_str().unwrap().parse().unwrap();
-        let (_, p3) = lire(lister_demandes(pa(), State(state.clone()), filtre(Some(1), Some(suivant))).await).await;
+        let (_, p3) =
+            lire(lister_demandes(pa(), State(state.clone()), filtre(Some(1), Some(suivant))).await)
+                .await;
         assert!(ids(&p3, "demandes").is_empty() && p3["suivant"].is_null());
         for page in [&p1, &p2] {
-            assert!(!page.to_string().contains("Motif fictif") && !page.to_string().contains("motif_rejet"));
+            assert!(
+                !page.to_string().contains("Motif fictif")
+                    && !page.to_string().contains("motif_rejet")
+            );
         }
         corps.extend([p1, p2]);
-        let (s, _) = lire(lister_demandes(pa(), State(state.clone()), filtre(Some(101), None)).await).await;
+        let (s, _) =
+            lire(lister_demandes(pa(), State(state.clone()), filtre(Some(101), None)).await).await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
 
         // 3. Détail : celui de A introuvable pour B ; A voit son motif.
         let (s, v) = lire(detail_demande(pb(), State(state.clone()), CheminApi(a2)).await).await;
-        assert_eq!((s, v["code"].as_str()), (StatusCode::NOT_FOUND, Some("demande_inconnue")));
+        assert_eq!(
+            (s, v["code"].as_str()),
+            (StatusCode::NOT_FOUND, Some("demande_inconnue"))
+        );
         let (s, v) = lire(detail_demande(pa(), State(state.clone()), CheminApi(a2)).await).await;
-        assert_eq!((s, v["motif_rejet"].as_str()), (StatusCode::OK, Some("Motif fictif A")));
+        assert_eq!(
+            (s, v["motif_rejet"].as_str()),
+            (StatusCode::OK, Some("Motif fictif A"))
+        );
         corps.push(v);
 
         // 4. Notifications : B ne voit que la sienne ; pagination de A.
-        let (_, v) = lire(lister_notifications(pb(), State(state.clone()), filtre_n(None, None)).await).await;
+        let (_, v) =
+            lire(lister_notifications(pb(), State(state.clone()), filtre_n(None, None)).await)
+                .await;
         assert_eq!(ids(&v, "notifications"), [notif_b[0].to_string()]);
         assert_eq!(v["non_lues"], 1);
         corps.push(v);
-        let (_, n1) = lire(lister_notifications(pa(), State(state.clone()), filtre_n(Some(2), None)).await).await;
+        let (_, n1) =
+            lire(lister_notifications(pa(), State(state.clone()), filtre_n(Some(2), None)).await)
+                .await;
         assert_eq!(n1["non_lues"], 3);
         let suivant: Uuid = n1["suivant"].as_str().unwrap().parse().unwrap();
-        let (_, n2) = lire(lister_notifications(pa(), State(state.clone()), filtre_n(Some(2), Some(suivant))).await).await;
+        let (_, n2) = lire(
+            lister_notifications(pa(), State(state.clone()), filtre_n(Some(2), Some(suivant)))
+                .await,
+        )
+        .await;
         let mut vus = ids(&n1, "notifications");
         vus.extend(ids(&n2, "notifications"));
-        assert_eq!(vus, notif_a.iter().rev().map(Uuid::to_string).collect::<Vec<_>>());
+        assert_eq!(
+            vus,
+            notif_a
+                .iter()
+                .rev()
+                .map(Uuid::to_string)
+                .collect::<Vec<_>>()
+        );
         assert!(n2["suivant"].is_null());
         corps.extend([n1, n2]);
 
         // 5. Marquer une notification de A en étant B : 404, rien ne change ;
         // A marque la sienne deux fois : 204, 204.
-        let (s, v) = lire(marquer_lue(pb(), State(state.clone()), CheminApi(notif_a[0])).await).await;
-        assert_eq!((s, v["code"].as_str()), (StatusCode::NOT_FOUND, Some("notification_inconnue")));
+        let (s, v) =
+            lire(marquer_lue(pb(), State(state.clone()), CheminApi(notif_a[0])).await).await;
+        assert_eq!(
+            (s, v["code"].as_str()),
+            (StatusCode::NOT_FOUND, Some("notification_inconnue"))
+        );
         for _ in 0..2 {
-            let (s, _) = lire(marquer_lue(pa(), State(state.clone()), CheminApi(notif_a[0])).await).await;
+            let (s, _) =
+                lire(marquer_lue(pa(), State(state.clone()), CheminApi(notif_a[0])).await).await;
             assert_eq!(s, StatusCode::NO_CONTENT);
         }
 
         // 6. B marque toutes les siennes : celles de A ne changent pas.
         let (s, _) = lire(marquer_toutes_lues(pb(), State(state.clone())).await).await;
         assert_eq!(s, StatusCode::NO_CONTENT);
-        let (_, v) = lire(lister_notifications(pa(), State(state.clone()), filtre_n(None, None)).await).await;
+        let (_, v) =
+            lire(lister_notifications(pa(), State(state.clone()), filtre_n(None, None)).await)
+                .await;
         assert_eq!(v["non_lues"], 2);
-        let (_, v) = lire(lister_notifications(pb(), State(state.clone()), filtre_n(None, None)).await).await;
+        let (_, v) =
+            lire(lister_notifications(pb(), State(state.clone()), filtre_n(None, None)).await)
+                .await;
         assert_eq!(v["non_lues"], 0);
 
         // Aucune réponse ne contient de NIP, de référence d'acte, ni rien de
@@ -418,7 +550,10 @@ mod tests {
         for v in &corps {
             let texte = v.to_string();
             for interdit in &interdits {
-                assert!(!texte.contains(interdit.as_str()), "{interdit} dans {texte}");
+                assert!(
+                    !texte.contains(interdit.as_str()),
+                    "{interdit} dans {texte}"
+                );
             }
         }
     }

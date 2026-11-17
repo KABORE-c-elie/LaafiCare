@@ -19,6 +19,7 @@ Les fichiers de code cités sont dans [`backend/src/`](../backend/src/) et [`bac
 9. [Les pièces justificatives](#9-les-pièces-justificatives)
 10. [Les secrets du serveur](#10-les-secrets-du-serveur)
 11. [Ce qui reste à faire avant la mise en service](#11-ce-qui-reste-à-faire-avant-la-mise-en-service)
+12. [Le serveur face aux abus et aux pannes](#12-le-serveur-face-aux-abus-et-aux-pannes)
 
 ---
 
@@ -28,6 +29,9 @@ Les fichiers de code cités sont dans [`backend/src/`](../backend/src/) et [`bac
 
 **L'algorithme : Argon2id.** C'est celui que recommande l'OWASP (*Password Storage Cheat Sheet*). Il est volontairement lent et gourmand en mémoire : un attaquant qui voudrait essayer des milliards de mots de passe sur une empreinte volée devrait y consacrer énormément de calcul. Paramètres : 19 Mio de mémoire, 2 passes, 1 fil d'exécution (le minimum OWASP). Chaque empreinte contient un *sel*, une valeur aléatoire propre à chaque compte, pour que deux personnes ayant le même mot de passe n'aient pas la même empreinte.
 Fichier : [`mot_de_passe.rs`](../backend/src/mot_de_passe.rs). Source : OWASP, documentation de la bibliothèque `argon2` 0.6.
+
+**Le calcul ne bloque pas le serveur** (2026-11-17). Un hachage Argon2id prend du temps de calcul sans pause. Fait au milieu d'une requête, il occuperait un des fils du serveur et ferait attendre les autres utilisateurs ; dix vérifications d'affilée (codes de secours) bloqueraient ce fil plus d'une seconde. Chaque hachage et chaque vérification du serveur se font donc sur des fils réservés aux calculs longs (`spawn_blocking` de la bibliothèque `tokio`, qui le recommande pour ce cas). **Un seul calcul par cœur à la fois** : chaque calcul prend 19 Mio de mémoire, et sans limite une rafale de connexions pourrait en lancer des centaines (la documentation de `tokio` demande alors un sémaphore) ; les demandes en trop attendent leur tour. La copie du mot de passe passée à ce calcul est effacée de la mémoire ensuite. Un code de secours abîmé en base n'empêche plus les autres codes du compte de servir, et ne change plus le temps de réponse.
+Source : documentation de `tokio`, `tokio::task::spawn_blocking`.
 
 **Les règles** (source : NIST SP 800-63B, révision 4, §3.1.1.2) :
 
@@ -244,6 +248,16 @@ La clé de chiffrement du second facteur doit être **sauvegardée à part** en 
 - la vérification des requêtes SQL dès la compilation.
 
 La liste complète est dans [`points-ouverts.md`](points-ouverts.md).
+
+## 12. Le serveur face aux abus et aux pannes
+
+Ajouts du 2026-11-17, repris de l'audit technique et adaptés au projet.
+
+- **Taille des demandes limitée.** Une demande envoyée au serveur ne peut pas dépasser 256 Kio, sauf le dépôt d'une pièce justificative (5 Mio). Au-delà, le serveur la refuse sans la lire (413). Cela empêche quelqu'un de faire lire au serveur des fichiers énormes pour l'épuiser. Source : OWASP API Security Top 10 2023, API4 *Unrestricted Resource Consumption* ; documentation d'axum, `DefaultBodyLimit`.
+- **Un numéro par demande, rien de personnel dans les journaux.** Chaque réponse porte un numéro unique (`X-Request-ID`), tiré par le serveur ; les lignes du journal d'une demande portent ce numéro, la méthode et le **modèle** de l'adresse (`/api/pharmacie/ventes/{id}`), **jamais l'adresse réelle** ni ses paramètres (numéro de carte, recherche). Un numéro envoyé par l'appelant est jeté : sinon, n'importe qui pourrait faire écrire un nom ou un téléphone dans nos journaux. Vérifié le 2026-11-17 en lançant le serveur au niveau de journal le plus détaillé. Source : documentation et code de `tower-http` 0.6.11 (`SetRequestIdLayer` garde un numéro reçu, `TraceLayer` écrit l'adresse complète par défaut : les deux comportements sont neutralisés) ; OWASP *Logging Cheat Sheet*, « Data to exclude » : « Sensitive personal data and some forms of personally identifiable information (PII) e.g. health, government identifiers » ne doivent pas être journalisées ; la même fiche (« Note A ») recommande un identifiant qui relie tous les événements d'une même demande.
+- **Pas de CORS.** Le serveur n'autorise aucun site web étranger à l'appeler depuis un navigateur. L'application web passe par le proxy de développement d'Angular, « sans réglage CORS côté serveur » (README) ; l'application mobile Flutter n'est pas un navigateur et n'est pas concernée. En production, l'application web devra être servie depuis la même adresse que l'API (ou derrière le même proxy) ; si ce n'est pas possible, une liste fermée d'origines sera à décider à ce moment (`docs/points-ouverts.md`). La remédiation proposait `CorsLayer::very_permissive()`, qui aurait laissé n'importe quel site lire les réponses avec les droits de la personne connectée ; elle n'est pas reprise. Source : code de `tower-http` 0.6.11, `CorsLayer::very_permissive` : « Credentials allowed », « The origin of the preflight request is sent back as an allowed origin » (l'origine de n'importe quel site est acceptée).
+- **Écoute locale par défaut.** Le serveur n'écoute que sur la machine elle-même (`127.0.0.1`), sauf si la configuration demande explicitement autre chose (`SERVER_HOST`). Une adresse mal écrite empêche le démarrage au lieu d'être remplacée en silence.
+- **Arrêt propre.** À l'arrêt (Ctrl+C, ou le signal de Docker ou de systemd), le serveur n'accepte plus de demande mais termine celles en cours : une vente ou un paiement n'est jamais coupé au milieu de son enregistrement. Source : documentation d'axum, `with_graceful_shutdown`.
 
 ## Sources
 

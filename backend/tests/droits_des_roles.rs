@@ -27,7 +27,9 @@ use sqlx::{Executor, PgPool};
 use laaficare_backend::contrat_assurance_munaseb::{
     self as contrat_munaseb, Adhesion, ModePaiement, NouveauPaiement, Parametres, Renouvellement,
 };
-use laaficare_backend::demande_remboursement_munaseb::{self as remboursement, Acte, AffectationAgent, TypeActeMunaseb};
+use laaficare_backend::demande_remboursement_munaseb::{
+    self as remboursement, Acte, AffectationAgent, TypeActeMunaseb,
+};
 use laaficare_backend::email::EmailSenderConsole;
 use laaficare_backend::jwt::JwtService;
 use laaficare_backend::structure::{self, NouvelleStructure, TypeStructure};
@@ -38,12 +40,17 @@ const REFUS: &str = "42501";
 
 async fn refuse(conn: &mut sqlx::PgConnection, sql: &'static str) {
     let erreur = conn.execute(sql).await.expect_err(sql);
-    let code = erreur.as_database_error().and_then(|e| e.code()).map(|c| c.into_owned());
+    let code = erreur
+        .as_database_error()
+        .and_then(|e| e.code())
+        .map(|c| c.into_owned());
     assert_eq!(code.as_deref(), Some(REFUS), "{sql} : {erreur}");
 }
 
 async fn permis(conn: &mut sqlx::PgConnection, sql: &'static str) {
-    conn.execute(sql).await.unwrap_or_else(|e| panic!("{sql} : {e}"));
+    conn.execute(sql)
+        .await
+        .unwrap_or_else(|e| panic!("{sql} : {e}"));
 }
 
 /// Le rôle du serveur ne peut ni modifier les traces, ni désactiver un
@@ -58,14 +65,34 @@ async fn ce_que_chaque_role_peut_faire(pool: PgPool) {
     let mut conn = pool.acquire().await.unwrap();
     permis(&mut conn, "SET ROLE laaficare_serveur").await;
 
-    refuse(&mut conn, "UPDATE historique_statut_demande SET statut_nouveau = statut_nouveau WHERE false").await;
-    refuse(&mut conn, "DELETE FROM historique_statut_demande WHERE false").await;
+    refuse(
+        &mut conn,
+        "UPDATE historique_statut_demande SET statut_nouveau = statut_nouveau WHERE false",
+    )
+    .await;
+    refuse(
+        &mut conn,
+        "DELETE FROM historique_statut_demande WHERE false",
+    )
+    .await;
     refuse(&mut conn, "DELETE FROM decision_structure WHERE false").await;
-    refuse(&mut conn, "UPDATE desactivation_totp SET motif = motif WHERE false").await;
+    refuse(
+        &mut conn,
+        "UPDATE desactivation_totp SET motif = motif WHERE false",
+    )
+    .await;
     refuse(&mut conn, "DELETE FROM creation_administrateur WHERE false").await;
     refuse(&mut conn, "DELETE FROM reprise_administrateur WHERE false").await;
-    refuse(&mut conn, "ALTER TABLE historique_statut_demande DISABLE TRIGGER ALL").await;
-    refuse(&mut conn, "UPDATE compte SET reenrolement_autorise_jusqu_au = now() WHERE false").await;
+    refuse(
+        &mut conn,
+        "ALTER TABLE historique_statut_demande DISABLE TRIGGER ALL",
+    )
+    .await;
+    refuse(
+        &mut conn,
+        "UPDATE compte SET reenrolement_autorise_jusqu_au = now() WHERE false",
+    )
+    .await;
     refuse(&mut conn, "CREATE TABLE intrus (i INTEGER)").await;
     refuse(&mut conn, "TRUNCATE notification").await;
     refuse(&mut conn, "DELETE FROM _sqlx_migrations WHERE false").await;
@@ -80,13 +107,29 @@ async fn ce_que_chaque_role_peut_faire(pool: PgPool) {
     permis(&mut conn, "SELECT count(*) FROM intervention_compte").await;
     // Paramètres et paiements MUNASEB (migration 0028) : le serveur les
     // lit et les ajoute, jamais ne les modifie ni ne les efface.
-    refuse(&mut conn, "UPDATE parametre_munaseb SET fiche_fcfa = fiche_fcfa WHERE false").await;
+    refuse(
+        &mut conn,
+        "UPDATE parametre_munaseb SET fiche_fcfa = fiche_fcfa WHERE false",
+    )
+    .await;
     refuse(&mut conn, "DELETE FROM parametre_munaseb WHERE false").await;
-    refuse(&mut conn, "UPDATE paiement_cotisation_munaseb SET mode = mode WHERE false").await;
-    refuse(&mut conn, "DELETE FROM paiement_cotisation_munaseb WHERE false").await;
+    refuse(
+        &mut conn,
+        "UPDATE paiement_cotisation_munaseb SET mode = mode WHERE false",
+    )
+    .await;
+    refuse(
+        &mut conn,
+        "DELETE FROM paiement_cotisation_munaseb WHERE false",
+    )
+    .await;
     refuse(&mut conn, "TRUNCATE paiement_cotisation_munaseb").await;
     // Échecs d'adhésion (migration 0029) : même règle.
-    refuse(&mut conn, "UPDATE echec_adhesion_munaseb SET date_echec = date_echec WHERE false").await;
+    refuse(
+        &mut conn,
+        "UPDATE echec_adhesion_munaseb SET date_echec = date_echec WHERE false",
+    )
+    .await;
     refuse(&mut conn, "DELETE FROM echec_adhesion_munaseb WHERE false").await;
     permis(&mut conn, "SELECT plafond_munaseb_en_vigueur()").await;
     // Catalogue national (migration 0030) : le serveur le lit seulement ;
@@ -126,13 +169,25 @@ async fn ce_que_chaque_role_peut_faire(pool: PgPool) {
     .await;
 
     permis(&mut conn, "SELECT count(*) FROM _sqlx_migrations").await;
-    permis(&mut conn, "UPDATE compte SET statut = statut, version_jeton = version_jeton WHERE false").await;
+    permis(
+        &mut conn,
+        "UPDATE compte SET statut = statut, version_jeton = version_jeton WHERE false",
+    )
+    .await;
     permis(&mut conn, "SELECT nextval('nip_seq')").await;
-    permis(&mut conn, "SELECT vider_fenetre_reenrolement('00000000-0000-0000-0000-000000000000')").await;
+    permis(
+        &mut conn,
+        "SELECT vider_fenetre_reenrolement('00000000-0000-0000-0000-000000000000')",
+    )
+    .await;
 
     permis(&mut conn, "RESET ROLE").await;
     permis(&mut conn, "SET ROLE laaficare_outils").await;
-    permis(&mut conn, "UPDATE compte SET reenrolement_autorise_jusqu_au = now() WHERE false").await;
+    permis(
+        &mut conn,
+        "UPDATE compte SET reenrolement_autorise_jusqu_au = now() WHERE false",
+    )
+    .await;
     permis(
         &mut conn,
         "INSERT INTO intervention_compte (compte_id, action, administrateur_compte_id, motif) \
@@ -147,8 +202,16 @@ async fn ce_que_chaque_role_peut_faire(pool: PgPool) {
     )
     .await;
     refuse(&mut conn, "UPDATE medicament SET forme = forme WHERE false").await;
-    refuse(&mut conn, "DELETE FROM historique_statut_demande WHERE false").await;
-    refuse(&mut conn, "ALTER TABLE historique_statut_demande DISABLE TRIGGER ALL").await;
+    refuse(
+        &mut conn,
+        "DELETE FROM historique_statut_demande WHERE false",
+    )
+    .await;
+    refuse(
+        &mut conn,
+        "ALTER TABLE historique_statut_demande DISABLE TRIGGER ALL",
+    )
+    .await;
 }
 
 /// Pool de la même base temporaire, dont chaque connexion prend le rôle du
@@ -177,7 +240,9 @@ async fn parcours_du_serveur_avec_son_role(proprietaire: PgPool) {
 
     // Patient : code, inscription (NIP pris dans la séquence), connexion,
     // renouvellement.
-    let (code, telephone) = auth_patient::demander_otp(&serveur, "70 04 00 01").await.unwrap();
+    let (code, telephone) = auth_patient::demander_otp(&serveur, "70 04 00 01")
+        .await
+        .unwrap();
     auth_patient::creer_compte(
         &serveur,
         &jwt,
@@ -191,8 +256,12 @@ async fn parcours_du_serveur_avec_son_role(proprietaire: PgPool) {
     )
     .await
     .unwrap();
-    let paire = auth_patient::se_connecter(&serveur, &jwt, &telephone, "Patient#2026").await.unwrap();
-    session::renouveler(&serveur, paire.jeton_renouvellement.en_clair()).await.unwrap();
+    let paire = auth_patient::se_connecter(&serveur, &jwt, &telephone, "Patient#2026")
+        .await
+        .unwrap();
+    session::renouveler(&serveur, paire.jeton_renouvellement.en_clair())
+        .await
+        .unwrap();
     let (compte_patient, nip): (Uuid, String) = sqlx::query_as(
         "SELECT c.id, p.nip FROM compte c JOIN patient p ON p.utilisateur_id = c.utilisateur_id \
          WHERE c.type_compte = 'patient'",
@@ -228,12 +297,17 @@ async fn parcours_du_serveur_avec_son_role(proprietaire: PgPool) {
     )
     .await
     .unwrap();
-    structure::abandonner(&serveur, compte_patient, creee.structure_id).await.unwrap();
+    structure::abandonner(&serveur, compte_patient, creee.structure_id)
+        .await
+        .unwrap();
 
     // Préparation par le propriétaire : MUNASEB validée, responsable et
     // agent, partenaire, contrat et période du patient.
     let mut ids = Vec::new();
-    for (telephone, type_compte) in [("+22670040002", "professionnel"), ("+22670040003", "professionnel")] {
+    for (telephone, type_compte) in [
+        ("+22670040002", "professionnel"),
+        ("+22670040003", "professionnel"),
+    ] {
         let u: Uuid = sqlx::query_scalar(
             "INSERT INTO utilisateur (nom, prenom, telephone, email) VALUES ('ZONGO', 'Paul', $1, $2) RETURNING id",
         )
@@ -269,7 +343,10 @@ async fn parcours_du_serveur_avec_son_role(proprietaire: PgPool) {
     .await
     .unwrap();
     let mut affectations = Vec::new();
-    for (compte, role) in [(responsable, "responsable"), (agent_compte, "agent_assurance_munaseb")] {
+    for (compte, role) in [
+        (responsable, "responsable"),
+        (agent_compte, "agent_assurance_munaseb"),
+    ] {
         let a: Uuid =
             sqlx::query_scalar("INSERT INTO affectation (compte_id, structure_id, role) VALUES ($1, $2, $3) RETURNING id")
                 .bind(compte)
@@ -280,7 +357,10 @@ async fn parcours_du_serveur_avec_son_role(proprietaire: PgPool) {
                 .unwrap();
         affectations.push(a);
     }
-    let agent = AffectationAgent { affectation_id: affectations[1], structure_id: munaseb };
+    let agent = AffectationAgent {
+        affectation_id: affectations[1],
+        structure_id: munaseb,
+    };
     let partenaire: Uuid = sqlx::query_scalar(
         "INSERT INTO partenaire_sante_munaseb (nom, type, ville, telephone) \
          VALUES ('Pharmacie fictive', 'pharmacie', 'Ouagadougou', '+22670040099') RETURNING id",
@@ -319,42 +399,103 @@ async fn parcours_du_serveur_avec_son_role(proprietaire: PgPool) {
     )
     .await
     .unwrap();
-    remboursement::prendre_en_charge(&serveur, demande, agent).await.unwrap();
-    assert_eq!(remboursement::valider(&serveur, demande, agent).await.unwrap(), 8_000);
-    remboursement::marquer_payee(&serveur, demande, agent).await.unwrap();
-    assert!(remboursement::detail_demande(&serveur, demande).await.unwrap().is_some());
+    remboursement::prendre_en_charge(&serveur, demande, agent)
+        .await
+        .unwrap();
+    assert_eq!(
+        remboursement::valider(&serveur, demande, agent)
+            .await
+            .unwrap(),
+        8_000
+    );
+    remboursement::marquer_payee(&serveur, demande, agent)
+        .await
+        .unwrap();
+    assert!(
+        remboursement::detail_demande(&serveur, demande)
+            .await
+            .unwrap()
+            .is_some()
+    );
 
     // Espace patient et notifications.
-    let droits = espace_patient_munaseb::droits(&serveur, compte_patient).await.unwrap();
+    let droits = espace_patient_munaseb::droits(&serveur, compte_patient)
+        .await
+        .unwrap();
     assert_eq!(droits.solde_fcfa, Some(92_000));
-    assert_eq!(espace_patient_munaseb::lister_demandes(&serveur, compte_patient, None, None, 50).await.unwrap().len(), 1);
-    let (notifications, non_lues) = notification::lister_pour_patient(&serveur, compte_patient, None, 50).await.unwrap();
+    assert_eq!(
+        espace_patient_munaseb::lister_demandes(&serveur, compte_patient, None, None, 50)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let (notifications, non_lues) =
+        notification::lister_pour_patient(&serveur, compte_patient, None, 50)
+            .await
+            .unwrap();
     assert!(non_lues > 0);
-    assert!(notification::marquer_lue(&serveur, compte_patient, notifications[0].id).await.unwrap());
-    notification::marquer_toutes_lues(&serveur, compte_patient).await.unwrap();
+    assert!(
+        notification::marquer_lue(&serveur, compte_patient, notifications[0].id)
+            .await
+            .unwrap()
+    );
+    notification::marquer_toutes_lues(&serveur, compte_patient)
+        .await
+        .unwrap();
 
     // Contrat côté agent (étape 5, migration 0028) : paramètres,
     // renouvellement du contrat ci-dessus (dans les temps), adhésion d'un
     // second patient, détail et recherche par carte.
-    let en_vigueur = contrat_munaseb::parametres_en_vigueur(&serveur).await.unwrap().valeurs;
+    let en_vigueur = contrat_munaseb::parametres_en_vigueur(&serveur)
+        .await
+        .unwrap()
+        .valeurs;
     // Le responsable de la MUNASEB modifie les paramètres (migration 0029).
-    let responsable_munaseb = AffectationAgent { affectation_id: affectations[0], structure_id: munaseb };
-    let version =
-        contrat_munaseb::modifier_parametres(&serveur, responsable_munaseb, Parametres { fiche_fcfa: 150, ..en_vigueur })
-            .await
-            .unwrap();
+    let responsable_munaseb = AffectationAgent {
+        affectation_id: affectations[0],
+        structure_id: munaseb,
+    };
+    let version = contrat_munaseb::modifier_parametres(
+        &serveur,
+        responsable_munaseb,
+        Parametres {
+            fiche_fcfa: 150,
+            ..en_vigueur
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(version.valeurs.fiche_fcfa, 150);
-    assert_eq!(contrat_munaseb::historique_parametres(&serveur, None, 10).await.unwrap().len(), 2);
-    let especes = || NouveauPaiement { mode: ModePaiement::Especes, reference_transaction: None, date_declaree: None };
+    assert_eq!(
+        contrat_munaseb::historique_parametres(&serveur, None, 10)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    let especes = || NouveauPaiement {
+        mode: ModePaiement::Especes,
+        reference_transaction: None,
+        date_declaree: None,
+    };
     contrat_munaseb::renouveler(
         &serveur,
         agent,
         contrat,
-        &Renouvellement { numero_carte: "0001/2027".into(), niveau_etudes: None, antenne: None, paiement: especes() },
+        &Renouvellement {
+            numero_carte: "0001/2027".into(),
+            niveau_etudes: None,
+            antenne: None,
+            paiement: especes(),
+        },
     )
     .await
     .unwrap();
-    let nip2 = (0..=9).map(|c| format!("900000000046001{c}")).find(|n| laaficare_backend::nip::valider(n)).unwrap();
+    let nip2 = (0..=9)
+        .map(|c| format!("900000000046001{c}"))
+        .find(|n| laaficare_backend::nip::valider(n))
+        .unwrap();
     sqlx::query(
         "WITH u AS (INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('SAWADOGO', 'Issa', '+22670460001') RETURNING id) \
          INSERT INTO patient (utilisateur_id, nip, date_naissance, lieu_naissance) SELECT id, $1, '2001-02-03', 'Koudougou' FROM u",
@@ -385,14 +526,22 @@ async fn parcours_du_serveur_avec_son_role(proprietaire: PgPool) {
     )
     .await
     .unwrap();
-    assert_eq!(contrat_munaseb::contrat_par_carte(&serveur, "0002/2026").await.unwrap(), Some(second));
+    assert_eq!(
+        contrat_munaseb::contrat_par_carte(&serveur, "0002/2026")
+            .await
+            .unwrap(),
+        Some(second)
+    );
     // Une adhésion sans patient : verrou de l'affectation et trace de
     // l'échec, avec le rôle du serveur.
     let echec = contrat_munaseb::adherer(
         &serveur,
         agent,
         &Adhesion {
-            nip: (0..=9).map(|c| format!("900000000046999{c}")).find(|n| laaficare_backend::nip::valider(n)).unwrap(),
+            nip: (0..=9)
+                .map(|c| format!("900000000046999{c}"))
+                .find(|n| laaficare_backend::nip::valider(n))
+                .unwrap(),
             date_naissance: NaiveDate::from_ymd_opt(2001, 2, 3).unwrap(),
             numero_carte: "0003/2026".into(),
             ufr: "UFR fictive".into(),
@@ -405,15 +554,30 @@ async fn parcours_du_serveur_avec_son_role(proprietaire: PgPool) {
         },
     )
     .await;
-    assert!(matches!(echec, Err(contrat_munaseb::ErreurContratAssuranceMunaseb::PatientInconnu)));
-    let detail = contrat_munaseb::detail_contrat(&serveur, contrat).await.unwrap().unwrap();
+    assert!(matches!(
+        echec,
+        Err(contrat_munaseb::ErreurContratAssuranceMunaseb::PatientInconnu)
+    ));
+    let detail = contrat_munaseb::detail_contrat(&serveur, contrat)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(detail.periodes.len(), 2);
 
     // Retrait de l'accès de l'agent (affectation close, sessions fermées).
-    session::ouvrir(&serveur, agent_compte, Some(agent.affectation_id)).await.unwrap();
-    membres::desactiver(&serveur, &email, "securite@example.org", responsable, munaseb, agent.affectation_id)
+    session::ouvrir(&serveur, agent_compte, Some(agent.affectation_id))
         .await
         .unwrap();
+    membres::desactiver(
+        &serveur,
+        &email,
+        "securite@example.org",
+        responsable,
+        munaseb,
+        agent.affectation_id,
+    )
+    .await
+    .unwrap();
 }
 
 /// Parcours de la pharmacie (migrations 0030 et 0031) avec le rôle du

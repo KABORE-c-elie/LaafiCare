@@ -18,6 +18,8 @@ Toutes les valeurs des exemples sont fictives.
 - Dates : `AAAA-MM-JJ` (ex. `2026-10-08`). Dates avec heure : format RFC 3339 en UTC (ex. `2026-10-08T09:30:00Z`).
 - Identifiants : UUID sous forme de texte (ex. `0199b8e2-7c41-7a10-9f3e-2b6d1c0e4a55`).
 - Montants : entiers en FCFA, sans décimale.
+- **Identifiant de requête** : chaque réponse porte l'en-tête **`X-Request-ID`**, un UUID tiré par le serveur. L'application l'affiche (ou le garde) quand elle montre une erreur `erreur_interne` : avec ce numéro, l'équipe retrouve la requête dans les journaux. Un `X-Request-ID` envoyé par l'application est **ignoré** (jamais recopié dans les journaux ni dans la réponse).
+- **Taille d'un corps de requête** : **256 Kio au plus**, sauf le dépôt d'une pièce justificative (5 Mio, section 2.8). Au-delà : **413**, code `corps_illisible` (ou `fichier_trop_grand` pour une pièce). La plus grosse requête JSON de l'API (vente ou inventaire de 100 lignes) fait environ 10 Ko.
 
 ### 1.2 Jeton d'authentification
 
@@ -93,7 +95,7 @@ Ces erreurs viennent de la lecture de la requête, avant tout traitement. Elles 
 | `json_invalide` | 400 | JSON mal formé |
 | `donnees_invalides` | 422 | champ manquant, type faux, valeur inconnue (ex. type d'acte) |
 | `content_type_invalide` | 415 | `Content-Type: application/json` absent |
-| `corps_illisible` | 400 | corps illisible pour une autre raison |
+| `corps_illisible` | 400, 413 | corps illisible pour une autre raison ; 413 : corps de plus de 256 Kio (section 1.1) |
 | `chemin_invalide` | 400 | paramètre d'URL invalide (ex. identifiant qui n'est pas un UUID) |
 | `parametre_invalide` | 400 | paramètre de requête invalide (après le `?`) |
 
@@ -1561,7 +1563,7 @@ Comment chaque nombre est calculé :
 | `affectation_non_exercable` | 403 | activation d'une affectation |
 | `affectation_inconnue` | 404 | activation et désactivation d'une affectation |
 | `dernier_responsable` | 409 | désactivation d'une affectation |
-| `json_invalide`, `donnees_invalides`, `content_type_invalide`, `corps_illisible` | 400, 422, 415 | routes avec corps |
+| `json_invalide`, `donnees_invalides`, `content_type_invalide`, `corps_illisible` | 400, 422, 415, 413 | routes avec corps (413 : plus de 256 Kio) |
 | `chemin_invalide` | 400 | routes avec `{id}` |
 | `parametre_invalide` | 400 | listes paginées (remboursements, structures, invitations, demandes et notifications du patient) |
 | `telephone_invalide` | 422 | routes patient, création d'une invitation |

@@ -56,7 +56,10 @@ impl EmailSender for EmailSenderConsole {
 /// en paramètre `?`.
 #[cfg(test)]
 pub(crate) fn jeton_du_lien(corps: &str) -> String {
-    let lien = corps.lines().find(|l| l.contains("/verifier-email#jeton=")).expect("lien attendu");
+    let lien = corps
+        .lines()
+        .find(|l| l.contains("/verifier-email#jeton="))
+        .expect("lien attendu");
     assert!(!lien.contains('?'), "{lien}");
     lien.split("#jeton=").nth(1).unwrap().trim().to_string()
 }
@@ -70,7 +73,10 @@ pub(crate) struct EmailsRecus(pub(crate) std::sync::Mutex<Vec<(String, String)>>
 #[cfg(test)]
 impl EmailSender for EmailsRecus {
     fn envoyer(&self, destinataire: &str, _sujet: &str, corps: &str) -> Result<(), ErreurEmail> {
-        self.0.lock().unwrap().push((destinataire.to_string(), corps.to_string()));
+        self.0
+            .lock()
+            .unwrap()
+            .push((destinataire.to_string(), corps.to_string()));
         Ok(())
     }
 

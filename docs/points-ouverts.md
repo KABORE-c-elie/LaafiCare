@@ -110,6 +110,17 @@ Quatre nouveaux avis, publiés du 13 au 30 octobre 2026 :
   - `libsqlite3-sys` 0.37.0 (RUSTSEC-2026-0459) : dans `Cargo.lock` par `sqlx`, mais **jamais compilé** (seul PostgreSQL est activé) ; la version corrigée est refusée par `sqlx-sqlite` 0.9.0.
 - **À refaire** à chaque nouvelle version de `jsonwebtoken` ou de `sqlx`, pour retirer ces exceptions.
 
+### Intégration de la branche remediation-audit (2026-11-17)
+
+Reprise morceau par morceau sur `integration-remediation-audit` (détail : CLAUDE.md §16).
+- **Non repris : le cache de 15 s du contrôle d'exercice** (crate `moka`). Un accès retiré doit être refusé dès la requête suivante (règle D4) ; avec le cache, il resterait utilisable jusqu'à 15 s.
+- **Non repris : la tâche de maintenance périodique** (`maintenance.rs`). Raisons :
+  - la purge des sessions existe déjà, à chaque connexion (décision Q-b), et celle des envois de code SMS, à chaque envoi dans la même transaction (décision O7 b) ; la remédiation les déplaçait vers la tâche, ce qui change ces deux décisions, et les garder aux deux endroits ferait doublon ;
+  - elle ajoutait une purge des jetons d'email (utilisés, annulés ou expirés depuis plus de 30 jours) : une règle de conservation nouvelle, jamais décidée.
+  **Question au porteur** : faut-il une durée de conservation des jetons d'email (vérification, réinitialisation) ? Si oui, laquelle, et faut-il garder une trace de la vérification d'un email après l'effacement du jeton ?
+- **Non repris : la fonction `uuidv7()` de remplacement** (PostgreSQL 18 la fournit) ni **CORS** (voir la question « CORS en production »).
+- **Avis `cargo audit` du 2026-11-17** : RUSTSEC-2026-0543, `chrono` 0.4.45 déclaré « unmaintained » (plus maintenu), sans faille connue ni version corrigée. Avertissement seulement. **À suivre** : si une faille est publiée, envisager `jiff` ou `time` (choix à présenter avant tout changement de dépendance).
+
 ### Bilan de l'itération pharmacie (2026-11-16)
 
 - `cargo audit` : aucun nouvel avis ; aucune dépendance ajoutée par la pharmacie (`sha2`, `serde_json` et `chrono` étaient déjà là).
@@ -122,6 +133,7 @@ Détail dans `web/docs/decisions.md` (branche `web`) :
 - **Trusted Types** : ils bloquent l'enregistrement du service worker d'Angular (le travail hors connexion). Leur activation dans la politique de sécurité du contenu (CSP) est à résoudre.
 - **Styles en ligne de la CDK d'Angular** : une CSP stricte, qui interdit les styles en ligne, les refuse. L'affichage reste correct, mais la console signale ces blocages ; leur traitement est à décider.
 - **Faille de `vite`** : elle ne touche que le serveur de développement, jamais l'application déployée. En attente d'`@angular/build` 22.2.4.
+- **CORS en production** (2026-11-17) : le serveur n'active aucun CORS (`docs/securite.md`, section 12). **Question** : en production, l'application web sera-t-elle servie depuis la même adresse que l'API (même domaine, ou même proxy) ? Si non, il faudra une liste fermée des origines permises, sans jamais accepter n'importe quelle origine avec les identifiants.
 
 ### À faire dans l'application web (étape 3.12)
 

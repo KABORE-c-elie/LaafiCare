@@ -110,6 +110,8 @@ Chaque choix ci-dessous suit une source reconnue, citée dans le code et détail
 
 **Ce que LaafiCare refuse de révéler.** Taper un numéro ou un email ne dit jamais si la personne est inscrite. Numéro inconnu, mauvais mot de passe ou compte bloqué : la réponse est toujours la même (« Numéro ou mot de passe incorrect. »), et le serveur met le même temps à répondre dans tous les cas. Sinon, n'importe qui pourrait savoir qu'une personne est suivie par LaafiCare, ce qui est déjà une information de santé.
 
+**Le serveur résiste aux abus.** Une demande ne peut pas dépasser 256 Kio (5 Mio pour une pièce justificative) ; les calculs de mots de passe se font à part, un par cœur au plus, sans bloquer les autres utilisateurs ; chaque réponse porte un numéro (`X-Request-ID`) qui permet de retrouver une erreur dans les journaux, où n'apparaît aucune donnée personnelle (ni adresse complète, ni numéro envoyé par l'appelant).
+
 **Ce qui ne s'efface pas.** L'historique des décisions sur une demande de remboursement ou sur un établissement ne peut être ni modifié ni supprimé : c'est la base elle-même qui l'interdit.
 
 **Les règles médicales non négociables** (à venir avec les modules médicaux) : les allergies s'affichent toujours en premier et en rouge ; un résultat d'analyse n'est visible qu'après double validation ; les résultats sensibles ne sont jamais envoyés automatiquement.
@@ -222,6 +224,8 @@ git checkout dev
 | `URL_APPLICATION_WEB` | adresse de l'application web, sans `/` final : les liens envoyés par email y mènent ; obligatoire ; `https://` exigé en production | `http://localhost:4200` |
 | `CONTACT_SECURITE` | adresse email de l'équipe, donnée dans les alertes de sécurité (second facteur enregistré ou désactivé) ; obligatoire ; en production, une vraie adresse (les adresses d'exemple sont refusées) | `securite@example.org` |
 | `SERVER_PORT` | port du serveur | `8080` |
+| `SERVER_HOST` | facultatif : adresse d'écoute ; `127.0.0.1` si absente (joignable depuis cette machine seulement) ; `0.0.0.0` seulement en production, derrière un proxy HTTPS | `127.0.0.1` |
+| `DATABASE_MAX_CONNECTIONS`, `DATABASE_MIN_CONNECTIONS`, `DATABASE_ACQUIRE_TIMEOUT_SECS`, `DATABASE_IDLE_TIMEOUT_SECS`, `DATABASE_MAX_LIFETIME_SECS` | facultatives : taille du pool de connexions du serveur et ses délais (5, 0, 5 s, 10 min, 30 min si absentes) ; une valeur fausse empêche le démarrage | `5` |
 | `JWT_SECRET` | signe les jetons de connexion, 32 caractères au moins | 64 caractères hexadécimaux générés |
 | `TOTP_CLE_CHIFFREMENT` | chiffre les secrets du second facteur, exactement 64 caractères hexadécimaux | une autre valeur générée |
 
@@ -270,7 +274,7 @@ Chaque `\password` demande le mot de passe deux fois, **sans l'afficher**. Chois
 
 Au démarrage, le serveur vérifie que la base est à jour. Pour vérifier qu'il répond, ouvrir `http://127.0.0.1:8080/health` dans un navigateur (avec le port choisi) : la page affiche `"status":"ok"`.
 
-Le serveur s'arrête avec `Ctrl+C` dans le terminal où il tourne. PostgreSQL s'arrête avec `docker compose down` ; les données sont gardées pour la prochaine fois.
+Le serveur s'arrête avec `Ctrl+C` dans le terminal où il tourne (ou le signal d'arrêt de Docker ou de systemd) : il n'accepte plus de nouvelle demande, laisse finir celles en cours, ferme ses connexions à la base, puis écrit « serveur arrêté proprement ». PostgreSQL s'arrête avec `docker compose down` ; les données sont gardées pour la prochaine fois.
 
 > ⚠️ **`docker compose down -v` efface toute la base de développement**, comptes de test compris : identités, comptes patients, contrats, demandes, tout. Rien ne peut être récupéré. À n'utiliser que pour repartir volontairement d'une base vide.
 

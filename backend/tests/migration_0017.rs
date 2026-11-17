@@ -22,11 +22,12 @@ const MOTIFS: [&str; 7] = [
 ];
 
 async fn session(pool: &PgPool, telephone: &str) -> Uuid {
-    let utilisateur_id: Uuid = sqlx::query_scalar("INSERT INTO utilisateur (telephone) VALUES ($1) RETURNING id")
-        .bind(telephone)
-        .fetch_one(pool)
-        .await
-        .unwrap();
+    let utilisateur_id: Uuid =
+        sqlx::query_scalar("INSERT INTO utilisateur (telephone) VALUES ($1) RETURNING id")
+            .bind(telephone)
+            .fetch_one(pool)
+            .await
+            .unwrap();
     let compte_id: Uuid = sqlx::query_scalar(
         "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'patient', 'x') RETURNING id",
     )
@@ -52,7 +53,10 @@ async fn la_contrainte_porte_son_nom_et_le_nouveau_motif(pool: PgPool) {
     .await
     .expect("la contrainte session_motif_revocation_check existe sur une base neuve");
     for motif in MOTIFS {
-        assert!(definition.contains(&format!("'{motif}'")), "{motif} absent de : {definition}");
+        assert!(
+            definition.contains(&format!("'{motif}'")),
+            "{motif} absent de : {definition}"
+        );
     }
     // Une seule contrainte sur ce motif : l'ancienne a bien été retirée.
     let nombre: i64 = sqlx::query_scalar(
@@ -79,11 +83,13 @@ async fn chaque_motif_accepte_et_motif_inconnu_refuse(pool: PgPool) {
     }
 
     let id = session(&pool, "+22670070099").await;
-    let erreur = sqlx::query("UPDATE session SET revoquee_le = now(), motif_revocation = 'motif_inconnu' WHERE id = $1")
-        .bind(id)
-        .execute(&pool)
-        .await
-        .unwrap_err();
+    let erreur = sqlx::query(
+        "UPDATE session SET revoquee_le = now(), motif_revocation = 'motif_inconnu' WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap_err();
     assert_eq!(
         erreur.as_database_error().and_then(|e| e.constraint()),
         Some("session_motif_revocation_check")

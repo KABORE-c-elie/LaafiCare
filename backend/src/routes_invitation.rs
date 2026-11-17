@@ -11,22 +11,32 @@ use serde::{Deserialize, Serialize};
 use sqlx::types::Uuid;
 
 use crate::AppState;
-use crate::erreur_api::{CheminApi, ErreurApi, JsonApi, RequeteApi, reponse_erreur, reponse_erreur_interne};
+use crate::erreur_api::{
+    CheminApi, ErreurApi, JsonApi, RequeteApi, reponse_erreur, reponse_erreur_interne,
+};
 use crate::extracteur_jwt::{PatientAuthentifie, ProfessionnelEnExercice, RefusAuthentification};
 use laaficare_backend::compte_professionnel::{ErreurComptePro, Saisie};
-use laaficare_backend::invitation::{self, ErreurInvitation, InvitationDeLaStructure, Responsable, RoleInvitation};
+use laaficare_backend::invitation::{
+    self, ErreurInvitation, InvitationDeLaStructure, Responsable, RoleInvitation,
+};
 
 const LIMITE_PAR_DEFAUT: i64 = 50;
 const LIMITE_MAX: i64 = 100;
 
 fn reponse_erreur_invitation(erreur: ErreurInvitation) -> Response {
     let (statut, code) = match &erreur {
-        ErreurInvitation::TelephoneInvalide => (StatusCode::UNPROCESSABLE_ENTITY, "telephone_invalide"),
+        ErreurInvitation::TelephoneInvalide => {
+            (StatusCode::UNPROCESSABLE_ENTITY, "telephone_invalide")
+        }
         ErreurInvitation::RoleNonPermis => (StatusCode::UNPROCESSABLE_ENTITY, "role_non_permis"),
         ErreurInvitation::AutoInvitation => (StatusCode::UNPROCESSABLE_ENTITY, "auto_invitation"),
         ErreurInvitation::TropDeDemandes => (StatusCode::TOO_MANY_REQUESTS, "trop_de_demandes"),
-        ErreurInvitation::TropDInvitationsEnAttente => (StatusCode::CONFLICT, "trop_d_invitations_en_attente"),
-        ErreurInvitation::InvitationDejaEnAttente => (StatusCode::CONFLICT, "invitation_deja_en_attente"),
+        ErreurInvitation::TropDInvitationsEnAttente => {
+            (StatusCode::CONFLICT, "trop_d_invitations_en_attente")
+        }
+        ErreurInvitation::InvitationDejaEnAttente => {
+            (StatusCode::CONFLICT, "invitation_deja_en_attente")
+        }
         ErreurInvitation::InvitationInconnue => (StatusCode::NOT_FOUND, "invitation_inconnue"),
         ErreurInvitation::InvitationExpiree => (StatusCode::CONFLICT, "invitation_expiree"),
         ErreurInvitation::TransitionInvalide { statut_actuel } => {
@@ -35,7 +45,9 @@ fn reponse_erreur_invitation(erreur: ErreurInvitation) -> Response {
             return (StatusCode::CONFLICT, Json(corps)).into_response();
         }
         ErreurInvitation::StructureNonValidee => (StatusCode::CONFLICT, "structure_non_validee"),
-        ErreurInvitation::AffectationDejaActive => (StatusCode::CONFLICT, "affectation_deja_active"),
+        ErreurInvitation::AffectationDejaActive => {
+            (StatusCode::CONFLICT, "affectation_deja_active")
+        }
         // Mêmes codes qu'à la création d'une structure (I13).
         ErreurInvitation::ComptePro(compte) => match compte {
             ErreurComptePro::EmailObligatoire | ErreurComptePro::EmailInvalide => {
@@ -46,20 +58,31 @@ fn reponse_erreur_invitation(erreur: ErreurInvitation) -> Response {
                 corps.regles_non_respectees = Some(regles.regles_non_respectees.clone());
                 return (StatusCode::UNPROCESSABLE_ENTITY, Json(corps)).into_response();
             }
-            ErreurComptePro::MotDePasseIncorrect => (StatusCode::UNAUTHORIZED, "identifiants_invalides"),
+            ErreurComptePro::MotDePasseIncorrect => {
+                (StatusCode::UNAUTHORIZED, "identifiants_invalides")
+            }
             ErreurComptePro::SecondFacteurRequis => (StatusCode::CONFLICT, "second_facteur_requis"),
             ErreurComptePro::EmailDifferent => (StatusCode::CONFLICT, "email_different"),
             ErreurComptePro::EmailDejaUtilise => (StatusCode::CONFLICT, "email_deja_utilise"),
             ErreurComptePro::CompteDejaCree => (StatusCode::CONFLICT, "requete_simultanee"),
-            ErreurComptePro::Interne(etape) => return reponse_erreur_interne("invitation", etape).into_response(),
+            ErreurComptePro::Interne(etape) => {
+                return reponse_erreur_interne("invitation", etape).into_response();
+            }
         },
-        ErreurInvitation::Interne(etape) => return reponse_erreur_interne("invitation", etape).into_response(),
+        ErreurInvitation::Interne(etape) => {
+            return reponse_erreur_interne("invitation", etape).into_response();
+        }
     };
     reponse_erreur(statut, code, erreur.to_string()).into_response()
 }
 
 /// Seul un responsable invite et gère les invitations (I3).
-pub(crate) fn responsable(professionnel: &ProfessionnelEnExercice) -> Result<Responsable<'_>, Response> {
+// Exception `clippy::result_large_err` : erreur = `Response` d'axum, voir
+// `routes_espace_patient::limite_valide`.
+#[allow(clippy::result_large_err)]
+pub(crate) fn responsable(
+    professionnel: &ProfessionnelEnExercice,
+) -> Result<Responsable<'_>, Response> {
     let exercice = &professionnel.0;
     if exercice.role != "responsable" {
         return Err(RefusAuthentification::Interdit.into_response());
@@ -88,7 +111,15 @@ pub async fn creer(
         Ok(r) => r,
         Err(reponse) => return reponse,
     };
-    match invitation::creer(&state.db, state.sms.as_ref(), responsable, &corps.telephone, corps.role).await {
+    match invitation::creer(
+        &state.db,
+        state.sms.as_ref(),
+        responsable,
+        &corps.telephone,
+        corps.role,
+    )
+    .await
+    {
         Ok(creee) => (StatusCode::CREATED, Json(creee)).into_response(),
         Err(erreur) => reponse_erreur_invitation(erreur),
     }
@@ -127,12 +158,32 @@ pub async fn lister(
         )
         .into_response();
     }
-    match invitation::lister_pour_structure(&state.db, responsable.structure_id, filtre.avant, limite).await {
+    match invitation::lister_pour_structure(
+        &state.db,
+        responsable.structure_id,
+        filtre.avant,
+        limite,
+    )
+    .await
+    {
         Ok(invitations) => {
-            let suivant = if invitations.len() as i64 == limite { invitations.last().map(|i| i.id) } else { None };
-            (StatusCode::OK, Json(ListeInvitations { invitations, suivant })).into_response()
+            let suivant = if invitations.len() as i64 == limite {
+                invitations.last().map(|i| i.id)
+            } else {
+                None
+            };
+            (
+                StatusCode::OK,
+                Json(ListeInvitations {
+                    invitations,
+                    suivant,
+                }),
+            )
+                .into_response()
         }
-        Err(_) => reponse_erreur_interne("liste des invitations", "erreur de la base").into_response(),
+        Err(_) => {
+            reponse_erreur_interne("liste des invitations", "erreur de la base").into_response()
+        }
     }
 }
 
@@ -160,7 +211,9 @@ struct InvitationsRecues {
 /// `GET /api/patients/invitations`.
 pub async fn lister_recues(patient: PatientAuthentifie, State(state): State<AppState>) -> Response {
     match invitation::lister_pour_patient(&state.db, patient.compte_id).await {
-        Ok(invitations) => (StatusCode::OK, Json(InvitationsRecues { invitations })).into_response(),
+        Ok(invitations) => {
+            (StatusCode::OK, Json(InvitationsRecues { invitations })).into_response()
+        }
         Err(_) => reponse_erreur_interne("invitations reçues", "erreur de la base").into_response(),
     }
 }
@@ -232,17 +285,41 @@ mod tests {
     #[test]
     fn codes_des_invitations() {
         for (erreur, statut) in [
-            (ErreurInvitation::TelephoneInvalide, StatusCode::UNPROCESSABLE_ENTITY),
-            (ErreurInvitation::RoleNonPermis, StatusCode::UNPROCESSABLE_ENTITY),
-            (ErreurInvitation::AutoInvitation, StatusCode::UNPROCESSABLE_ENTITY),
-            (ErreurInvitation::TropDeDemandes, StatusCode::TOO_MANY_REQUESTS),
-            (ErreurInvitation::TropDInvitationsEnAttente, StatusCode::CONFLICT),
-            (ErreurInvitation::InvitationDejaEnAttente, StatusCode::CONFLICT),
+            (
+                ErreurInvitation::TelephoneInvalide,
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                ErreurInvitation::RoleNonPermis,
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                ErreurInvitation::AutoInvitation,
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                ErreurInvitation::TropDeDemandes,
+                StatusCode::TOO_MANY_REQUESTS,
+            ),
+            (
+                ErreurInvitation::TropDInvitationsEnAttente,
+                StatusCode::CONFLICT,
+            ),
+            (
+                ErreurInvitation::InvitationDejaEnAttente,
+                StatusCode::CONFLICT,
+            ),
             (ErreurInvitation::InvitationInconnue, StatusCode::NOT_FOUND),
             (ErreurInvitation::InvitationExpiree, StatusCode::CONFLICT),
             (ErreurInvitation::StructureNonValidee, StatusCode::CONFLICT),
-            (ErreurInvitation::AffectationDejaActive, StatusCode::CONFLICT),
-            (ErreurInvitation::ComptePro(ErreurComptePro::MotDePasseIncorrect), StatusCode::UNAUTHORIZED),
+            (
+                ErreurInvitation::AffectationDejaActive,
+                StatusCode::CONFLICT,
+            ),
+            (
+                ErreurInvitation::ComptePro(ErreurComptePro::MotDePasseIncorrect),
+                StatusCode::UNAUTHORIZED,
+            ),
         ] {
             assert_eq!(reponse_erreur_invitation(erreur).status(), statut);
         }

@@ -9,7 +9,9 @@ use chrono::NaiveDate;
 use serde::Deserialize;
 
 use crate::AppState;
-use crate::erreur_api::{ErreurApi, JsonApi, ReponseErreur, reponse_erreur, reponse_erreur_interne};
+use crate::erreur_api::{
+    ErreurApi, JsonApi, ReponseErreur, reponse_erreur, reponse_erreur_interne,
+};
 use crate::extracteur_jwt::PatientAuthentifie;
 use crate::routes_session::reponse_paire;
 use laaficare_backend::auth_patient::{self, ErreurAuthPatient};
@@ -20,11 +22,15 @@ use laaficare_backend::patient::{self, ErreurProfil, ProfilPatient};
 // fichier ; `code` ajouté pour le format d'erreur unique (section 12).
 fn mapper_erreur(erreur: ErreurAuthPatient) -> ReponseErreur {
     let (statut, code) = match &erreur {
-        ErreurAuthPatient::TelephoneInvalide => (StatusCode::UNPROCESSABLE_ENTITY, "telephone_invalide"),
+        ErreurAuthPatient::TelephoneInvalide => {
+            (StatusCode::UNPROCESSABLE_ENTITY, "telephone_invalide")
+        }
         ErreurAuthPatient::CodeInvalide => (StatusCode::UNAUTHORIZED, "code_invalide"),
         // O5, O6 : RFC 6585 §4. L'en-tête `Retry-After` est ajouté par
         // `reponse_erreur_patient`.
-        ErreurAuthPatient::TropDeDemandes { .. } => (StatusCode::TOO_MANY_REQUESTS, "trop_de_demandes"),
+        ErreurAuthPatient::TropDeDemandes { .. } => {
+            (StatusCode::TOO_MANY_REQUESTS, "trop_de_demandes")
+        }
         ErreurAuthPatient::TelephoneDejaUtilise => (StatusCode::CONFLICT, "telephone_deja_utilise"),
         ErreurAuthPatient::TelephoneInconnu => (StatusCode::NOT_FOUND, "telephone_inconnu"),
         // Toutes les règles non respectées, pour une liste à cocher dans
@@ -39,12 +45,18 @@ fn mapper_erreur(erreur: ErreurAuthPatient) -> ReponseErreur {
             );
         }
         // Une seule réponse pour tout échec de connexion (P1, L1).
-        ErreurAuthPatient::IdentifiantsInvalides => (StatusCode::UNAUTHORIZED, "identifiants_invalides"),
+        ErreurAuthPatient::IdentifiantsInvalides => {
+            (StatusCode::UNAUTHORIZED, "identifiants_invalides")
+        }
         // Jamais renvoyé : `demander_otp`, seule à le produire, répond 204.
-        ErreurAuthPatient::CompteBloque => return reponse_erreur_interne("AuthPatientService", "compte bloqué inattendu"),
+        ErreurAuthPatient::CompteBloque => {
+            return reponse_erreur_interne("AuthPatientService", "compte bloqué inattendu");
+        }
         // Détail dans les logs seulement, jamais dans la réponse -- même
         // principe que `/health` pour la base injoignable.
-        ErreurAuthPatient::Interne(detail) => return reponse_erreur_interne("AuthPatientService", detail),
+        ErreurAuthPatient::Interne(detail) => {
+            return reponse_erreur_interne("AuthPatientService", detail);
+        }
     };
     reponse_erreur(statut, code, erreur.to_string())
 }
@@ -58,12 +70,16 @@ fn mapper_erreur(erreur: ErreurAuthPatient) -> ReponseErreur {
 /// doc axum 0.8.9).
 fn reponse_erreur_patient(erreur: ErreurAuthPatient) -> Response {
     let reessayer_dans_secs = match &erreur {
-        ErreurAuthPatient::TropDeDemandes { reessayer_dans_secs } => *reessayer_dans_secs,
+        ErreurAuthPatient::TropDeDemandes {
+            reessayer_dans_secs,
+        } => *reessayer_dans_secs,
         _ => None,
     };
     let mut reponse = mapper_erreur(erreur).into_response();
     if let Some(secs) = reessayer_dans_secs {
-        reponse.headers_mut().insert(RETRY_AFTER, HeaderValue::from(secs));
+        reponse
+            .headers_mut()
+            .insert(RETRY_AFTER, HeaderValue::from(secs));
     }
     reponse
 }
@@ -177,9 +193,10 @@ pub async fn se_connecter(
     State(state): State<AppState>,
     JsonApi(corps): JsonApi<ConnexionRequete>,
 ) -> Result<Response, Response> {
-    let paire = auth_patient::se_connecter(&state.db, &state.jwt, &corps.telephone, &corps.mot_de_passe)
-        .await
-        .map_err(reponse_erreur_patient)?;
+    let paire =
+        auth_patient::se_connecter(&state.db, &state.jwt, &corps.telephone, &corps.mot_de_passe)
+            .await
+            .map_err(reponse_erreur_patient)?;
     Ok(reponse_paire(StatusCode::OK, &paire, Some("complete")))
 }
 
@@ -204,32 +221,65 @@ mod tests {
     #[test]
     fn chaque_erreur_a_son_code_http_et_son_code() {
         for (erreur, statut, code) in [
-            (ErreurAuthPatient::TelephoneInvalide, StatusCode::UNPROCESSABLE_ENTITY, "telephone_invalide"),
-            (ErreurAuthPatient::CodeInvalide, StatusCode::UNAUTHORIZED, "code_invalide"),
-            (ErreurAuthPatient::TelephoneDejaUtilise, StatusCode::CONFLICT, "telephone_deja_utilise"),
-            (ErreurAuthPatient::TelephoneInconnu, StatusCode::NOT_FOUND, "telephone_inconnu"),
-            (ErreurAuthPatient::IdentifiantsInvalides, StatusCode::UNAUTHORIZED, "identifiants_invalides"),
-            (ErreurAuthPatient::Interne("détail secret".into()), StatusCode::INTERNAL_SERVER_ERROR, "erreur_interne"),
+            (
+                ErreurAuthPatient::TelephoneInvalide,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "telephone_invalide",
+            ),
+            (
+                ErreurAuthPatient::CodeInvalide,
+                StatusCode::UNAUTHORIZED,
+                "code_invalide",
+            ),
+            (
+                ErreurAuthPatient::TelephoneDejaUtilise,
+                StatusCode::CONFLICT,
+                "telephone_deja_utilise",
+            ),
+            (
+                ErreurAuthPatient::TelephoneInconnu,
+                StatusCode::NOT_FOUND,
+                "telephone_inconnu",
+            ),
+            (
+                ErreurAuthPatient::IdentifiantsInvalides,
+                StatusCode::UNAUTHORIZED,
+                "identifiants_invalides",
+            ),
+            (
+                ErreurAuthPatient::Interne("détail secret".into()),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "erreur_interne",
+            ),
         ] {
             let (s, Json(corps)) = mapper_erreur(erreur);
             assert_eq!((s, corps.code), (statut, code));
-            assert!(!corps.erreur.contains("secret"), "le détail interne ne sort jamais");
+            assert!(
+                !corps.erreur.contains("secret"),
+                "le détail interne ne sort jamais"
+            );
             assert!(corps.regles_non_respectees.is_none());
         }
     }
 
     #[test]
     fn trop_de_demandes_429_avec_ou_sans_retry_after() {
-        let reponse = reponse_erreur_patient(ErreurAuthPatient::TropDeDemandes { reessayer_dans_secs: Some(42) });
+        let reponse = reponse_erreur_patient(ErreurAuthPatient::TropDeDemandes {
+            reessayer_dans_secs: Some(42),
+        });
         assert_eq!(reponse.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(reponse.headers().get(RETRY_AFTER).unwrap(), "42");
 
         // Dernier essai du code épuisé : pas de délai, il faut un nouveau code.
-        let reponse = reponse_erreur_patient(ErreurAuthPatient::TropDeDemandes { reessayer_dans_secs: None });
+        let reponse = reponse_erreur_patient(ErreurAuthPatient::TropDeDemandes {
+            reessayer_dans_secs: None,
+        });
         assert_eq!(reponse.status(), StatusCode::TOO_MANY_REQUESTS);
         assert!(reponse.headers().get(RETRY_AFTER).is_none());
 
-        let (_, Json(corps)) = mapper_erreur(ErreurAuthPatient::TropDeDemandes { reessayer_dans_secs: Some(42) });
+        let (_, Json(corps)) = mapper_erreur(ErreurAuthPatient::TropDeDemandes {
+            reessayer_dans_secs: Some(42),
+        });
         assert_eq!(corps.code, "trop_de_demandes");
     }
 
@@ -237,11 +287,21 @@ mod tests {
     fn mot_de_passe_non_conforme_liste_les_regles() {
         use laaficare_backend::mot_de_passe::RegleMotDePasse;
         let regles = vec![RegleMotDePasse::Chiffre, RegleMotDePasse::CaractereSpecial];
-        let (s, Json(corps)) = mapper_erreur(ErreurAuthPatient::MotDePasseNonConforme(regles.clone()));
-        assert_eq!((s, corps.code), (StatusCode::UNPROCESSABLE_ENTITY, "mot_de_passe_non_conforme"));
+        let (s, Json(corps)) =
+            mapper_erreur(ErreurAuthPatient::MotDePasseNonConforme(regles.clone()));
+        assert_eq!(
+            (s, corps.code),
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "mot_de_passe_non_conforme"
+            )
+        );
         assert_eq!(corps.regles_non_respectees, Some(regles));
         let json = serde_json::to_string(&corps).unwrap();
-        assert!(json.contains(r#""regles_non_respectees":["chiffre","caractere_special"]"#), "{json}");
+        assert!(
+            json.contains(r#""regles_non_respectees":["chiffre","caractere_special"]"#),
+            "{json}"
+        );
     }
 
     // Base temporaire ; données fictives. De l'inscription au profil : le
@@ -265,10 +325,20 @@ mod tests {
             contact_securite: Arc::from("securite@example.org"),
             taches_reinitialisation: Arc::new(Default::default()),
         };
-        let (code, _) = auth_patient::demander_otp(&state.db, "70 02 20 01").await.unwrap();
+        let (code, _) = auth_patient::demander_otp(&state.db, "70 02 20 01")
+            .await
+            .unwrap();
         let naissance = NaiveDate::from_ymd_opt(1995, 4, 12).unwrap();
         let jeton = auth_patient::creer_compte(
-            &state.db, &state.jwt, "70 02 20 01", &code, "OUEDRAOGO", "Awa", naissance, "Koudougou", "Exemple#2026",
+            &state.db,
+            &state.jwt,
+            "70 02 20 01",
+            &code,
+            "OUEDRAOGO",
+            "Awa",
+            naissance,
+            "Koudougou",
+            "Exemple#2026",
         )
         .await
         .unwrap()
@@ -280,14 +350,22 @@ mod tests {
             .unwrap()
             .into_parts()
             .0;
-        let patient = PatientAuthentifie::from_request_parts(&mut parts, &state).await.unwrap();
+        let patient = PatientAuthentifie::from_request_parts(&mut parts, &state)
+            .await
+            .unwrap();
         let Json(profil) = moi(patient, State(state.clone())).await.unwrap();
 
         let sub = state.jwt.verifier(&jeton, SorteJeton::Patient).unwrap().sub;
         assert_eq!(profil.compte_id, sub);
-        assert_eq!((profil.nom.as_str(), profil.prenom.as_str()), ("OUEDRAOGO", "Awa"));
+        assert_eq!(
+            (profil.nom.as_str(), profil.prenom.as_str()),
+            ("OUEDRAOGO", "Awa")
+        );
         assert_eq!(profil.telephone, "+22670022001");
-        assert_eq!((profil.date_naissance, profil.lieu_naissance.as_str()), (naissance, "Koudougou"));
+        assert_eq!(
+            (profil.date_naissance, profil.lieu_naissance.as_str()),
+            (naissance, "Koudougou")
+        );
         assert_eq!(profil.nip.len(), 16);
     }
 
@@ -296,7 +374,11 @@ mod tests {
     struct SmsEnvoyes(std::sync::Mutex<Vec<String>>);
 
     impl laaficare_backend::sms::SmsSender for SmsEnvoyes {
-        fn envoyer(&self, telephone: &str, _message: &str) -> Result<(), laaficare_backend::sms::ErreurSms> {
+        fn envoyer(
+            &self,
+            telephone: &str,
+            _message: &str,
+        ) -> Result<(), laaficare_backend::sms::ErreurSms> {
             self.0.lock().unwrap().push(telephone.to_owned());
             Ok(())
         }
@@ -328,7 +410,9 @@ mod tests {
             taches_reinitialisation: Arc::new(Default::default()),
         };
         // Un patient inscrit, puis bloqué (comme le fait `intervenir_compte`).
-        let (code, _) = auth_patient::demander_otp(&state.db, "70 02 30 01").await.unwrap();
+        let (code, _) = auth_patient::demander_otp(&state.db, "70 02 30 01")
+            .await
+            .unwrap();
         auth_patient::creer_compte(
             &state.db,
             &state.jwt,
@@ -349,30 +433,46 @@ mod tests {
         .execute(&state.db)
         .await
         .unwrap();
-        sqlx::query("UPDATE envoi_otp SET envoye_le = envoye_le - interval '2 minutes'").execute(&state.db).await.unwrap();
+        sqlx::query("UPDATE envoi_otp SET envoye_le = envoye_le - interval '2 minutes'")
+            .execute(&state.db)
+            .await
+            .unwrap();
 
         let demander = |telephone: &'static str| {
             let state = state.clone();
             async move {
-                let corps = DemandeOtpRequete { telephone: telephone.into() };
+                let corps = DemandeOtpRequete {
+                    telephone: telephone.into(),
+                };
                 let reponse = match demander_otp(State(state), JsonApi(corps)).await {
                     Ok(statut) => statut.into_response(),
                     Err(reponse) => reponse,
                 };
                 let statut = reponse.status();
-                (statut, to_bytes(reponse.into_body(), usize::MAX).await.unwrap())
+                (
+                    statut,
+                    to_bytes(reponse.into_body(), usize::MAX).await.unwrap(),
+                )
             }
         };
         let inconnu = demander("70 02 30 02").await;
         let bloque = demander("70 02 30 01").await;
         assert_eq!(bloque, inconnu, "même statut, même corps");
         assert_eq!(bloque.0, StatusCode::NO_CONTENT);
-        assert_eq!(*sms.0.lock().unwrap(), ["+22670023002"], "un SMS pour le numéro inconnu, aucun pour le compte bloqué");
-        let code: Option<String> =
-            sqlx::query_scalar("SELECT otp_code_hash FROM utilisateur WHERE telephone = '+22670023001'")
-                .fetch_one(&state.db)
-                .await
-                .unwrap();
-        assert!(code.is_none(), "aucun code en attente pour le compte bloqué");
+        assert_eq!(
+            *sms.0.lock().unwrap(),
+            ["+22670023002"],
+            "un SMS pour le numéro inconnu, aucun pour le compte bloqué"
+        );
+        let code: Option<String> = sqlx::query_scalar(
+            "SELECT otp_code_hash FROM utilisateur WHERE telephone = '+22670023001'",
+        )
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+        assert!(
+            code.is_none(),
+            "aucun code en attente pour le compte bloqué"
+        );
     }
 }

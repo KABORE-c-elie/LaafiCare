@@ -11,11 +11,12 @@ use sqlx::PgPool;
 use sqlx::types::Uuid;
 
 async fn compte(pool: &PgPool, telephone: &str, type_compte: &str) -> Uuid {
-    let utilisateur_id: Uuid = sqlx::query_scalar("INSERT INTO utilisateur (telephone) VALUES ($1) RETURNING id")
-        .bind(telephone)
-        .fetch_one(pool)
-        .await
-        .unwrap();
+    let utilisateur_id: Uuid =
+        sqlx::query_scalar("INSERT INTO utilisateur (telephone) VALUES ($1) RETURNING id")
+            .bind(telephone)
+            .fetch_one(pool)
+            .await
+            .unwrap();
     sqlx::query_scalar(
         "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, $2, 'x') RETURNING id",
     )
@@ -51,7 +52,10 @@ async fn colonne_vide_a_la_creation(pool: PgPool) {
 #[sqlx::test]
 #[ignore]
 async fn autorisation_reservee_aux_administrateurs(pool: PgPool) {
-    for (telephone, type_compte) in [("+22670100002", "patient"), ("+22670100003", "professionnel")] {
+    for (telephone, type_compte) in [
+        ("+22670100002", "patient"),
+        ("+22670100003", "professionnel"),
+    ] {
         let compte_id = compte(&pool, telephone, type_compte).await;
         let erreur = autoriser(&pool, compte_id).await.unwrap_err();
         assert_eq!(
@@ -63,10 +67,12 @@ async fn autorisation_reservee_aux_administrateurs(pool: PgPool) {
 
     let administrateur = compte(&pool, "+22670100004", "administrateur_laaficare").await;
     autoriser(&pool, administrateur).await.unwrap();
-    let ouverte: bool = sqlx::query_scalar("SELECT reenrolement_autorise_jusqu_au > now() FROM compte WHERE id = $1")
-        .bind(administrateur)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let ouverte: bool = sqlx::query_scalar(
+        "SELECT reenrolement_autorise_jusqu_au > now() FROM compte WHERE id = $1",
+    )
+    .bind(administrateur)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert!(ouverte);
 }

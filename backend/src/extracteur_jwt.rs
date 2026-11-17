@@ -16,11 +16,11 @@
 //!   des droits insuffisants. L'exemple d'axum renvoie 400 ; on suit la RFC
 //!   (décision J4).
 
+use axum::RequestPartsExt;
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, StatusCode, header::WWW_AUTHENTICATE};
 use axum::response::{IntoResponse, Response};
-use axum::RequestPartsExt;
 use axum_extra::TypedHeader;
 use axum_extra::headers::Authorization;
 use axum_extra::headers::authorization::Bearer;
@@ -52,9 +52,12 @@ impl IntoResponse for RefusAuthentification {
         let (statut, www_authenticate, message, code) = match self {
             // RFC 6750 §3 : sans identifiants, pas de code d'erreur dans
             // l'en-tête.
-            RefusAuthentification::IdentifiantsAbsents => {
-                (StatusCode::UNAUTHORIZED, Some("Bearer"), "authentification requise", "authentification_requise")
-            }
+            RefusAuthentification::IdentifiantsAbsents => (
+                StatusCode::UNAUTHORIZED,
+                Some("Bearer"),
+                "authentification requise",
+                "authentification_requise",
+            ),
             // RFC 6750 §3.1, invalid_token : "SHOULD respond with the HTTP
             // 401 (Unauthorized) status code".
             RefusAuthentification::JetonInvalide => (
@@ -63,17 +66,26 @@ impl IntoResponse for RefusAuthentification {
                 "jeton invalide ou expiré",
                 "jeton_invalide",
             ),
-            RefusAuthentification::Interdit => (StatusCode::FORBIDDEN, None, "accès refusé", "acces_refuse"),
+            RefusAuthentification::Interdit => {
+                (StatusCode::FORBIDDEN, None, "accès refusé", "acces_refuse")
+            }
             // Détail dans les logs seulement, même principe que les routes
             // existantes.
             RefusAuthentification::Interne(detail) => {
                 tracing::error!(detail, "erreur interne pendant l'authentification");
-                (StatusCode::INTERNAL_SERVER_ERROR, None, "erreur interne", "erreur_interne")
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    None,
+                    "erreur interne",
+                    "erreur_interne",
+                )
             }
         };
         let mut reponse = reponse_erreur(statut, code, message).into_response();
         if let Some(valeur) = www_authenticate {
-            reponse.headers_mut().insert(WWW_AUTHENTICATE, HeaderValue::from_static(valeur));
+            reponse
+                .headers_mut()
+                .insert(WWW_AUTHENTICATE, HeaderValue::from_static(valeur));
         }
         reponse
     }
@@ -91,7 +103,10 @@ pub struct PatientAuthentifie {
 impl FromRequestParts<AppState> for PatientAuthentifie {
     type Rejection = RefusAuthentification;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let TypedHeader(Authorization(bearer)) = parts
             .extract::<TypedHeader<Authorization<Bearer>>>()
             .await
@@ -147,9 +162,17 @@ pub struct IntermediaireProfessionnel {
 impl FromRequestParts<AppState> for IntermediaireProfessionnel {
     type Rejection = RefusAuthentification;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let (compte_id, iat) =
-            intermediaire(parts, state, SorteJeton::SecondFacteurProfessionnel, "professionnel").await?;
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let (compte_id, iat) = intermediaire(
+            parts,
+            state,
+            SorteJeton::SecondFacteurProfessionnel,
+            "professionnel",
+        )
+        .await?;
         Ok(IntermediaireProfessionnel { compte_id, iat })
     }
 }
@@ -166,9 +189,17 @@ pub struct IntermediaireAdministrateur {
 impl FromRequestParts<AppState> for IntermediaireAdministrateur {
     type Rejection = RefusAuthentification;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let (compte_id, iat) =
-            intermediaire(parts, state, SorteJeton::SecondFacteurAdministrateur, "administrateur_laaficare").await?;
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let (compte_id, iat) = intermediaire(
+            parts,
+            state,
+            SorteJeton::SecondFacteurAdministrateur,
+            "administrateur_laaficare",
+        )
+        .await?;
         Ok(IntermediaireAdministrateur { compte_id, iat })
     }
 }
@@ -193,7 +224,10 @@ async fn intermediaire(
     type_compte: &'static str,
 ) -> Result<(Uuid, u64), RefusAuthentification> {
     let bearer = bearer_de(parts).await?;
-    let claims = state.jwt.verifier(bearer.token(), sorte).map_err(|_| RefusAuthentification::JetonInvalide)?;
+    let claims = state
+        .jwt
+        .verifier(bearer.token(), sorte)
+        .map_err(|_| RefusAuthentification::JetonInvalide)?;
     let iat = i64::try_from(claims.iat).map_err(|_| RefusAuthentification::JetonInvalide)?;
 
     // En une requête, avant tout essai de code :
@@ -234,7 +268,10 @@ pub struct ReenrolementAdministrateur {
 impl FromRequestParts<AppState> for ReenrolementAdministrateur {
     type Rejection = RefusAuthentification;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let bearer = bearer_de(parts).await?;
         let claims = state
             .jwt
@@ -274,7 +311,10 @@ pub struct AdministrateurAuthentifie {
 impl FromRequestParts<AppState> for AdministrateurAuthentifie {
     type Rejection = RefusAuthentification;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let bearer = bearer_de(parts).await?;
         let claims = state
             .jwt
@@ -322,12 +362,19 @@ pub struct ProfessionnelConnecte {
 impl FromRequestParts<AppState> for ProfessionnelConnecte {
     type Rejection = RefusAuthentification;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let bearer = bearer_de(parts).await?;
         let claims = state
             .jwt
             .verifier(bearer.token(), SorteJeton::ProfessionnelSansAffectation)
-            .or_else(|_| state.jwt.verifier(bearer.token(), SorteJeton::ProfessionnelEnExercice))
+            .or_else(|_| {
+                state
+                    .jwt
+                    .verifier(bearer.token(), SorteJeton::ProfessionnelEnExercice)
+            })
             .map_err(|_| RefusAuthentification::JetonInvalide)?;
         let session_id = claims.sid.ok_or(RefusAuthentification::JetonInvalide)?;
 
@@ -349,7 +396,10 @@ impl FromRequestParts<AppState> for ProfessionnelConnecte {
         .await
         .map_err(|e| RefusAuthentification::Interne(e.to_string()))?;
         let compte_id = compte.ok_or(RefusAuthentification::JetonInvalide)?;
-        Ok(ProfessionnelConnecte { compte_id, session_id })
+        Ok(ProfessionnelConnecte {
+            compte_id,
+            session_id,
+        })
     }
 }
 
@@ -365,7 +415,10 @@ pub struct ProfessionnelEnExercice(pub Exercice);
 impl FromRequestParts<AppState> for ProfessionnelEnExercice {
     type Rejection = RefusAuthentification;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let bearer = bearer_de(parts).await?;
         let claims = state
             .jwt
@@ -375,7 +428,15 @@ impl FromRequestParts<AppState> for ProfessionnelEnExercice {
         let (Some(affectation_id), Some(session_id)) = (claims.aff, claims.sid) else {
             return Err(RefusAuthentification::JetonInvalide);
         };
-        match affectation::controler_exercice(&state.db, claims.sub, claims.ver, session_id, affectation_id).await {
+        match affectation::controler_exercice(
+            &state.db,
+            claims.sub,
+            claims.ver,
+            session_id,
+            affectation_id,
+        )
+        .await
+        {
             Ok(ControleExercice::Valide(exercice)) => Ok(ProfessionnelEnExercice(exercice)),
             Ok(ControleExercice::JetonInvalide) => Err(RefusAuthentification::JetonInvalide),
             Ok(ControleExercice::DroitRetire) => Err(RefusAuthentification::Interdit),
@@ -395,8 +456,12 @@ pub struct AgentMunaseb(pub AffectationAgent);
 impl FromRequestParts<AppState> for AgentMunaseb {
     type Rejection = RefusAuthentification;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let ProfessionnelEnExercice(exercice) = ProfessionnelEnExercice::from_request_parts(parts, state).await?;
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let ProfessionnelEnExercice(exercice) =
+            ProfessionnelEnExercice::from_request_parts(parts, state).await?;
 
         // Contrôle de la structure (décision du porteur, 2026-10-18, option
         // a). Une demande de remboursement n'est rattachée à aucune
@@ -437,8 +502,12 @@ pub struct ResponsableMunaseb(pub AffectationAgent);
 impl FromRequestParts<AppState> for ResponsableMunaseb {
     type Rejection = RefusAuthentification;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let ProfessionnelEnExercice(exercice) = ProfessionnelEnExercice::from_request_parts(parts, state).await?;
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let ProfessionnelEnExercice(exercice) =
+            ProfessionnelEnExercice::from_request_parts(parts, state).await?;
         if exercice.role != "responsable" || exercice.type_structure != "munaseb" {
             return Err(RefusAuthentification::Interdit);
         }
@@ -459,9 +528,15 @@ pub struct MembreMunaseb;
 impl FromRequestParts<AppState> for MembreMunaseb {
     type Rejection = RefusAuthentification;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let ProfessionnelEnExercice(exercice) = ProfessionnelEnExercice::from_request_parts(parts, state).await?;
-        if !(exercice.role == ROLE_AGENT || exercice.role == "responsable") || exercice.type_structure != "munaseb" {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let ProfessionnelEnExercice(exercice) =
+            ProfessionnelEnExercice::from_request_parts(parts, state).await?;
+        if !(exercice.role == ROLE_AGENT || exercice.role == "responsable")
+            || exercice.type_structure != "munaseb"
+        {
             return Err(RefusAuthentification::Interdit);
         }
         Ok(MembreMunaseb)
@@ -542,7 +617,10 @@ pub struct CompteConnecte {
 impl FromRequestParts<AppState> for CompteConnecte {
     type Rejection = RefusAuthentification;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         const SORTES: [SorteJeton; 4] = [
             SorteJeton::Patient,
             SorteJeton::ProfessionnelSansAffectation,
@@ -608,13 +686,19 @@ mod tests {
         requete.body(()).unwrap().into_parts().0
     }
 
-    async fn extraire(state: &AppState, authorization: Option<&str>) -> Result<AgentMunaseb, Response> {
+    async fn extraire(
+        state: &AppState,
+        authorization: Option<&str>,
+    ) -> Result<AgentMunaseb, Response> {
         AgentMunaseb::from_request_parts(&mut parts(authorization), state)
             .await
             .map_err(IntoResponse::into_response)
     }
 
-    async fn extraire_patient(state: &AppState, authorization: Option<&str>) -> Result<PatientAuthentifie, Response> {
+    async fn extraire_patient(
+        state: &AppState,
+        authorization: Option<&str>,
+    ) -> Result<PatientAuthentifie, Response> {
         PatientAuthentifie::from_request_parts(&mut parts(authorization), state)
             .await
             .map_err(IntoResponse::into_response)
@@ -634,7 +718,10 @@ mod tests {
     }
 
     fn www_authenticate(reponse: &Response) -> Option<&str> {
-        reponse.headers().get(WWW_AUTHENTICATE).map(|v| v.to_str().unwrap())
+        reponse
+            .headers()
+            .get(WWW_AUTHENTICATE)
+            .map(|v| v.to_str().unwrap())
     }
 
     // Aucune requête SQL dans ces cas : le refus arrive avant la
@@ -650,16 +737,29 @@ mod tests {
         assert_eq!(absent.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(www_authenticate(&absent), Some("Bearer"));
 
-        let mal_forme = extraire(&state, Some("Basic dXNlcjpwYXNz")).await.unwrap_err();
+        let mal_forme = extraire(&state, Some("Basic dXNlcjpwYXNz"))
+            .await
+            .unwrap_err();
         assert_eq!(mal_forme.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(www_authenticate(&mal_forme), Some("Bearer"));
 
         let autre_cle = JwtService::new(&"b".repeat(32))
-            .emettre(SorteJeton::ProfessionnelEnExercice, id, 0, affectation, sid_pour(SorteJeton::ProfessionnelEnExercice))
+            .emettre(
+                SorteJeton::ProfessionnelEnExercice,
+                id,
+                0,
+                affectation,
+                sid_pour(SorteJeton::ProfessionnelEnExercice),
+            )
             .unwrap();
-        let refus = extraire(&state, Some(&format!("Bearer {autre_cle}"))).await.unwrap_err();
+        let refus = extraire(&state, Some(&format!("Bearer {autre_cle}")))
+            .await
+            .unwrap_err();
         assert_eq!(refus.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(www_authenticate(&refus), Some(r#"Bearer error="invalid_token""#));
+        assert_eq!(
+            www_authenticate(&refus),
+            Some(r#"Bearer error="invalid_token""#)
+        );
 
         // Expiré d'une seconde : aucune tolérance (leeway = 0, jwt.rs).
         let maintenant = jsonwebtoken::get_current_timestamp();
@@ -673,9 +773,14 @@ mod tests {
             &EncodingKey::from_secret(SECRET.as_bytes()),
         )
         .unwrap();
-        let refus = extraire(&state, Some(&format!("Bearer {expire}"))).await.unwrap_err();
+        let refus = extraire(&state, Some(&format!("Bearer {expire}")))
+            .await
+            .unwrap_err();
         assert_eq!(refus.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(www_authenticate(&refus), Some(r#"Bearer error="invalid_token""#));
+        assert_eq!(
+            www_authenticate(&refus),
+            Some(r#"Bearer error="invalid_token""#)
+        );
 
         // Toute autre sorte de jeton, même bien signée : mauvaise audience,
         // donc jeton invalide pour cette route (401), jamais 403.
@@ -683,10 +788,18 @@ mod tests {
             if sorte == SorteJeton::ProfessionnelEnExercice {
                 continue;
             }
-            let jeton = state.jwt.emettre(sorte, id, 0, None, sid_pour(sorte)).unwrap();
-            let refus = extraire(&state, Some(&format!("Bearer {jeton}"))).await.unwrap_err();
+            let jeton = state
+                .jwt
+                .emettre(sorte, id, 0, None, sid_pour(sorte))
+                .unwrap();
+            let refus = extraire(&state, Some(&format!("Bearer {jeton}")))
+                .await
+                .unwrap_err();
             assert_eq!(refus.status(), StatusCode::UNAUTHORIZED, "{sorte:?}");
-            assert_eq!(www_authenticate(&refus), Some(r#"Bearer error="invalid_token""#));
+            assert_eq!(
+                www_authenticate(&refus),
+                Some(r#"Bearer error="invalid_token""#)
+            );
         }
 
         // Extracteur patient : sans en-tête, ou avec toute autre sorte de
@@ -699,10 +812,18 @@ mod tests {
                 continue;
             }
             let aff = (sorte == SorteJeton::ProfessionnelEnExercice).then_some(Uuid::from_u128(7));
-            let jeton = state.jwt.emettre(sorte, id, 0, aff, sid_pour(sorte)).unwrap();
-            let refus = extraire_patient(&state, Some(&format!("Bearer {jeton}"))).await.unwrap_err();
+            let jeton = state
+                .jwt
+                .emettre(sorte, id, 0, aff, sid_pour(sorte))
+                .unwrap();
+            let refus = extraire_patient(&state, Some(&format!("Bearer {jeton}")))
+                .await
+                .unwrap_err();
             assert_eq!(refus.status(), StatusCode::UNAUTHORIZED, "{sorte:?}");
-            assert_eq!(www_authenticate(&refus), Some(r#"Bearer error="invalid_token""#));
+            assert_eq!(
+                www_authenticate(&refus),
+                Some(r#"Bearer error="invalid_token""#)
+            );
         }
     }
 
@@ -723,8 +844,19 @@ mod tests {
         .fetch_one(&state.db)
         .await
         .unwrap();
-        let session_id = session::ouvrir(&state.db, compte_id, None).await.unwrap().session_id;
-        let jeton = |version: i32| state.jwt.emettre(SorteJeton::Patient, compte_id, version, None, Some(session_id));
+        let session_id = session::ouvrir(&state.db, compte_id, None)
+            .await
+            .unwrap()
+            .session_id;
+        let jeton = |version: i32| {
+            state.jwt.emettre(
+                SorteJeton::Patient,
+                compte_id,
+                version,
+                None,
+                Some(session_id),
+            )
+        };
         let en_tete = format!("Bearer {}", jeton(0).unwrap());
         let modifier = |sql: &'static str| {
             let db = state.db.clone();
@@ -732,18 +864,30 @@ mod tests {
         };
 
         // Jeton valide : accepté.
-        assert_eq!(extraire_patient(&state, Some(&en_tete)).await.unwrap().compte_id, compte_id);
+        assert_eq!(
+            extraire_patient(&state, Some(&en_tete))
+                .await
+                .unwrap()
+                .compte_id,
+            compte_id
+        );
 
         // Compte verrouillé : le jeton déjà émis reste accepté (BF-01 ne
         // porte que sur les essais de connexion).
-        modifier("UPDATE compte SET verrouille_jusqua = now() + interval '15 minutes' WHERE id = $1").await;
+        modifier(
+            "UPDATE compte SET verrouille_jusqua = now() + interval '15 minutes' WHERE id = $1",
+        )
+        .await;
         assert!(extraire_patient(&state, Some(&en_tete)).await.is_ok());
 
         // Version augmentée (réinitialisation du mot de passe) : refusé.
         modifier("UPDATE compte SET version_jeton = version_jeton + 1 WHERE id = $1").await;
         let refus = extraire_patient(&state, Some(&en_tete)).await.unwrap_err();
         assert_eq!(refus.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(www_authenticate(&refus), Some(r#"Bearer error="invalid_token""#));
+        assert_eq!(
+            www_authenticate(&refus),
+            Some(r#"Bearer error="invalid_token""#)
+        );
 
         // Un jeton émis avec la nouvelle version passe ; compte désactivé : refusé.
         let nouveau = format!("Bearer {}", jeton(1).unwrap());
@@ -778,8 +922,21 @@ mod tests {
         .fetch_one(&state.db)
         .await
         .unwrap();
-        let jeton = state.jwt.emettre(SorteJeton::SecondFacteurProfessionnel, compte_id, 0, None, None).unwrap();
-        let iat = state.jwt.verifier(&jeton, SorteJeton::SecondFacteurProfessionnel).unwrap().iat as i64;
+        let jeton = state
+            .jwt
+            .emettre(
+                SorteJeton::SecondFacteurProfessionnel,
+                compte_id,
+                0,
+                None,
+                None,
+            )
+            .unwrap();
+        let iat = state
+            .jwt
+            .verifier(&jeton, SorteJeton::SecondFacteurProfessionnel)
+            .unwrap()
+            .iat as i64;
         let en_tete = format!("Bearer {jeton}");
         let extraire_inter = || async {
             IntermediaireProfessionnel::from_request_parts(&mut parts(Some(&en_tete)), &state)
@@ -788,7 +945,14 @@ mod tests {
         };
         let executer = |sql: &'static str, valeur: i64| {
             let db = state.db.clone();
-            async move { sqlx::query(sql).bind(compte_id).bind(valeur).execute(&db).await.unwrap() }
+            async move {
+                sqlx::query(sql)
+                    .bind(compte_id)
+                    .bind(valeur)
+                    .execute(&db)
+                    .await
+                    .unwrap()
+            }
         };
         let refuse = |resultat: Result<IntermediaireProfessionnel, Response>| {
             resultat.is_err_and(|r| r.status() == StatusCode::UNAUTHORIZED)
@@ -801,15 +965,34 @@ mod tests {
         // Usage unique : un jeton dont l'`iat` a déjà été consommé est refusé
         // avant tout essai de code ; un `iat` plus récent que le dernier
         // consommé est accepté.
-        executer("UPDATE compte SET second_facteur_dernier_iat = $2 WHERE id = $1", iat).await;
+        executer(
+            "UPDATE compte SET second_facteur_dernier_iat = $2 WHERE id = $1",
+            iat,
+        )
+        .await;
         assert!(refuse(extraire_inter().await), "jeton déjà consommé");
-        executer("UPDATE compte SET second_facteur_dernier_iat = $2 WHERE id = $1", iat - 1).await;
-        assert!(extraire_inter().await.is_ok(), "jeton plus récent que le dernier consommé");
+        executer(
+            "UPDATE compte SET second_facteur_dernier_iat = $2 WHERE id = $1",
+            iat - 1,
+        )
+        .await;
+        assert!(
+            extraire_inter().await.is_ok(),
+            "jeton plus récent que le dernier consommé"
+        );
 
         // Version augmentée, email plus vérifié, compte désactivé : refusés.
-        executer("UPDATE compte SET version_jeton = version_jeton + $2 WHERE id = $1", 1).await;
+        executer(
+            "UPDATE compte SET version_jeton = version_jeton + $2 WHERE id = $1",
+            1,
+        )
+        .await;
         assert!(refuse(extraire_inter().await), "version");
-        executer("UPDATE compte SET version_jeton = version_jeton - $2 WHERE id = $1", 1).await;
+        executer(
+            "UPDATE compte SET version_jeton = version_jeton - $2 WHERE id = $1",
+            1,
+        )
+        .await;
         sqlx::query("UPDATE utilisateur SET email_verifie_le = NULL WHERE id = $1")
             .bind(utilisateur_id)
             .execute(&state.db)
@@ -829,10 +1012,22 @@ mod tests {
         assert!(refuse(extraire_inter().await), "compte désactivé");
 
         // Une autre sorte de jeton (ici patient) : refusée sans regarder la base.
-        let patient = state.jwt.emettre(SorteJeton::Patient, compte_id, 0, None, Some(Uuid::from_u128(9))).unwrap();
-        let refus = IntermediaireProfessionnel::from_request_parts(&mut parts(Some(&format!("Bearer {patient}"))), &state)
-            .await
-            .map_err(IntoResponse::into_response);
+        let patient = state
+            .jwt
+            .emettre(
+                SorteJeton::Patient,
+                compte_id,
+                0,
+                None,
+                Some(Uuid::from_u128(9)),
+            )
+            .unwrap();
+        let refus = IntermediaireProfessionnel::from_request_parts(
+            &mut parts(Some(&format!("Bearer {patient}"))),
+            &state,
+        )
+        .await
+        .map_err(IntoResponse::into_response);
         assert!(refuse(refus));
     }
 
@@ -849,13 +1044,14 @@ mod tests {
         let creer = |telephone: &'static str, email: &'static str, type_compte: &'static str| {
             let db = state.db.clone();
             async move {
-                let utilisateur_id: Uuid =
-                    sqlx::query_scalar("INSERT INTO utilisateur (telephone, email) VALUES ($1, $2) RETURNING id")
-                        .bind(telephone)
-                        .bind(email)
-                        .fetch_one(&db)
-                        .await
-                        .unwrap();
+                let utilisateur_id: Uuid = sqlx::query_scalar(
+                    "INSERT INTO utilisateur (telephone, email) VALUES ($1, $2) RETURNING id",
+                )
+                .bind(telephone)
+                .bind(email)
+                .fetch_one(&db)
+                .await
+                .unwrap();
                 sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1")
                     .bind(utilisateur_id)
                     .execute(&db)
@@ -873,7 +1069,12 @@ mod tests {
                 compte_id
             }
         };
-        let administrateur = creer("+22670021020", "adm.extr@example.org", "administrateur_laaficare").await;
+        let administrateur = creer(
+            "+22670021020",
+            "adm.extr@example.org",
+            "administrateur_laaficare",
+        )
+        .await;
         let professionnel = creer("+22670021021", "pro.extr@example.org", "professionnel").await;
         let fenetre = |minutes: i32| {
             let db = state.db.clone();
@@ -888,9 +1089,14 @@ mod tests {
                 .unwrap();
             }
         };
-        let refuse = |resultat: Result<Uuid, Response>| resultat.is_err_and(|r| r.status() == StatusCode::UNAUTHORIZED);
+        let refuse = |resultat: Result<Uuid, Response>| {
+            resultat.is_err_and(|r| r.status() == StatusCode::UNAUTHORIZED)
+        };
         let en_tete = |sorte: SorteJeton, compte_id: Uuid, sid: Option<Uuid>| {
-            format!("Bearer {}", state.jwt.emettre(sorte, compte_id, 0, None, sid).unwrap())
+            format!(
+                "Bearer {}",
+                state.jwt.emettre(sorte, compte_id, 0, None, sid).unwrap()
+            )
         };
         let st = &state;
         let inter = |valeur: String| async move {
@@ -915,36 +1121,81 @@ mod tests {
         // Jeton intermédiaire : accepté pour l'administrateur ; refusé pour
         // un professionnel (mauvais type de compte) et pour un jeton
         // intermédiaire professionnel (mauvaise sorte).
-        assert_eq!(inter(en_tete(SorteJeton::SecondFacteurAdministrateur, administrateur, None)).await.unwrap(), administrateur);
-        assert!(refuse(inter(en_tete(SorteJeton::SecondFacteurAdministrateur, professionnel, None)).await));
-        assert!(refuse(inter(en_tete(SorteJeton::SecondFacteurProfessionnel, administrateur, None)).await));
+        assert_eq!(
+            inter(en_tete(
+                SorteJeton::SecondFacteurAdministrateur,
+                administrateur,
+                None
+            ))
+            .await
+            .unwrap(),
+            administrateur
+        );
+        assert!(refuse(
+            inter(en_tete(
+                SorteJeton::SecondFacteurAdministrateur,
+                professionnel,
+                None
+            ))
+            .await
+        ));
+        assert!(refuse(
+            inter(en_tete(
+                SorteJeton::SecondFacteurProfessionnel,
+                administrateur,
+                None
+            ))
+            .await
+        ));
 
         // Réenrôlement : refusé sans fenêtre, accepté pendant, refusé après.
-        let jeton_reenrolement = en_tete(SorteJeton::ReenrolementAdministrateur, administrateur, None);
-        assert!(refuse(reenrolement(jeton_reenrolement.clone()).await), "sans fenêtre");
+        let jeton_reenrolement =
+            en_tete(SorteJeton::ReenrolementAdministrateur, administrateur, None);
+        assert!(
+            refuse(reenrolement(jeton_reenrolement.clone()).await),
+            "sans fenêtre"
+        );
         fenetre(10).await;
-        assert_eq!(reenrolement(jeton_reenrolement.clone()).await.unwrap(), administrateur);
+        assert_eq!(
+            reenrolement(jeton_reenrolement.clone()).await.unwrap(),
+            administrateur
+        );
         fenetre(-1).await;
-        assert!(refuse(reenrolement(jeton_reenrolement.clone()).await), "fenêtre expirée");
+        assert!(
+            refuse(reenrolement(jeton_reenrolement.clone()).await),
+            "fenêtre expirée"
+        );
         fenetre(10).await;
 
         // Jeton d'accès sans TOTP actif : refusé (Y4).
-        let session_id = session::ouvrir(&state.db, administrateur, None).await.unwrap().session_id;
+        let session_id = session::ouvrir(&state.db, administrateur, None)
+            .await
+            .unwrap()
+            .session_id;
         let jeton_acces = en_tete(SorteJeton::Administrateur, administrateur, Some(session_id));
         assert!(refuse(acces(jeton_acces.clone()).await), "aucun TOTP actif");
 
         // TOTP activé : le jeton de réenrôlement tombe, le jeton d'accès passe.
         let cle = laaficare_backend::config::CleTotp::depuis_octets([7; 32]);
-        let activation = totp::commencer_activation(&state.db, cle.octets(), administrateur, MOT_DE_PASSE).await.unwrap();
+        let activation =
+            totp::commencer_activation(&state.db, cle.octets(), administrateur, MOT_DE_PASSE)
+                .await
+                .unwrap();
         let code = totp_rs::Builder::new()
             .with_secret(totp_rs::Secret::try_from_base32(&activation.cle_base32).unwrap())
             .build()
             .unwrap()
             .generate(jsonwebtoken::get_current_timestamp())
             .to_string();
-        totp::confirmer_activation(&state.db, cle.octets(), administrateur, &code, totp::Autorisation::ReenrolementAdministrateur)
-            .await
-            .unwrap();
+        totp::confirmer_activation(
+            &state.db,
+            cle.octets(),
+            administrateur,
+            &code,
+            totp::Autorisation::ReenrolementAdministrateur,
+        )
+        .await
+        .unwrap();
         assert!(refuse(reenrolement(jeton_reenrolement).await), "TOTP actif");
         assert_eq!(acces(jeton_acces.clone()).await.unwrap(), administrateur);
 
@@ -966,11 +1217,12 @@ mod tests {
         let state = etat(pool);
         let mut comptes = Vec::new();
         for telephone in ["+22670021002", "+22670021003"] {
-            let utilisateur_id: Uuid = sqlx::query_scalar("INSERT INTO utilisateur (telephone) VALUES ($1) RETURNING id")
-                .bind(telephone)
-                .fetch_one(&state.db)
-                .await
-                .unwrap();
+            let utilisateur_id: Uuid =
+                sqlx::query_scalar("INSERT INTO utilisateur (telephone) VALUES ($1) RETURNING id")
+                    .bind(telephone)
+                    .fetch_one(&state.db)
+                    .await
+                    .unwrap();
             let compte_id: Uuid = sqlx::query_scalar(
                 "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'patient', 'x') RETURNING id",
             )
@@ -984,7 +1236,10 @@ mod tests {
         let en_tete = |session: Uuid| {
             format!(
                 "Bearer {}",
-                state.jwt.emettre(SorteJeton::Patient, compte_id, 0, None, Some(session)).unwrap()
+                state
+                    .jwt
+                    .emettre(SorteJeton::Patient, compte_id, 0, None, Some(session))
+                    .unwrap()
             )
         };
         let refuse = |reponse: Result<PatientAuthentifie, Response>| {
@@ -994,12 +1249,26 @@ mod tests {
         // Session ouverte : accepté ; fermée par déconnexion : refusé.
         let ouverte = session::ouvrir(&state.db, compte_id, None).await.unwrap();
         let acces = en_tete(ouverte.session_id);
-        assert_eq!(extraire_patient(&state, Some(&acces)).await.unwrap().compte_id, compte_id);
-        session::fermer(&state.db, ouverte.jeton_renouvellement.en_clair()).await.unwrap();
-        assert!(refuse(extraire_patient(&state, Some(&acces)).await), "session fermée");
+        assert_eq!(
+            extraire_patient(&state, Some(&acces))
+                .await
+                .unwrap()
+                .compte_id,
+            compte_id
+        );
+        session::fermer(&state.db, ouverte.jeton_renouvellement.en_clair())
+            .await
+            .unwrap();
+        assert!(
+            refuse(extraire_patient(&state, Some(&acces)).await),
+            "session fermée"
+        );
 
         // Session inconnue.
-        assert!(refuse(extraire_patient(&state, Some(&en_tete(Uuid::from_u128(5)))).await), "session inconnue");
+        assert!(
+            refuse(extraire_patient(&state, Some(&en_tete(Uuid::from_u128(5)))).await),
+            "session inconnue"
+        );
 
         // Session expirée.
         let expiree = session::ouvrir(&state.db, compte_id, None).await.unwrap();
@@ -1008,11 +1277,19 @@ mod tests {
             .execute(&state.db)
             .await
             .unwrap();
-        assert!(refuse(extraire_patient(&state, Some(&en_tete(expiree.session_id))).await), "session expirée");
+        assert!(
+            refuse(extraire_patient(&state, Some(&en_tete(expiree.session_id))).await),
+            "session expirée"
+        );
 
         // Session d'un autre compte.
-        let autre = session::ouvrir(&state.db, autre_compte, None).await.unwrap();
-        assert!(refuse(extraire_patient(&state, Some(&en_tete(autre.session_id))).await), "session d'un autre compte");
+        let autre = session::ouvrir(&state.db, autre_compte, None)
+            .await
+            .unwrap();
+        assert!(
+            refuse(extraire_patient(&state, Some(&en_tete(autre.session_id))).await),
+            "session d'un autre compte"
+        );
     }
 
     // --- Étape 3.9 : professionnels en exercice et agents MUNASEB ---------
@@ -1058,7 +1335,12 @@ mod tests {
     /// La session est ouverte directement avec l'affectation : l'activation
     /// refuserait une structure non validée, or ce test vérifie justement
     /// que l'extracteur refuse un jeton qui en porterait une.
-    async fn en_exercice(state: &AppState, compte: Uuid, structure_id: Uuid, role: &str) -> (Uuid, String) {
+    async fn en_exercice(
+        state: &AppState,
+        compte: Uuid,
+        structure_id: Uuid,
+        role: &str,
+    ) -> (Uuid, String) {
         let affectation_id: Uuid =
             sqlx::query_scalar("INSERT INTO affectation (compte_id, structure_id, role) VALUES ($1, $2, $3) RETURNING id")
                 .bind(compte)
@@ -1067,10 +1349,18 @@ mod tests {
                 .fetch_one(&state.db)
                 .await
                 .unwrap();
-        let session = session::ouvrir(&state.db, compte, Some(affectation_id)).await.unwrap();
+        let session = session::ouvrir(&state.db, compte, Some(affectation_id))
+            .await
+            .unwrap();
         let jeton = state
             .jwt
-            .emettre(SorteJeton::ProfessionnelEnExercice, compte, 0, Some(affectation_id), Some(session.session_id))
+            .emettre(
+                SorteJeton::ProfessionnelEnExercice,
+                compte,
+                0,
+                Some(affectation_id),
+                Some(session.session_id),
+            )
             .unwrap();
         (affectation_id, format!("Bearer {jeton}"))
     }
@@ -1104,10 +1394,28 @@ mod tests {
         let (_, dans_clinique) = en_exercice(&state, agent_a, clinique, ROLE_AGENT).await;
 
         let AgentMunaseb(agent) = extraire(&state, Some(&en_tete_a)).await.unwrap();
-        assert_eq!(agent, AffectationAgent { affectation_id: affectation_a, structure_id: validee });
-        assert_eq!(statut(extraire(&state, Some(&en_tete_b)).await), StatusCode::FORBIDDEN, "MUNASEB en attente");
-        assert_eq!(statut(extraire(&state, Some(&responsable)).await), StatusCode::FORBIDDEN, "autre rôle");
-        assert_eq!(statut(extraire(&state, Some(&dans_clinique)).await), StatusCode::FORBIDDEN, "autre structure");
+        assert_eq!(
+            agent,
+            AffectationAgent {
+                affectation_id: affectation_a,
+                structure_id: validee
+            }
+        );
+        assert_eq!(
+            statut(extraire(&state, Some(&en_tete_b)).await),
+            StatusCode::FORBIDDEN,
+            "MUNASEB en attente"
+        );
+        assert_eq!(
+            statut(extraire(&state, Some(&responsable)).await),
+            StatusCode::FORBIDDEN,
+            "autre rôle"
+        );
+        assert_eq!(
+            statut(extraire(&state, Some(&dans_clinique)).await),
+            StatusCode::FORBIDDEN,
+            "autre structure"
+        );
 
         // Affectation désactivée : son jeton encore valable est refusé (403).
         sqlx::query(
@@ -1118,7 +1426,11 @@ mod tests {
         .execute(&state.db)
         .await
         .unwrap();
-        assert_eq!(statut(extraire(&state, Some(&en_tete_a)).await), StatusCode::FORBIDDEN, "affectation désactivée");
+        assert_eq!(
+            statut(extraire(&state, Some(&en_tete_a)).await),
+            StatusCode::FORBIDDEN,
+            "affectation désactivée"
+        );
     }
 
     /// D8 : `CompteConnecte` accepte les quatre jetons d'accès, et refuse une
@@ -1133,19 +1445,54 @@ mod tests {
         let sans = session::ouvrir(&state.db, compte, None).await.unwrap();
         let jeton_sans = state
             .jwt
-            .emettre(SorteJeton::ProfessionnelSansAffectation, compte, 0, None, Some(sans.session_id))
+            .emettre(
+                SorteJeton::ProfessionnelSansAffectation,
+                compte,
+                0,
+                None,
+                Some(sans.session_id),
+            )
             .unwrap();
         let extraire_compte = |en_tete: String| {
             let state = state.clone();
-            async move { CompteConnecte::from_request_parts(&mut parts(Some(&en_tete)), &state).await.map(|c| c.compte_id) }
+            async move {
+                CompteConnecte::from_request_parts(&mut parts(Some(&en_tete)), &state)
+                    .await
+                    .map(|c| c.compte_id)
+            }
         };
         assert_eq!(extraire_compte(exercice).await.unwrap(), compte);
-        assert_eq!(extraire_compte(format!("Bearer {jeton_sans}")).await.unwrap(), compte);
+        assert_eq!(
+            extraire_compte(format!("Bearer {jeton_sans}"))
+                .await
+                .unwrap(),
+            compte
+        );
 
-        let intermediaire = state.jwt.emettre(SorteJeton::SecondFacteurProfessionnel, compte, 0, None, None).unwrap();
-        assert!(extraire_compte(format!("Bearer {intermediaire}")).await.is_err());
-        session::fermer(&state.db, sans.jeton_renouvellement.en_clair()).await.unwrap();
-        assert!(extraire_compte(format!("Bearer {jeton_sans}")).await.is_err(), "session fermée");
+        let intermediaire = state
+            .jwt
+            .emettre(
+                SorteJeton::SecondFacteurProfessionnel,
+                compte,
+                0,
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(
+            extraire_compte(format!("Bearer {intermediaire}"))
+                .await
+                .is_err()
+        );
+        session::fermer(&state.db, sans.jeton_renouvellement.en_clair())
+            .await
+            .unwrap();
+        assert!(
+            extraire_compte(format!("Bearer {jeton_sans}"))
+                .await
+                .is_err(),
+            "session fermée"
+        );
     }
 
     /// D2 : `ProfessionnelConnecte` accepte les jetons sans affectation et en
@@ -1160,14 +1507,30 @@ mod tests {
         let sans = session::ouvrir(&state.db, compte, None).await.unwrap();
         let jeton_sans = state
             .jwt
-            .emettre(SorteJeton::ProfessionnelSansAffectation, compte, 0, None, Some(sans.session_id))
+            .emettre(
+                SorteJeton::ProfessionnelSansAffectation,
+                compte,
+                0,
+                None,
+                Some(sans.session_id),
+            )
             .unwrap();
-        let patient = state.jwt.emettre(SorteJeton::Patient, compte, 0, None, Some(sans.session_id)).unwrap();
+        let patient = state
+            .jwt
+            .emettre(SorteJeton::Patient, compte, 0, None, Some(sans.session_id))
+            .unwrap();
         let extraire_pro = |en_tete: String| {
             let state = state.clone();
-            async move { ProfessionnelConnecte::from_request_parts(&mut parts(Some(&en_tete)), &state).await.map(|c| c.session_id) }
+            async move {
+                ProfessionnelConnecte::from_request_parts(&mut parts(Some(&en_tete)), &state)
+                    .await
+                    .map(|c| c.session_id)
+            }
         };
-        assert_eq!(extraire_pro(format!("Bearer {jeton_sans}")).await.unwrap(), sans.session_id);
+        assert_eq!(
+            extraire_pro(format!("Bearer {jeton_sans}")).await.unwrap(),
+            sans.session_id
+        );
         assert!(extraire_pro(exercice).await.is_ok());
         assert!(extraire_pro(format!("Bearer {patient}")).await.is_err());
     }

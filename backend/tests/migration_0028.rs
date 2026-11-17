@@ -10,17 +10,24 @@
 //! `cargo test --test migration_0028 -- --include-ignored`.
 
 use chrono::NaiveDate;
+use sqlx::PgPool;
 use sqlx::migrate::Migrator;
 use sqlx::types::Uuid;
-use sqlx::PgPool;
 
 static MIGRATIONS: Migrator = sqlx::migrate!();
 
 #[sqlx::test(migrations = false)]
 #[ignore]
 async fn periodes_existantes_gardees(pool: PgPool) {
-    let jusqu_a_0027: Vec<_> = MIGRATIONS.iter().filter(|m| m.version <= 27).cloned().collect();
-    Migrator::with_migrations(jusqu_a_0027).run(&pool).await.unwrap();
+    let jusqu_a_0027: Vec<_> = MIGRATIONS
+        .iter()
+        .filter(|m| m.version <= 27)
+        .cloned()
+        .collect();
+    Migrator::with_migrations(jusqu_a_0027)
+        .run(&pool)
+        .await
+        .unwrap();
 
     // Contrat d'avant l'étape 5 : deux périodes, sans numéro propre.
     let contrat: Uuid = sqlx::query_scalar(
@@ -60,7 +67,11 @@ async fn periodes_existantes_gardees(pool: PgPool) {
     assert_eq!(
         periodes,
         [
-            (NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(), Some("ANCIENNE-0001".to_string()), 100_000),
+            (
+                NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+                Some("ANCIENNE-0001".to_string()),
+                100_000
+            ),
             (NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(), None, 100_000),
         ]
     );

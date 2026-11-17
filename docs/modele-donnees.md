@@ -368,5 +368,6 @@ Une ligne par clé `Idempotency-Key` reçue : pharmacie, clé, opération, empre
 | 0031 | Stock des pharmacies : lots, ventes, journal des mouvements (jamais négatif, jamais modifié), prix de vente historisés, seuils, réglages, clés d'idempotence |
 | 0032 | Dépenses des pharmacies (`depense_pharmacie`), par le seul responsable, jamais modifiées : une correction est une annulation tracée |
 | 0033 | Lot saisi au mois seul (`lot_stock.expiration_mois_seul`) : la date enregistrée est alors la veille du mois imprimé (règle prudente) |
+| 0034 | Index (audit technique, repris le 2026-11-17) : clés étrangères vers des lignes effacées par le code (codes de secours d'un second facteur désactivé, jetons d'une session purgée), et requêtes réelles (demandes d'un créateur, pièces d'une structure, délai d'envoi d'un lien, sessions d'une affectation retirée, journaux paginés du stock et des dépenses). Aucune donnée ne change |
 
 Une migration déjà appliquée ne change plus jamais : toute évolution passe par une nouvelle migration. Un test vérifie aussi qu'aucun caractère invisible ne s'y glisse ([`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs)).

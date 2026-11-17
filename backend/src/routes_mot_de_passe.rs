@@ -34,12 +34,18 @@ fn lancer(state: &AppState, sorte: SorteCompte, email: String) -> Response {
 
 /// `POST /api/professionnels/mot-de-passe/oubli` -- `{"email"}`, toujours
 /// 204 (422 seulement pour un champ manquant).
-pub async fn oubli_professionnel(State(state): State<AppState>, JsonApi(corps): JsonApi<OubliRequete>) -> Response {
+pub async fn oubli_professionnel(
+    State(state): State<AppState>,
+    JsonApi(corps): JsonApi<OubliRequete>,
+) -> Response {
     lancer(&state, SorteCompte::Professionnel, corps.email)
 }
 
 /// `POST /api/administrateurs/mot-de-passe/oubli` -- même contrat.
-pub async fn oubli_administrateur(State(state): State<AppState>, JsonApi(corps): JsonApi<OubliRequete>) -> Response {
+pub async fn oubli_administrateur(
+    State(state): State<AppState>,
+    JsonApi(corps): JsonApi<OubliRequete>,
+) -> Response {
     lancer(&state, SorteCompte::Administrateur, corps.email)
 }
 
@@ -53,17 +59,20 @@ pub struct ReinitialiserRequete {
 fn reponse_erreur_reinitialisation(erreur: ErreurReinitialisation) -> Response {
     match &erreur {
         ErreurReinitialisation::LienInvalide => {
-            reponse_erreur(StatusCode::BAD_REQUEST, "lien_invalide", erreur.to_string()).into_response()
+            reponse_erreur(StatusCode::BAD_REQUEST, "lien_invalide", erreur.to_string())
+                .into_response()
         }
         ErreurReinitialisation::MotDePasseNonConforme(regles) => {
             let mut corps = ErreurApi::simple("mot_de_passe_non_conforme", erreur.to_string());
             corps.regles_non_respectees = Some(regles.regles_non_respectees.clone());
             (StatusCode::UNPROCESSABLE_ENTITY, Json(corps)).into_response()
         }
-        ErreurReinitialisation::MotDePasseIdentiquePatient => {
-            reponse_erreur(StatusCode::UNPROCESSABLE_ENTITY, "mot_de_passe_identique_patient", erreur.to_string())
-                .into_response()
-        }
+        ErreurReinitialisation::MotDePasseIdentiquePatient => reponse_erreur(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "mot_de_passe_identique_patient",
+            erreur.to_string(),
+        )
+        .into_response(),
         ErreurReinitialisation::Interne(etape) => {
             reponse_erreur_interne("réinitialisation du mot de passe", etape).into_response()
         }
@@ -74,7 +83,10 @@ fn reponse_erreur_reinitialisation(erreur: ErreurReinitialisation) -> Response {
 /// envoyé par la page `/reinitialiser-mot-de-passe` (R21). 204 ; 400
 /// `lien_invalide` ; 422 `mot_de_passe_non_conforme` ou
 /// `mot_de_passe_identique_patient`.
-pub async fn reinitialiser(State(state): State<AppState>, JsonApi(corps): JsonApi<ReinitialiserRequete>) -> Response {
+pub async fn reinitialiser(
+    State(state): State<AppState>,
+    JsonApi(corps): JsonApi<ReinitialiserRequete>,
+) -> Response {
     match reinitialisation::reinitialiser(
         &state.db,
         state.email.as_ref(),
@@ -95,9 +107,13 @@ mod tests {
 
     #[test]
     fn codes_de_la_reinitialisation() {
-        assert_eq!(reponse_erreur_reinitialisation(ErreurReinitialisation::LienInvalide).status(), StatusCode::BAD_REQUEST);
         assert_eq!(
-            reponse_erreur_reinitialisation(ErreurReinitialisation::MotDePasseIdentiquePatient).status(),
+            reponse_erreur_reinitialisation(ErreurReinitialisation::LienInvalide).status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            reponse_erreur_reinitialisation(ErreurReinitialisation::MotDePasseIdentiquePatient)
+                .status(),
             StatusCode::UNPROCESSABLE_ENTITY
         );
     }
@@ -128,15 +144,29 @@ mod tests {
         .fetch_one(&state.db)
         .await
         .unwrap();
-        sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1").bind(u).execute(&state.db).await.unwrap();
+        sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1")
+            .bind(u)
+            .execute(&state.db)
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'professionnel', 'x')")
             .bind(u)
             .execute(&state.db)
             .await
             .unwrap();
 
-        for email in ["connu@example.org", "inconnu@example.org", "pas une adresse"] {
-            let reponse = oubli_professionnel(State(state.clone()), JsonApi(OubliRequete { email: email.into() })).await;
+        for email in [
+            "connu@example.org",
+            "inconnu@example.org",
+            "pas une adresse",
+        ] {
+            let reponse = oubli_professionnel(
+                State(state.clone()),
+                JsonApi(OubliRequete {
+                    email: email.into(),
+                }),
+            )
+            .await;
             assert_eq!(reponse.status(), StatusCode::NO_CONTENT, "{email}");
         }
     }

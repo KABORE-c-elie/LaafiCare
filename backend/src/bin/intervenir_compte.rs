@@ -39,7 +39,11 @@ fn oui(question: &str) -> Result<bool, String> {
 async fn executer() -> Result<(), String> {
     let contexte = console::demarrer().await?;
     let operateur = console::authentifier_operateur(&contexte).await?;
-    let (pool, email, contact) = (&contexte.pool, &contexte.email, contexte.config.contact_securite.as_str());
+    let (pool, email, contact) = (
+        &contexte.pool,
+        &contexte.email,
+        contexte.config.contact_securite.as_str(),
+    );
 
     println!("Action :");
     println!("1. Retirer une affectation (compte professionnel)");
@@ -64,12 +68,18 @@ async fn executer() -> Result<(), String> {
             _ => return Err("Choix inconnu.".into()),
         }
     };
-    let question = if type_compte == TypeCompte::Patient { "Téléphone : " } else { "Email : " };
+    let question = if type_compte == TypeCompte::Patient {
+        "Téléphone : "
+    } else {
+        "Email : "
+    };
     let identifiant = lire(question)?;
     let cible = outils_administrateur::trouver_compte(pool, type_compte, &identifiant)
         .await
         .map_err(|e| console::expliquer(&e))?;
-    let statut = intervention::statut(pool, cible.compte_id).await.map_err(|e| e.to_string())?;
+    let statut = intervention::statut(pool, cible.compte_id)
+        .await
+        .map_err(|e| e.to_string())?;
     println!(
         "Compte trouvé : {} {} ({:?}, statut : {statut})",
         cible.nom.as_deref().unwrap_or("(nom non renseigné)"),
@@ -82,16 +92,23 @@ async fn executer() -> Result<(), String> {
 
     let prevenue = match action.as_str() {
         "1" => {
-            let affectations = intervention::affectations_actives(pool, cible.compte_id).await.map_err(|e| e.to_string())?;
+            let affectations = intervention::affectations_actives(pool, cible.compte_id)
+                .await
+                .map_err(|e| e.to_string())?;
             if affectations.is_empty() {
                 return Err("Ce compte n'a aucune affectation active.".into());
             }
             for (i, a) in affectations.iter().enumerate() {
                 println!("{}. {} : {}", i + 1, a.structure_nom, a.role);
             }
-            let numero: usize = lire("Affectation à retirer : ")?.parse().map_err(|_| "Choix inconnu.".to_string())?;
-            let choisie = affectations.get(numero.wrapping_sub(1)).ok_or("Choix inconnu.")?;
-            let motif = lire("Motif (par exemple « compte compromis signalé par la structure ») : ")?;
+            let numero: usize = lire("Affectation à retirer : ")?
+                .parse()
+                .map_err(|_| "Choix inconnu.".to_string())?;
+            let choisie = affectations
+                .get(numero.wrapping_sub(1))
+                .ok_or("Choix inconnu.")?;
+            let motif =
+                lire("Motif (par exemple « compte compromis signalé par la structure ») : ")?;
             let mut confirme = false;
             loop {
                 match intervention::retirer_affectation(
@@ -125,7 +142,9 @@ async fn executer() -> Result<(), String> {
         }
         "2" => {
             if type_compte == TypeCompte::Administrateur {
-                let restants = intervention::administrateurs_operationnels(pool).await.map_err(|e| e.to_string())?;
+                let restants = intervention::administrateurs_operationnels(pool)
+                    .await
+                    .map_err(|e| e.to_string())?;
                 if restants <= 2 {
                     println!(
                         "Attention : il reste {restants} administrateur(s) avec un second facteur actif ; après ce \
@@ -134,13 +153,17 @@ async fn executer() -> Result<(), String> {
                 }
             }
             let motif = lire("Motif (par exemple « mot de passe volé ») : ")?;
-            if !oui("Bloquer ce compte ? Toutes ses sessions seront fermées et son mot de passe ne marchera plus")? {
+            if !oui(
+                "Bloquer ce compte ? Toutes ses sessions seront fermées et son mot de passe ne marchera plus",
+            )? {
                 return Err("Arrêt, rien n'a été modifié.".into());
             }
             let prevenue = intervention::bloquer(pool, email, contact, operateur, &cible, &motif)
                 .await
                 .map_err(|e| e.to_string())?;
-            println!("Compte bloqué ; toutes ses sessions sont fermées et son mot de passe ne marche plus.");
+            println!(
+                "Compte bloqué ; toutes ses sessions sont fermées et son mot de passe ne marche plus."
+            );
             prevenue
         }
         _ => {
@@ -148,9 +171,10 @@ async fn executer() -> Result<(), String> {
             // IC4 : attestation obligatoire pour la réactivation ; le numéro
             // de la carte n'est jamais saisi.
             let cnib = oui("Avez-vous vérifié la CNIB de la personne, en sa présence ?")?;
-            let prevenue = intervention::reactiver(pool, email, contact, operateur, &cible, &motif, cnib)
-                .await
-                .map_err(|e| e.to_string())?;
+            let prevenue =
+                intervention::reactiver(pool, email, contact, operateur, &cible, &motif, cnib)
+                    .await
+                    .map_err(|e| e.to_string())?;
             println!(
                 "Compte réactivé. La personne choisit maintenant un nouveau mot de passe avec « Mot de passe oublié ? » \
                  (par SMS pour un patient, par email sinon)."
@@ -161,7 +185,9 @@ async fn executer() -> Result<(), String> {
     if prevenue {
         println!("La personne a été prévenue par email.");
     } else {
-        println!("La personne n'a pas pu être prévenue par email (pas d'email vérifié, ou envoi impossible).");
+        println!(
+            "La personne n'a pas pu être prévenue par email (pas d'email vérifié, ou envoi impossible)."
+        );
     }
     Ok(())
 }

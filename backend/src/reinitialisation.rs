@@ -79,7 +79,9 @@ impl LimiteTaches {
     pub fn prendre(limite: &Arc<Self>) -> Option<Permis> {
         limite
             .en_cours
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < TACHES_DE_FOND_MAX).then_some(n + 1))
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n < TACHES_DE_FOND_MAX).then_some(n + 1)
+            })
             .ok()
             .map(|_| Permis(Arc::clone(limite)))
     }
@@ -117,14 +119,26 @@ pub fn demander(
     email: String,
 ) {
     let Some(permis) = LimiteTaches::prendre(limite) else {
-        tracing::warn!(?sorte, "mot de passe oublié : trop de demandes en cours, demande ignorée");
+        tracing::warn!(
+            ?sorte,
+            "mot de passe oublié : trop de demandes en cours, demande ignorée"
+        );
         return;
     };
     tokio::spawn(async move {
         // Le permis est rendu à la fin de cette tâche, quoi qu'il arrive :
         // erreur, envoi échoué ou délai dépassé.
         let _permis = permis;
-        if let Err(e) = traiter_demande(&pool, email_sender, &url_application_web, sorte, &email, DELAI_ENVOI_EMAIL).await {
+        if let Err(e) = traiter_demande(
+            &pool,
+            email_sender,
+            &url_application_web,
+            sorte,
+            &email,
+            DELAI_ENVOI_EMAIL,
+        )
+        .await
+        {
             tracing::error!(?sorte, nature = %nature_sqlx(&e), "mot de passe oublié : erreur dans la tâche de fond");
         }
     });
@@ -171,7 +185,9 @@ pub async fn traiter_demande(
         match resultat {
             Ok(Envoi::Envoye) => {}
             Ok(Envoi::Echec) => tracing::error!("mot de passe oublié : échec d'envoi de l'email"),
-            Ok(Envoi::DelaiDepasse) => tracing::error!("mot de passe oublié : délai d'envoi de l'email dépassé"),
+            Ok(Envoi::DelaiDepasse) => {
+                tracing::error!("mot de passe oublié : délai d'envoi de l'email dépassé")
+            }
             Err(_) => tracing::error!("mot de passe oublié : envoi de l'email interrompu"),
         }
     }
@@ -286,7 +302,8 @@ pub async fn reinitialiser(
 
     // Règles du mot de passe avant toute écriture : un refus laisse le lien
     // valable, la personne corrige et renvoie.
-    mot_de_passe::controler(nouveau_mot_de_passe).map_err(ErreurReinitialisation::MotDePasseNonConforme)?;
+    mot_de_passe::controler(nouveau_mot_de_passe)
+        .map_err(ErreurReinitialisation::MotDePasseNonConforme)?;
     if type_compte == "administrateur_laaficare" {
         let hash_patient: Option<String> =
             sqlx::query_scalar("SELECT mot_de_passe_hash FROM compte WHERE utilisateur_id = $1 AND type_compte = 'patient'")
@@ -295,15 +312,21 @@ pub async fn reinitialiser(
                 .await
                 .map_err(|e| interne("lecture du compte patient", &e))?;
         if let Some(hash_patient) = hash_patient {
-            let identique = mot_de_passe::verifier(nouveau_mot_de_passe, &hash_patient)
-                .map_err(|_| ErreurReinitialisation::Interne("comparaison avec le mot de passe patient"))?;
+            let identique = mot_de_passe::verifier_async(nouveau_mot_de_passe, &hash_patient)
+                .await
+                .map_err(|_| {
+                    ErreurReinitialisation::Interne("comparaison avec le mot de passe patient")
+                })?;
             if identique {
                 return Err(ErreurReinitialisation::MotDePasseIdentiquePatient);
             }
         }
     }
-    // Haché avant la transaction : Argon2id ne garde pas de verrous.
-    let hash = mot_de_passe::hacher(nouveau_mot_de_passe).map_err(|_| ErreurReinitialisation::Interne("hachage"))?;
+    // Haché avant la transaction : Argon2id ne garde pas de verrous ; hors
+    // des fils de tokio (`mot_de_passe::hacher_async`).
+    let hash = mot_de_passe::hacher_async(nouveau_mot_de_passe)
+        .await
+        .map_err(|_| ErreurReinitialisation::Interne("hachage"))?;
 
     let mut tx = pool.begin().await.map_err(|e| interne("transaction", &e))?;
     sqlx::query("SELECT id FROM compte WHERE id = $1 FOR UPDATE")
@@ -348,15 +371,29 @@ pub async fn reinitialiser(
     .execute(&mut *tx)
     .await
     .map_err(|e| interne("nouveau mot de passe", &e))?;
-    session::fermer_toutes(&mut tx, compte_id, MotifRevocation::ReinitialisationMotDePasse, false)
+    session::fermer_toutes(
+        &mut tx,
+        compte_id,
+        MotifRevocation::ReinitialisationMotDePasse,
+        false,
+    )
+    .await
+    .map_err(|e| interne("fermeture des sessions", &e))?;
+    tx.commit()
         .await
-        .map_err(|e| interne("fermeture des sessions", &e))?;
-    tx.commit().await.map_err(|e| interne("validation de la transaction", &e))?;
+        .map_err(|e| interne("validation de la transaction", &e))?;
 
     // R17, après la validation en base ; un échec n'annule rien. Aucune
     // session n'est ouverte : la personne se reconnecte (OWASP : « Don't
     // automatically log the user in »).
-    alerte_securite::prevenir(pool, email_sender, contact_securite, compte_id, Evenement::MotDePasseReinitialise).await;
+    alerte_securite::prevenir(
+        pool,
+        email_sender,
+        contact_securite,
+        compte_id,
+        Evenement::MotDePasseReinitialise,
+    )
+    .await;
     Ok(())
 }
 
@@ -376,7 +413,13 @@ mod tests {
 
     /// Identité, compte patient et compte du type demandé ; email vérifié si
     /// demandé. Renvoie le compte (professionnel ou administrateur).
-    async fn compte(pool: &PgPool, telephone: &str, email: &str, type_compte: &str, verifie: bool) -> Uuid {
+    async fn compte(
+        pool: &PgPool,
+        telephone: &str,
+        email: &str,
+        type_compte: &str,
+        verifie: bool,
+    ) -> Uuid {
         let u: Uuid = sqlx::query_scalar("INSERT INTO utilisateur (nom, prenom, telephone, email) VALUES ('KABRE', 'Ali', $1, $2) RETURNING id")
             .bind(telephone)
             .bind(email)
@@ -384,7 +427,11 @@ mod tests {
             .await
             .unwrap();
         if verifie {
-            sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1").bind(u).execute(pool).await.unwrap();
+            sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1")
+                .bind(u)
+                .execute(pool)
+                .await
+                .unwrap();
         }
         sqlx::query("INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'patient', $2)")
             .bind(u)
@@ -402,18 +449,30 @@ mod tests {
     }
 
     /// Demande traitée directement (sans tâche de fond), emails gardés.
-    async fn demande(pool: &PgPool, emails: &Arc<EmailsRecus>, sorte: SorteCompte, email: &str) -> Result<(), sqlx::Error> {
+    async fn demande(
+        pool: &PgPool,
+        emails: &Arc<EmailsRecus>,
+        sorte: SorteCompte,
+        email: &str,
+    ) -> Result<(), sqlx::Error> {
         traiter_demande(pool, emails.clone(), URL, sorte, email, DELAI_ENVOI_EMAIL).await
     }
 
     fn jeton_du_lien(corps: &str) -> String {
-        let lien = corps.lines().find(|l| l.contains("/reinitialiser-mot-de-passe#jeton=")).expect("lien attendu");
+        let lien = corps
+            .lines()
+            .find(|l| l.contains("/reinitialiser-mot-de-passe#jeton="))
+            .expect("lien attendu");
         assert!(!lien.contains('?'), "{lien}");
         lien.split("#jeton=").nth(1).unwrap().trim().to_string()
     }
 
     async fn compter(pool: &PgPool, requete: &'static str, compte_id: Uuid) -> i64 {
-        sqlx::query_scalar(requete).bind(compte_id).fetch_one(pool).await.unwrap()
+        sqlx::query_scalar(requete)
+            .bind(compte_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
     }
 
     /// Reculer la date des liens du compte (pour passer le délai d'une
@@ -432,23 +491,63 @@ mod tests {
     #[ignore]
     async fn qui_recoit_un_lien(pool: PgPool) {
         let emails = Arc::new(EmailsRecus::default());
-        compte(&pool, "+22670300001", "non.verifie@example.org", "professionnel", false).await;
-        let desactive = compte(&pool, "+22670300002", "desactive@example.org", "professionnel", true).await;
-        sqlx::query("UPDATE compte SET statut = 'desactive' WHERE id = $1").bind(desactive).execute(&pool).await.unwrap();
-        let verrouille = compte(&pool, "+22670300003", "verrouille@example.org", "professionnel", true).await;
-        sqlx::query("UPDATE compte SET verrouille_jusqua = now() + interval '15 minutes' WHERE id = $1")
-            .bind(verrouille)
+        compte(
+            &pool,
+            "+22670300001",
+            "non.verifie@example.org",
+            "professionnel",
+            false,
+        )
+        .await;
+        let desactive = compte(
+            &pool,
+            "+22670300002",
+            "desactive@example.org",
+            "professionnel",
+            true,
+        )
+        .await;
+        sqlx::query("UPDATE compte SET statut = 'desactive' WHERE id = $1")
+            .bind(desactive)
             .execute(&pool)
             .await
             .unwrap();
+        let verrouille = compte(
+            &pool,
+            "+22670300003",
+            "verrouille@example.org",
+            "professionnel",
+            true,
+        )
+        .await;
+        sqlx::query(
+            "UPDATE compte SET verrouille_jusqua = now() + interval '15 minutes' WHERE id = $1",
+        )
+        .bind(verrouille)
+        .execute(&pool)
+        .await
+        .unwrap();
 
-        for email in ["inconnu@example.org", "non.verifie@example.org", "desactive@example.org"] {
-            demande(&pool, &emails,SorteCompte::Professionnel, email).await.unwrap();
+        for email in [
+            "inconnu@example.org",
+            "non.verifie@example.org",
+            "desactive@example.org",
+        ] {
+            demande(&pool, &emails, SorteCompte::Professionnel, email)
+                .await
+                .unwrap();
         }
         assert!(emails.0.lock().unwrap().is_empty());
 
         // Verrouillé : lien envoyé ; majuscules et espaces autour ignorés (J6).
-        demande(&pool, &emails,SorteCompte::Professionnel, " Verrouille@Example.org ").await.unwrap();
+        demande(
+            &pool,
+            &emails,
+            SorteCompte::Professionnel,
+            " Verrouille@Example.org ",
+        )
+        .await
+        .unwrap();
         let envoyes = emails.0.lock().unwrap().clone();
         assert_eq!(envoyes.len(), 1);
         assert_eq!(envoyes[0].0, "verrouille@example.org");
@@ -456,7 +555,14 @@ mod tests {
         // Pas de tiret cadratin (décision du porteur, 2026-10-21).
         assert!(!envoyes[0].1.contains('\u{2014}'));
         // Mauvaise sorte de compte : rien.
-        demande(&pool, &emails,SorteCompte::Administrateur, "verrouille@example.org").await.unwrap();
+        demande(
+            &pool,
+            &emails,
+            SorteCompte::Administrateur,
+            "verrouille@example.org",
+        )
+        .await
+        .unwrap();
         assert_eq!(emails.0.lock().unwrap().len(), 1);
     }
 
@@ -465,15 +571,51 @@ mod tests {
     #[ignore]
     async fn limites_d_envoi(pool: PgPool) {
         let emails = Arc::new(EmailsRecus::default());
-        let compte_id = compte(&pool, "+22670300011", "limites@example.org", "professionnel", true).await;
-        demande(&pool, &emails,SorteCompte::Professionnel, "limites@example.org").await.unwrap();
-        demande(&pool, &emails,SorteCompte::Professionnel, "limites@example.org").await.unwrap();
-        assert_eq!(emails.0.lock().unwrap().len(), 1, "moins d'une minute : rien");
+        let compte_id = compte(
+            &pool,
+            "+22670300011",
+            "limites@example.org",
+            "professionnel",
+            true,
+        )
+        .await;
+        demande(
+            &pool,
+            &emails,
+            SorteCompte::Professionnel,
+            "limites@example.org",
+        )
+        .await
+        .unwrap();
+        demande(
+            &pool,
+            &emails,
+            SorteCompte::Professionnel,
+            "limites@example.org",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            emails.0.lock().unwrap().len(),
+            1,
+            "moins d'une minute : rien"
+        );
         for _ in 0..3 {
             vieillir_liens(&pool, compte_id).await;
-            demande(&pool, &emails,SorteCompte::Professionnel, "limites@example.org").await.unwrap();
+            demande(
+                &pool,
+                &emails,
+                SorteCompte::Professionnel,
+                "limites@example.org",
+            )
+            .await
+            .unwrap();
         }
-        assert_eq!(emails.0.lock().unwrap().len(), 3, "3 liens valables au plus");
+        assert_eq!(
+            emails.0.lock().unwrap().len(),
+            3,
+            "3 liens valables au plus"
+        );
         // Les liens précédents restent valables (R3) : 3 en attente.
         assert_eq!(
             compter(&pool, "SELECT count(*) FROM jeton_email WHERE compte_id = $1 AND utilise_le IS NULL AND annule_le IS NULL", compte_id).await,
@@ -490,8 +632,19 @@ mod tests {
     async fn reinitialisation_complete(pool: PgPool) {
         let emails = Arc::new(EmailsRecus::default());
         let jwt = JwtService::new(&"a".repeat(32));
-        let compte_id = compte(&pool, "+22670300021", "complet@example.org", "professionnel", true).await;
-        let session_avant = session::ouvrir(&pool, compte_id, None).await.unwrap().en_paire(&jwt).unwrap();
+        let compte_id = compte(
+            &pool,
+            "+22670300021",
+            "complet@example.org",
+            "professionnel",
+            true,
+        )
+        .await;
+        let session_avant = session::ouvrir(&pool, compte_id, None)
+            .await
+            .unwrap()
+            .en_paire(&jwt)
+            .unwrap();
         sqlx::query(
             "INSERT INTO second_facteur_totp (compte_id, secret_chiffre, nonce, version_cle, statut, date_activation) \
              VALUES ($1, decode(repeat('00', 36), 'hex'), decode(repeat('00', 12), 'hex'), 1, 'actif', now())",
@@ -500,11 +653,29 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("UPDATE compte SET tentatives_echouees = 3 WHERE id = $1").bind(compte_id).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE compte SET tentatives_echouees = 3 WHERE id = $1")
+            .bind(compte_id)
+            .execute(&pool)
+            .await
+            .unwrap();
 
-        demande(&pool, &emails,SorteCompte::Professionnel, "complet@example.org").await.unwrap();
+        demande(
+            &pool,
+            &emails,
+            SorteCompte::Professionnel,
+            "complet@example.org",
+        )
+        .await
+        .unwrap();
         vieillir_liens(&pool, compte_id).await;
-        demande(&pool, &emails,SorteCompte::Professionnel, "complet@example.org").await.unwrap();
+        demande(
+            &pool,
+            &emails,
+            SorteCompte::Professionnel,
+            "complet@example.org",
+        )
+        .await
+        .unwrap();
         let (premier, second) = {
             let e = emails.0.lock().unwrap();
             (jeton_du_lien(&e[0].1), jeton_du_lien(&e[1].1))
@@ -512,24 +683,50 @@ mod tests {
 
         // Mot de passe non conforme : refusé, le lien reste valable.
         assert!(matches!(
-            reinitialiser(&pool, &*emails,CONTACT, &premier, "court").await,
+            reinitialiser(&pool, &*emails, CONTACT, &premier, "court").await,
             Err(ErreurReinitialisation::MotDePasseNonConforme(_))
         ));
-        reinitialiser(&pool, &*emails,CONTACT, &premier, NOUVEAU).await.unwrap();
+        reinitialiser(&pool, &*emails, CONTACT, &premier, NOUVEAU)
+            .await
+            .unwrap();
 
         // Usage unique, et l'autre lien est annulé.
         for jeton in [&premier, &second] {
-            assert!(matches!(reinitialiser(&pool, &*emails,CONTACT, jeton, NOUVEAU).await, Err(ErreurReinitialisation::LienInvalide)));
+            assert!(matches!(
+                reinitialiser(&pool, &*emails, CONTACT, jeton, NOUVEAU).await,
+                Err(ErreurReinitialisation::LienInvalide)
+            ));
         }
         // Sessions fermées, ancienne version : l'ancien jeton n'est plus bon.
         assert_eq!(
             compter(&pool, "SELECT count(*) FROM session WHERE compte_id = $1 AND motif_revocation = 'reinitialisation_mot_de_passe'", compte_id).await,
             1
         );
-        let claims = jwt.verifier(&session_avant.jeton_acces, SorteJeton::ProfessionnelSansAffectation).unwrap();
-        assert_eq!(compter(&pool, "SELECT version_jeton::bigint FROM compte WHERE id = $1", compte_id).await, i64::from(claims.ver) + 1);
+        let claims = jwt
+            .verifier(
+                &session_avant.jeton_acces,
+                SorteJeton::ProfessionnelSansAffectation,
+            )
+            .unwrap();
+        assert_eq!(
+            compter(
+                &pool,
+                "SELECT version_jeton::bigint FROM compte WHERE id = $1",
+                compte_id
+            )
+            .await,
+            i64::from(claims.ver) + 1
+        );
         // Verrouillage levé, TOTP intact.
-        assert_eq!(compter(&pool, "SELECT tentatives_echouees::bigint FROM compte WHERE id = $1", compte_id).await, 0);
+        assert_eq!(
+            compter(
+                &pool,
+                "SELECT tentatives_echouees::bigint FROM compte WHERE id = $1",
+                compte_id
+            )
+            .await,
+            0
+        );
         assert_eq!(compter(&pool, "SELECT count(*) FROM second_facteur_totp WHERE compte_id = $1 AND statut = 'actif'", compte_id).await, 1);
         // Ancien mot de passe refusé ; nouveau accepté (le TOTP reste exigé).
         assert!(matches!(
@@ -551,8 +748,15 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert!(alerte.contains("compte professionnel LaafiCare"), "{alerte}");
-        assert!(alerte.contains(&format!("le {quand} (heure du Burkina Faso)")) && alerte.contains(CONTACT), "{alerte}");
+        assert!(
+            alerte.contains("compte professionnel LaafiCare"),
+            "{alerte}"
+        );
+        assert!(
+            alerte.contains(&format!("le {quand} (heure du Burkina Faso)"))
+                && alerte.contains(CONTACT),
+            "{alerte}"
+        );
         assert!(!alerte.contains("http"));
     }
 
@@ -561,30 +765,67 @@ mod tests {
     #[ignore]
     async fn liens_invalides(pool: PgPool) {
         let emails = Arc::new(EmailsRecus::default());
-        let compte_id = compte(&pool, "+22670300031", "lien@example.org", "professionnel", true).await;
-        demande(&pool, &emails,SorteCompte::Professionnel, "lien@example.org").await.unwrap();
+        let compte_id = compte(
+            &pool,
+            "+22670300031",
+            "lien@example.org",
+            "professionnel",
+            true,
+        )
+        .await;
+        demande(
+            &pool,
+            &emails,
+            SorteCompte::Professionnel,
+            "lien@example.org",
+        )
+        .await
+        .unwrap();
         let jeton = jeton_du_lien(&emails.0.lock().unwrap()[0].1);
 
         for faux in ["", "abc", &"0".repeat(64)] {
-            assert!(matches!(reinitialiser(&pool, &*emails,CONTACT, faux, NOUVEAU).await, Err(ErreurReinitialisation::LienInvalide)));
+            assert!(matches!(
+                reinitialiser(&pool, &*emails, CONTACT, faux, NOUVEAU).await,
+                Err(ErreurReinitialisation::LienInvalide)
+            ));
         }
         sqlx::query("UPDATE utilisateur SET email = 'autre@example.org' FROM compte c WHERE c.id = $1 AND utilisateur.id = c.utilisateur_id")
             .bind(compte_id)
             .execute(&pool)
             .await
             .unwrap();
-        assert!(matches!(reinitialiser(&pool, &*emails,CONTACT, &jeton, NOUVEAU).await, Err(ErreurReinitialisation::LienInvalide)));
+        assert!(matches!(
+            reinitialiser(&pool, &*emails, CONTACT, &jeton, NOUVEAU).await,
+            Err(ErreurReinitialisation::LienInvalide)
+        ));
 
         // Expiré (30 minutes).
-        let autre = compte(&pool, "+22670300032", "expire@example.org", "professionnel", true).await;
-        demande(&pool, &emails,SorteCompte::Professionnel, "expire@example.org").await.unwrap();
+        let autre = compte(
+            &pool,
+            "+22670300032",
+            "expire@example.org",
+            "professionnel",
+            true,
+        )
+        .await;
+        demande(
+            &pool,
+            &emails,
+            SorteCompte::Professionnel,
+            "expire@example.org",
+        )
+        .await
+        .unwrap();
         let jeton = jeton_du_lien(&emails.0.lock().unwrap().last().unwrap().1);
         sqlx::query("UPDATE jeton_email SET date_creation = now() - interval '31 minutes', expire_le = now() - interval '1 minute' WHERE compte_id = $1")
             .bind(autre)
             .execute(&pool)
             .await
             .unwrap();
-        assert!(matches!(reinitialiser(&pool, &*emails,CONTACT, &jeton, NOUVEAU).await, Err(ErreurReinitialisation::LienInvalide)));
+        assert!(matches!(
+            reinitialiser(&pool, &*emails, CONTACT, &jeton, NOUVEAU).await,
+            Err(ErreurReinitialisation::LienInvalide)
+        ));
     }
 
     /// R16 : un administrateur ne reprend pas le mot de passe de son compte
@@ -593,20 +834,61 @@ mod tests {
     #[ignore]
     async fn administrateur_et_mot_de_passe_patient(pool: PgPool) {
         let emails = Arc::new(EmailsRecus::default());
-        compte(&pool, "+22670300041", "adm.reinit@example.org", "administrateur_laaficare", true).await;
-        demande(&pool, &emails,SorteCompte::Administrateur, "adm.reinit@example.org").await.unwrap();
+        compte(
+            &pool,
+            "+22670300041",
+            "adm.reinit@example.org",
+            "administrateur_laaficare",
+            true,
+        )
+        .await;
+        demande(
+            &pool,
+            &emails,
+            SorteCompte::Administrateur,
+            "adm.reinit@example.org",
+        )
+        .await
+        .unwrap();
         let jeton = jeton_du_lien(&emails.0.lock().unwrap()[0].1);
         assert!(matches!(
-            reinitialiser(&pool, &*emails,CONTACT, &jeton, "Patient#2026").await,
+            reinitialiser(&pool, &*emails, CONTACT, &jeton, "Patient#2026").await,
             Err(ErreurReinitialisation::MotDePasseIdentiquePatient)
         ));
-        reinitialiser(&pool, &*emails,CONTACT, &jeton, NOUVEAU).await.unwrap();
-        assert!(emails.0.lock().unwrap().last().unwrap().1.contains("compte administrateur LaafiCare"));
+        reinitialiser(&pool, &*emails, CONTACT, &jeton, NOUVEAU)
+            .await
+            .unwrap();
+        assert!(
+            emails
+                .0
+                .lock()
+                .unwrap()
+                .last()
+                .unwrap()
+                .1
+                .contains("compte administrateur LaafiCare")
+        );
 
-        compte(&pool, "+22670300042", "pro.reinit@example.org", "professionnel", true).await;
-        demande(&pool, &emails,SorteCompte::Professionnel, "pro.reinit@example.org").await.unwrap();
+        compte(
+            &pool,
+            "+22670300042",
+            "pro.reinit@example.org",
+            "professionnel",
+            true,
+        )
+        .await;
+        demande(
+            &pool,
+            &emails,
+            SorteCompte::Professionnel,
+            "pro.reinit@example.org",
+        )
+        .await
+        .unwrap();
         let jeton = jeton_du_lien(&emails.0.lock().unwrap().last().unwrap().1);
-        reinitialiser(&pool, &*emails,CONTACT, &jeton, "Patient#2026").await.unwrap();
+        reinitialiser(&pool, &*emails, CONTACT, &jeton, "Patient#2026")
+            .await
+            .unwrap();
     }
 
     /// Une réinitialisation et une connexion simultanées : aucune erreur
@@ -615,17 +897,38 @@ mod tests {
     #[ignore]
     async fn reinitialisation_et_connexion_simultanees(pool: PgPool) {
         let emails = Arc::new(EmailsRecus::default());
-        compte(&pool, "+22670300051", "simultane@example.org", "professionnel", true).await;
-        demande(&pool, &emails,SorteCompte::Professionnel, "simultane@example.org").await.unwrap();
+        compte(
+            &pool,
+            "+22670300051",
+            "simultane@example.org",
+            "professionnel",
+            true,
+        )
+        .await;
+        demande(
+            &pool,
+            &emails,
+            SorteCompte::Professionnel,
+            "simultane@example.org",
+        )
+        .await
+        .unwrap();
         let jeton = jeton_du_lien(&emails.0.lock().unwrap()[0].1);
         let (p1, p2) = (pool.clone(), pool.clone());
-        let reinit = tokio::spawn(async move { reinitialiser(&p1, &EmailsRecus::default(), CONTACT, &jeton, NOUVEAU).await.is_ok() });
+        let reinit = tokio::spawn(async move {
+            reinitialiser(&p1, &EmailsRecus::default(), CONTACT, &jeton, NOUVEAU)
+                .await
+                .is_ok()
+        });
         let connexion = tokio::spawn(async move {
             let jwt = JwtService::new(&"a".repeat(32));
             auth_professionnel::se_connecter(&p2, &jwt, "simultane@example.org", ANCIEN).await
         });
         assert!(reinit.await.unwrap());
-        assert!(!matches!(connexion.await.unwrap(), Err(ErreurAuthProfessionnel::Interne(_))));
+        assert!(!matches!(
+            connexion.await.unwrap(),
+            Err(ErreurAuthProfessionnel::Interne(_))
+        ));
     }
 
     /// Fournisseur d'email bloqué : ne répond qu'au bout de `attente`.
@@ -654,8 +957,17 @@ mod tests {
             Duration::from_millis(100),
         );
         assert_eq!(issue, Envoi::DelaiDepasse);
-        assert!(debut.elapsed() < Duration::from_secs(2), "l'appelant n'attend pas la fin de l'envoi");
-        let issue = envoyer_avec_delai(Arc::new(EmailsRecus::default()), "a@example.org".into(), SUJET_LIEN, "c".into(), Duration::from_secs(5));
+        assert!(
+            debut.elapsed() < Duration::from_secs(2),
+            "l'appelant n'attend pas la fin de l'envoi"
+        );
+        let issue = envoyer_avec_delai(
+            Arc::new(EmailsRecus::default()),
+            "a@example.org".into(),
+            SUJET_LIEN,
+            "c".into(),
+            Duration::from_secs(5),
+        );
         assert_eq!(issue, Envoi::Envoye);
     }
 
@@ -664,7 +976,14 @@ mod tests {
     #[sqlx::test]
     #[ignore]
     async fn tache_bloquee_rend_son_permis(pool: PgPool) {
-        let compte_id = compte(&pool, "+22670300061", "lent@example.org", "professionnel", true).await;
+        let compte_id = compte(
+            &pool,
+            "+22670300061",
+            "lent@example.org",
+            "professionnel",
+            true,
+        )
+        .await;
         let limite = Arc::new(LimiteTaches::default());
         let permis = LimiteTaches::prendre(&limite).unwrap();
         let tache = tokio::spawn({
@@ -684,10 +1003,27 @@ mod tests {
         });
         let debut = std::time::Instant::now();
         tache.await.unwrap().unwrap();
-        assert!(debut.elapsed() < Duration::from_secs(4), "la tâche n'attend pas l'envoi bloqué");
-        let permis: Vec<_> = (0..TACHES_DE_FOND_MAX).map(|_| LimiteTaches::prendre(&limite).unwrap()).collect();
-        assert_eq!(permis.len(), TACHES_DE_FOND_MAX, "le permis de la tâche est rendu");
-        assert_eq!(compter(&pool, "SELECT count(*) FROM jeton_email WHERE compte_id = $1", compte_id).await, 1);
+        assert!(
+            debut.elapsed() < Duration::from_secs(4),
+            "la tâche n'attend pas l'envoi bloqué"
+        );
+        let permis: Vec<_> = (0..TACHES_DE_FOND_MAX)
+            .map(|_| LimiteTaches::prendre(&limite).unwrap())
+            .collect();
+        assert_eq!(
+            permis.len(),
+            TACHES_DE_FOND_MAX,
+            "le permis de la tâche est rendu"
+        );
+        assert_eq!(
+            compter(
+                &pool,
+                "SELECT count(*) FROM jeton_email WHERE compte_id = $1",
+                compte_id
+            )
+            .await,
+            1
+        );
     }
 
     /// R11 : au plus `TACHES_DE_FOND_MAX` permis ; un permis rendu libère une
@@ -695,7 +1031,9 @@ mod tests {
     #[test]
     fn limite_des_taches_de_fond() {
         let limite = Arc::new(LimiteTaches::default());
-        let permis: Vec<_> = (0..TACHES_DE_FOND_MAX).map(|_| LimiteTaches::prendre(&limite).unwrap()).collect();
+        let permis: Vec<_> = (0..TACHES_DE_FOND_MAX)
+            .map(|_| LimiteTaches::prendre(&limite).unwrap())
+            .collect();
         assert!(LimiteTaches::prendre(&limite).is_none());
         drop(permis);
         assert!(LimiteTaches::prendre(&limite).is_some());

@@ -59,13 +59,24 @@ fn reponse_erreur_structure(erreur: ErreurStructure) -> Response {
         ErreurStructure::ChampObligatoire(_) | ErreurStructure::EmailInvalide(_) => {
             (StatusCode::UNPROCESSABLE_ENTITY, "donnees_invalides")
         }
-        ErreurStructure::TypeNonDisponible => (StatusCode::UNPROCESSABLE_ENTITY, "type_non_disponible"),
+        ErreurStructure::TypeNonDisponible => {
+            (StatusCode::UNPROCESSABLE_ENTITY, "type_non_disponible")
+        }
         ErreurStructure::NomTropLong => (StatusCode::UNPROCESSABLE_ENTITY, "nom_trop_long"),
         ErreurStructure::NomInvalide => (StatusCode::UNPROCESSABLE_ENTITY, "nom_invalide"),
         // Un code par numéro (décision du porteur, 2026-10-21).
-        ErreurStructure::TelephoneServiceInvalide => (StatusCode::UNPROCESSABLE_ENTITY, "telephone_service_invalide"),
-        ErreurStructure::TelephoneUrgenceInvalide => (StatusCode::UNPROCESSABLE_ENTITY, "telephone_urgence_invalide"),
-        ErreurStructure::LocalisationHorsBurkina => (StatusCode::UNPROCESSABLE_ENTITY, "localisation_hors_burkina"),
+        ErreurStructure::TelephoneServiceInvalide => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "telephone_service_invalide",
+        ),
+        ErreurStructure::TelephoneUrgenceInvalide => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "telephone_urgence_invalide",
+        ),
+        ErreurStructure::LocalisationHorsBurkina => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "localisation_hors_burkina",
+        ),
         ErreurStructure::MotDePasseNonConforme(regles) => {
             let mut corps = ErreurApi::simple("mot_de_passe_non_conforme", erreur.to_string());
             corps.regles_non_respectees = Some(regles.regles_non_respectees.clone());
@@ -73,12 +84,16 @@ fn reponse_erreur_structure(erreur: ErreurStructure) -> Response {
         }
         // Même code que la réauthentification du réenrôlement (A7) : le
         // jeton patient reste valable, seul le mot de passe saisi est faux.
-        ErreurStructure::MotDePasseIncorrect => (StatusCode::UNAUTHORIZED, "identifiants_invalides"),
+        ErreurStructure::MotDePasseIncorrect => {
+            (StatusCode::UNAUTHORIZED, "identifiants_invalides")
+        }
         ErreurStructure::SecondFacteurRequis => (StatusCode::CONFLICT, "second_facteur_requis"),
         ErreurStructure::EmailDifferent => (StatusCode::CONFLICT, "email_different"),
         ErreurStructure::EmailDejaUtilise => (StatusCode::CONFLICT, "email_deja_utilise"),
         ErreurStructure::DemandeDejaEnCours => (StatusCode::CONFLICT, "demande_deja_en_cours"),
-        ErreurStructure::Interne(etape) => return reponse_erreur_interne("création de structure", etape).into_response(),
+        ErreurStructure::Interne(etape) => {
+            return reponse_erreur_interne("création de structure", etape).into_response();
+        }
     };
     reponse_erreur(statut, code, erreur.to_string()).into_response()
 }
@@ -107,8 +122,14 @@ pub async fn creer(
         email_professionnel: corps.email_professionnel.as_deref(),
         mot_de_passe_professionnel: &corps.mot_de_passe_professionnel,
     };
-    match structure::creer(&state.db, state.email.as_ref(), &state.url_application_web, patient.compte_id, &saisie)
-        .await
+    match structure::creer(
+        &state.db,
+        state.email.as_ref(),
+        &state.url_application_web,
+        patient.compte_id,
+        &saisie,
+    )
+    .await
     {
         Ok(creee) => (
             StatusCode::CREATED,
@@ -167,15 +188,20 @@ pub async fn soumettre(
 
 fn reponse_erreur_abandon(erreur: ErreurAbandon) -> Response {
     match &erreur {
-        ErreurAbandon::StructureInconnue => {
-            reponse_erreur(StatusCode::NOT_FOUND, "structure_inconnue", erreur.to_string()).into_response()
-        }
+        ErreurAbandon::StructureInconnue => reponse_erreur(
+            StatusCode::NOT_FOUND,
+            "structure_inconnue",
+            erreur.to_string(),
+        )
+        .into_response(),
         ErreurAbandon::TransitionInvalide { statut_actuel } => {
             let mut corps = ErreurApi::simple("transition_invalide", erreur.to_string());
             corps.statut_actuel = Some(statut_actuel.clone());
             (StatusCode::CONFLICT, Json(corps)).into_response()
         }
-        ErreurAbandon::Interne(etape) => reponse_erreur_interne("abandon de structure", etape).into_response(),
+        ErreurAbandon::Interne(etape) => {
+            reponse_erreur_interne("abandon de structure", etape).into_response()
+        }
     }
 }
 
@@ -199,7 +225,8 @@ pub async fn abandonner(
 pub async fn mes_demandes(patient: PatientAuthentifie, State(state): State<AppState>) -> Response {
     match structure::mes_demandes(&state.db, patient.compte_id).await {
         Ok(demandes) => (StatusCode::OK, Json(demandes)).into_response(),
-        Err(_) => reponse_erreur_interne("suivi des demandes de structure", "erreur de la base").into_response(),
+        Err(_) => reponse_erreur_interne("suivi des demandes de structure", "erreur de la base")
+            .into_response(),
     }
 }
 
@@ -311,8 +338,6 @@ mod tests {
     #[sqlx::test]
     #[ignore]
     async fn depot_par_la_route_et_limite_de_taille(pool: sqlx::PgPool) {
-        use axum::Router;
-        use axum::routing::{get, post};
         use laaficare_backend::config::CleTotp;
         use laaficare_backend::jwt::{JwtService, SorteJeton};
         use laaficare_backend::session;
@@ -375,39 +400,40 @@ mod tests {
         .await
         .unwrap();
 
-        let app = Router::new()
-            .route("/api/structures/{id}/pieces", get(lister_pieces))
-            .route(
-                "/api/structures/{id}/pieces/{type_piece}",
-                post(deposer_piece).layer(axum::extract::DefaultBodyLimit::max(
-                    piece_justificative::TAILLE_MAX_OCTETS,
-                )),
-            )
-            .with_state(state);
+        // Le routeur du serveur, avec toutes ses couches (limites de taille,
+        // identifiant de requête), pas une copie.
+        let app = crate::routeur(state);
         let ecoute = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let adresse = ecoute.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(ecoute, app).await.unwrap() });
 
-        // Statut et corps d'une requête, connexion fermée ensuite.
-        let envoyer = |methode: &'static str,
-                       chemin: String,
-                       autorisation: String,
-                       corps: Vec<u8>| async move {
-            let mut flux = tokio::net::TcpStream::connect(adresse).await.unwrap();
-            let entete = format!(
-                "{methode} {chemin} HTTP/1.1\r\nHost: localhost\r\nAuthorization: {autorisation}\r\n\
+        // Statut et texte d'une réponse, connexion fermée ensuite.
+        let envoyer_avec =
+            |methode: &'static str, chemin: String, entetes: String, corps: Vec<u8>| async move {
+                let mut flux = tokio::net::TcpStream::connect(adresse).await.unwrap();
+                let entete = format!(
+                    "{methode} {chemin} HTTP/1.1\r\nHost: localhost\r\n{entetes}\
                  Content-Length: {}\r\nConnection: close\r\n\r\n",
-                corps.len()
-            );
-            flux.write_all(entete.as_bytes()).await.unwrap();
-            // Le serveur peut répondre 413 et fermer avant la fin du corps.
-            let _ = flux.write_all(&corps).await;
-            let mut reponse = Vec::new();
-            let _ = flux.read_to_end(&mut reponse).await;
-            let texte = String::from_utf8_lossy(&reponse).to_string();
-            let statut: u16 = texte.split(' ').nth(1).unwrap().parse().unwrap();
-            (statut, texte)
-        };
+                    corps.len()
+                );
+                flux.write_all(entete.as_bytes()).await.unwrap();
+                // Le serveur peut répondre 413 et fermer avant la fin du corps.
+                let _ = flux.write_all(&corps).await;
+                let mut reponse = Vec::new();
+                let _ = flux.read_to_end(&mut reponse).await;
+                let texte = String::from_utf8_lossy(&reponse).to_string();
+                let statut: u16 = texte.split(' ').nth(1).unwrap().parse().unwrap();
+                (statut, texte)
+            };
+        let envoyer =
+            |methode: &'static str, chemin: String, autorisation: String, corps: Vec<u8>| {
+                envoyer_avec(
+                    methode,
+                    chemin,
+                    format!("Authorization: {autorisation}\r\n"),
+                    corps,
+                )
+            };
         let chemin = format!(
             "/api/structures/{structure_id}/pieces/autorisation_ouverture_exploitation?numero=2025-001&date_piece=2025-01-10"
         );
@@ -417,6 +443,48 @@ mod tests {
         let (statut, texte) = envoyer("POST", chemin.clone(), jeton.clone(), trop_grand).await;
         assert_eq!(statut, 413, "{texte}");
         assert!(texte.contains("fichier_trop_grand"), "{texte}");
+
+        // Une pièce d'exactement 5 Mio passe la limite du routeur (256 Kio) :
+        // la limite propre à la route l'emporte.
+        let mut juste = b"%PDF-".to_vec();
+        juste.resize(piece_justificative::TAILLE_MAX_OCTETS, 0);
+        let (statut, texte) = envoyer("POST", chemin.clone(), jeton.clone(), juste).await;
+        assert_eq!(statut, 201, "{}", &texte[..texte.len().min(300)]);
+
+        // Toute autre route : 256 Kio au plus, réponse au format de l'API.
+        let mut gros_json = br#"{"telephone":"70000000","mot_de_passe":""#.to_vec();
+        gros_json.resize(300 * 1024, b'a');
+        gros_json.extend_from_slice(br#""}"#);
+        let (statut, texte) = envoyer_avec(
+            "POST",
+            "/api/patients/connexion".into(),
+            "Content-Type: application/json\r\n".into(),
+            gros_json,
+        )
+        .await;
+        assert_eq!(statut, 413, "{texte}");
+        assert!(texte.contains("\"code\""), "{texte}");
+
+        // Identifiant de requête : tiré par le serveur (UUID), jamais repris
+        // de la requête (un client pourrait y mettre une donnée personnelle).
+        let (statut, texte) = envoyer_avec(
+            "GET",
+            "/health".into(),
+            "X-Request-ID: OUEDRAOGO-Awa-70000000\r\n".into(),
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(statut, 200, "{texte}");
+        let id = texte
+            .lines()
+            .find_map(|l| {
+                l.to_ascii_lowercase()
+                    .strip_prefix("x-request-id: ")
+                    .map(str::to_string)
+            })
+            .expect("en-tête x-request-id dans la réponse");
+        assert!(Uuid::parse_str(id.trim()).is_ok(), "{id}");
+        assert!(!texte.contains("OUEDRAOGO"), "{texte}");
 
         let (statut, texte) = envoyer(
             "POST",
@@ -452,14 +520,46 @@ mod tests {
     #[test]
     fn codes_des_erreurs_de_creation() {
         for (erreur, statut, code) in [
-            (ErreurStructure::ChampObligatoire("nom"), StatusCode::UNPROCESSABLE_ENTITY, "donnees_invalides"),
-            (ErreurStructure::TypeNonDisponible, StatusCode::UNPROCESSABLE_ENTITY, "type_non_disponible"),
-            (ErreurStructure::TelephoneServiceInvalide, StatusCode::UNPROCESSABLE_ENTITY, "telephone_service_invalide"),
-            (ErreurStructure::TelephoneUrgenceInvalide, StatusCode::UNPROCESSABLE_ENTITY, "telephone_urgence_invalide"),
-            (ErreurStructure::EmailInvalide("email"), StatusCode::UNPROCESSABLE_ENTITY, "donnees_invalides"),
-            (ErreurStructure::LocalisationHorsBurkina, StatusCode::UNPROCESSABLE_ENTITY, "localisation_hors_burkina"),
-            (ErreurStructure::MotDePasseIncorrect, StatusCode::UNAUTHORIZED, "identifiants_invalides"),
-            (ErreurStructure::DemandeDejaEnCours, StatusCode::CONFLICT, "demande_deja_en_cours"),
+            (
+                ErreurStructure::ChampObligatoire("nom"),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "donnees_invalides",
+            ),
+            (
+                ErreurStructure::TypeNonDisponible,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "type_non_disponible",
+            ),
+            (
+                ErreurStructure::TelephoneServiceInvalide,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "telephone_service_invalide",
+            ),
+            (
+                ErreurStructure::TelephoneUrgenceInvalide,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "telephone_urgence_invalide",
+            ),
+            (
+                ErreurStructure::EmailInvalide("email"),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "donnees_invalides",
+            ),
+            (
+                ErreurStructure::LocalisationHorsBurkina,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "localisation_hors_burkina",
+            ),
+            (
+                ErreurStructure::MotDePasseIncorrect,
+                StatusCode::UNAUTHORIZED,
+                "identifiants_invalides",
+            ),
+            (
+                ErreurStructure::DemandeDejaEnCours,
+                StatusCode::CONFLICT,
+                "demande_deja_en_cours",
+            ),
         ] {
             assert_eq!(reponse_erreur_structure(erreur).status(), statut, "{code}");
         }
@@ -508,14 +608,28 @@ mod tests {
         .fetch_one(&state.db)
         .await
         .unwrap();
-        let paire = session::ouvrir(&state.db, compte_id, None).await.unwrap().en_paire(&state.jwt).unwrap();
+        let paire = session::ouvrir(&state.db, compte_id, None)
+            .await
+            .unwrap()
+            .en_paire(&state.jwt)
+            .unwrap();
         let en_tete = format!("Bearer {}", paire.jeton_acces);
         let patient = || async {
-            let mut parts = Request::builder().header(AUTHORIZATION, en_tete.as_str()).body(()).unwrap().into_parts().0;
-            PatientAuthentifie::from_request_parts(&mut parts, &state).await.unwrap()
+            let mut parts = Request::builder()
+                .header(AUTHORIZATION, en_tete.as_str())
+                .body(())
+                .unwrap()
+                .into_parts()
+                .0;
+            PatientAuthentifie::from_request_parts(&mut parts, &state)
+                .await
+                .unwrap()
         };
         let lire = |reponse: Response| async move {
-            serde_json::from_slice::<serde_json::Value>(&to_bytes(reponse.into_body(), usize::MAX).await.unwrap()).unwrap()
+            serde_json::from_slice::<serde_json::Value>(
+                &to_bytes(reponse.into_body(), usize::MAX).await.unwrap(),
+            )
+            .unwrap()
         };
 
         let corps: CreationRequete = serde_json::from_value(serde_json::json!({
@@ -536,10 +650,18 @@ mod tests {
         let reponse = creer(patient().await, State(state.clone()), JsonApi(corps)).await;
         assert_eq!(reponse.status(), StatusCode::CREATED);
         let json = lire(reponse).await;
-        assert_eq!((json["statut"].as_str(), json["email_a_verifier"].as_bool()), (Some("brouillon"), Some(true)));
+        assert_eq!(
+            (json["statut"].as_str(), json["email_a_verifier"].as_bool()),
+            (Some("brouillon"), Some(true))
+        );
         let structure_id: Uuid = serde_json::from_value(json["structure_id"].clone()).unwrap();
 
-        let reponse = soumettre(patient().await, State(state.clone()), CheminApi(structure_id)).await;
+        let reponse = soumettre(
+            patient().await,
+            State(state.clone()),
+            CheminApi(structure_id),
+        )
+        .await;
         assert_eq!(reponse.status(), StatusCode::FORBIDDEN);
         assert_eq!(lire(reponse).await["code"], "email_non_verifie");
 
@@ -552,6 +674,9 @@ mod tests {
 
         // Type inconnu : refusé à la lecture du corps, comme les autres
         // routes (`donnees_invalides`).
-        assert!(serde_json::from_value::<CreationRequete>(serde_json::json!({"type": "ecole"})).is_err());
+        assert!(
+            serde_json::from_value::<CreationRequete>(serde_json::json!({"type": "ecole"}))
+                .is_err()
+        );
     }
 }

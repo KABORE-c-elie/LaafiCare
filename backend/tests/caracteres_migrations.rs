@@ -42,7 +42,11 @@ fn aucune_migration_ne_contient_d_espace_ni_de_tiret_trompeur() {
         .filter(|chemin| chemin.extension().is_some_and(|e| e == "sql"))
         .collect();
     fichiers.sort();
-    assert!(!fichiers.is_empty(), "aucune migration trouvée dans {}", dossier.display());
+    assert!(
+        !fichiers.is_empty(),
+        "aucune migration trouvée dans {}",
+        dossier.display()
+    );
 
     let mut erreurs = Vec::new();
     for chemin in &fichiers {
@@ -56,7 +60,11 @@ fn aucune_migration_ne_contient_d_espace_ni_de_tiret_trompeur() {
             ));
         }
     }
-    assert!(erreurs.is_empty(), "caractères interdits :\n{}", erreurs.join("\n"));
+    assert!(
+        erreurs.is_empty(),
+        "caractères interdits :\n{}",
+        erreurs.join("\n")
+    );
 }
 
 /// Le détecteur lui-même : sans ce test, une erreur dans
@@ -71,6 +79,13 @@ fn le_detecteur_trouve_les_caracteres_interdits() {
     // Refusé : tout `\r`, en fin de ligne (CRLF) comme ailleurs.
     assert_eq!(
         caracteres_interdits("ligne 1\r\nx\u{a0}y\u{2011}z\n\u{3000}\nfin\r\u{2212}"),
-        vec![(1, '\r'), (2, '\u{a0}'), (2, '\u{2011}'), (3, '\u{3000}'), (4, '\r'), (4, '\u{2212}')]
+        vec![
+            (1, '\r'),
+            (2, '\u{a0}'),
+            (2, '\u{2011}'),
+            (3, '\u{3000}'),
+            (4, '\r'),
+            (4, '\u{2212}')
+        ]
     );
 }

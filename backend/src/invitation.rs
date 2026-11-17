@@ -81,7 +81,10 @@ impl RoleInvitation {
 
 fn roles_permis(type_structure: &str) -> &'static [RoleInvitation] {
     match type_structure {
-        "munaseb" => &[RoleInvitation::Responsable, RoleInvitation::AgentAssuranceMunaseb],
+        "munaseb" => &[
+            RoleInvitation::Responsable,
+            RoleInvitation::AgentAssuranceMunaseb,
+        ],
         "pharmacie" => &[RoleInvitation::Responsable, RoleInvitation::Pharmacien],
         _ => &[],
     }
@@ -117,7 +120,9 @@ pub enum ErreurInvitation {
     AutoInvitation,
     #[error("Trop d'invitations envoyées aujourd'hui pour cette structure. Réessayez plus tard.")]
     TropDeDemandes,
-    #[error("Trop d'invitations en attente pour cette structure : annulez-en ou attendez leurs réponses.")]
+    #[error(
+        "Trop d'invitations en attente pour cette structure : annulez-en ou attendez leurs réponses."
+    )]
     TropDInvitationsEnAttente,
     #[error("Une invitation est déjà en attente pour ce numéro et ce rôle.")]
     InvitationDejaEnAttente,
@@ -162,13 +167,17 @@ macro_rules! statut_lu {
 }
 
 /// Verrouille la structure (2ᵉ rang de l'ordre des verrous).
-async fn verrouiller_structure(conn: &mut PgConnection, structure_id: Uuid) -> Result<(String, String, String), ErreurInvitation> {
-    let ligne: Option<(String, String, String)> =
-        sqlx::query_as("SELECT statut, type_structure, nom FROM structure WHERE id = $1 FOR UPDATE")
-            .bind(structure_id)
-            .fetch_optional(&mut *conn)
-            .await
-            .map_err(|e| interne("verrou de la structure", &e))?;
+async fn verrouiller_structure(
+    conn: &mut PgConnection,
+    structure_id: Uuid,
+) -> Result<(String, String, String), ErreurInvitation> {
+    let ligne: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT statut, type_structure, nom FROM structure WHERE id = $1 FOR UPDATE",
+    )
+    .bind(structure_id)
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(|e| interne("verrou de la structure", &e))?;
     ligne.ok_or(ErreurInvitation::InvitationInconnue)
 }
 
@@ -200,7 +209,8 @@ pub async fn creer(
     telephone_saisi: &str,
     role: RoleInvitation,
 ) -> Result<InvitationCreee, ErreurInvitation> {
-    let numero = telephone::normaliser(telephone_saisi).map_err(|_| ErreurInvitation::TelephoneInvalide)?;
+    let numero =
+        telephone::normaliser(telephone_saisi).map_err(|_| ErreurInvitation::TelephoneInvalide)?;
     if !roles_permis(responsable.type_structure).contains(&role) {
         return Err(ErreurInvitation::RoleNonPermis);
     }
@@ -267,18 +277,26 @@ pub async fn creer(
     .fetch_one(&mut *tx)
     .await
     .map_err(|e| interne("création de l'invitation", &e))?;
-    tx.commit().await.map_err(|e| interne("validation de la transaction", &e))?;
+    tx.commit()
+        .await
+        .map_err(|e| interne("validation de la transaction", &e))?;
 
     // Après le commit : un échec d'envoi n'annule jamais l'invitation, qui
     // reste visible dans l'application (I7). Journaux sans le numéro.
     if sms_numero < SMS_INVITATION_PAR_NUMERO_24H {
-        if sms.envoyer(&numero, &texte_sms(&nom, role, &expire_texte)).is_err() {
+        if sms
+            .envoyer(&numero, &texte_sms(&nom, role, &expire_texte))
+            .is_err()
+        {
             tracing::error!("invitation : échec d'envoi du SMS");
         }
     } else {
         tracing::warn!("invitation : SMS non envoyé, limite par numéro atteinte");
     }
-    Ok(InvitationCreee { invitation_id, expire_le })
+    Ok(InvitationCreee {
+        invitation_id,
+        expire_le,
+    })
 }
 
 /// Une invitation, vue par la structure (I4) : jamais de nom avant
@@ -328,7 +346,11 @@ pub async fn lister_pour_structure(
 
 /// `POST /api/professionnels/invitations/{id}/annuler` (I15) : par tout
 /// responsable actif de la structure (l'invitant en est un).
-pub async fn annuler(pool: &PgPool, structure_id: Uuid, invitation_id: Uuid) -> Result<(), ErreurInvitation> {
+pub async fn annuler(
+    pool: &PgPool,
+    structure_id: Uuid,
+    invitation_id: Uuid,
+) -> Result<(), ErreurInvitation> {
     let mut tx = pool.begin().await.map_err(|e| interne("transaction", &e))?;
     verrouiller_structure(&mut tx, structure_id).await?;
     let ligne: Option<String> = sqlx::query_scalar(concat!(
@@ -347,7 +369,9 @@ pub async fn annuler(pool: &PgPool, structure_id: Uuid, invitation_id: Uuid) -> 
         .execute(&mut *tx)
         .await
         .map_err(|e| interne("annulation", &e))?;
-    tx.commit().await.map_err(|e| interne("validation de la transaction", &e))
+    tx.commit()
+        .await
+        .map_err(|e| interne("validation de la transaction", &e))
 }
 
 /// Statut lu sous verrou → erreur claire (I16).
@@ -356,7 +380,9 @@ fn controler_en_attente(statut: Option<String>) -> Result<(), ErreurInvitation> 
         None => Err(ErreurInvitation::InvitationInconnue),
         Some("en_attente") => Ok(()),
         Some("expiree") => Err(ErreurInvitation::InvitationExpiree),
-        Some(_) => Err(ErreurInvitation::TransitionInvalide { statut_actuel: statut.unwrap_or_default() }),
+        Some(_) => Err(ErreurInvitation::TransitionInvalide {
+            statut_actuel: statut.unwrap_or_default(),
+        }),
     }
 }
 
@@ -379,7 +405,10 @@ pub struct InvitationRecue {
 
 /// `GET /api/patients/invitations` : invitations au numéro vérifié du
 /// compte patient, en attente, non expirées, d'une structure validée.
-pub async fn lister_pour_patient(pool: &PgPool, patient_compte_id: Uuid) -> Result<Vec<InvitationRecue>, sqlx::Error> {
+pub async fn lister_pour_patient(
+    pool: &PgPool,
+    patient_compte_id: Uuid,
+) -> Result<Vec<InvitationRecue>, sqlx::Error> {
     sqlx::query_as(
         "SELECT i.id, s.nom AS structure_nom, s.type_structure AS structure_type, i.role, i.expire_le, \
                 ui.nom AS invitant_nom, ui.prenom AS invitant_prenom \
@@ -486,26 +515,37 @@ pub async fn accepter(
     .bind(&role)
     .fetch_one(&mut *tx)
     .await
-    .map_err(|e| match e.as_database_error().and_then(|d| d.constraint()) {
-        Some("affectation_une_active_par_role") => ErreurInvitation::AffectationDejaActive,
-        _ => interne("création de l'affectation", &e),
-    })?;
+    .map_err(
+        |e| match e.as_database_error().and_then(|d| d.constraint()) {
+            Some("affectation_une_active_par_role") => ErreurInvitation::AffectationDejaActive,
+            _ => interne("création de l'affectation", &e),
+        },
+    )?;
     sqlx::query("UPDATE invitation SET statut = 'acceptee', date_reponse = now(), affectation_id = $2 WHERE id = $1")
         .bind(invitation_id)
         .bind(affectation_id)
         .execute(&mut *tx)
         .await
         .map_err(|e| interne("acceptation", &e))?;
-    tx.commit().await.map_err(|e| interne("validation de la transaction", &e))?;
+    tx.commit()
+        .await
+        .map_err(|e| interne("validation de la transaction", &e))?;
 
     if let Some(emise) = &compte.verification {
         verification_email::envoyer_lien(email_sender, url_application_web, emise);
     }
-    Ok(Acceptation { affectation_id, email_a_verifier })
+    Ok(Acceptation {
+        affectation_id,
+        email_a_verifier,
+    })
 }
 
 /// `POST /api/patients/invitations/{id}/refuser` (I14).
-pub async fn refuser(pool: &PgPool, patient_compte_id: Uuid, invitation_id: Uuid) -> Result<(), ErreurInvitation> {
+pub async fn refuser(
+    pool: &PgPool,
+    patient_compte_id: Uuid,
+    invitation_id: Uuid,
+) -> Result<(), ErreurInvitation> {
     let structure_id = structure_de_l_invitation(pool, patient_compte_id, invitation_id).await?;
     let mut tx = pool.begin().await.map_err(|e| interne("transaction", &e))?;
     verrouiller_structure(&mut tx, structure_id).await?;
@@ -515,7 +555,9 @@ pub async fn refuser(pool: &PgPool, patient_compte_id: Uuid, invitation_id: Uuid
         .execute(&mut *tx)
         .await
         .map_err(|e| interne("refus", &e))?;
-    tx.commit().await.map_err(|e| interne("validation de la transaction", &e))
+    tx.commit()
+        .await
+        .map_err(|e| interne("validation de la transaction", &e))
 }
 
 #[cfg(test)]
@@ -537,7 +579,10 @@ mod tests {
 
     impl SmsSender for SmsRecus {
         fn envoyer(&self, telephone: &str, message: &str) -> Result<(), ErreurSms> {
-            self.0.lock().unwrap().push((telephone.to_string(), message.to_string()));
+            self.0
+                .lock()
+                .unwrap()
+                .push((telephone.to_string(), message.to_string()));
             Ok(())
         }
         fn simule(&self) -> bool {
@@ -561,7 +606,11 @@ mod tests {
         .await
         .unwrap();
         if email.is_some() {
-            sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1").bind(id).execute(pool).await.unwrap();
+            sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1")
+                .bind(id)
+                .execute(pool)
+                .await
+                .unwrap();
         }
         id
     }
@@ -581,7 +630,12 @@ mod tests {
     /// MUNASEB validée et son responsable (compte professionnel). Renvoie
     /// (structure, compte du responsable).
     async fn munaseb(pool: &PgPool, telephone_responsable: &str) -> (Uuid, Uuid) {
-        let u = identite(pool, telephone_responsable, Some(&format!("r{}@example.org", &telephone_responsable[4..]))).await;
+        let u = identite(
+            pool,
+            telephone_responsable,
+            Some(&format!("r{}@example.org", &telephone_responsable[4..])),
+        )
+        .await;
         let pro = compte(pool, u, "professionnel").await;
         let structure_id: Uuid = sqlx::query_scalar(
             "INSERT INTO structure (type_structure, nom, telephone, telephone_urgence, region, email, commune, province, \
@@ -603,7 +657,11 @@ mod tests {
     }
 
     fn responsable(structure_id: Uuid, compte_id: Uuid) -> Responsable<'static> {
-        Responsable { compte_id, structure_id, type_structure: "munaseb" }
+        Responsable {
+            compte_id,
+            structure_id,
+            type_structure: "munaseb",
+        }
     }
 
     /// Compte patient (sans compte professionnel) au numéro donné.
@@ -613,7 +671,10 @@ mod tests {
     }
 
     fn saisie_nouveau<'a>(email: &'a str) -> compte_professionnel::Saisie<'a> {
-        compte_professionnel::Saisie { email_professionnel: Some(email), mot_de_passe: PRO }
+        compte_professionnel::Saisie {
+            email_professionnel: Some(email),
+            mot_de_passe: PRO,
+        }
     }
 
     /// I4, I6 : même réponse et même SMS, que le numéro ait un compte ou
@@ -625,16 +686,45 @@ mod tests {
         let (structure_id, pro) = munaseb(&pool, "+22670200001").await;
         patient(&pool, "+22670200002").await;
 
-        let avec = creer(&pool, &sms, responsable(structure_id, pro), "70 20 00 02", RoleInvitation::AgentAssuranceMunaseb).await.unwrap();
-        let sans = creer(&pool, &sms, responsable(structure_id, pro), "70200003", RoleInvitation::AgentAssuranceMunaseb).await.unwrap();
+        let avec = creer(
+            &pool,
+            &sms,
+            responsable(structure_id, pro),
+            "70 20 00 02",
+            RoleInvitation::AgentAssuranceMunaseb,
+        )
+        .await
+        .unwrap();
+        let sans = creer(
+            &pool,
+            &sms,
+            responsable(structure_id, pro),
+            "70200003",
+            RoleInvitation::AgentAssuranceMunaseb,
+        )
+        .await
+        .unwrap();
         assert!(avec.expire_le > Utc::now() + chrono::Duration::days(6));
         assert!(sans.expire_le > Utc::now() + chrono::Duration::days(6));
 
         let recus = sms.0.lock().unwrap().clone();
-        assert_eq!(recus.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["+22670200002", "+22670200003"]);
+        assert_eq!(
+            recus.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(),
+            ["+22670200002", "+22670200003"]
+        );
         assert_eq!(recus[0].1, recus[1].1, "SMS identique");
-        assert!(recus[0].1.contains("\"MUNASEB (test)\" comme agent MUNASEB"), "{}", recus[0].1);
-        assert!(recus[0].1.ends_with("LaafiCare ne demande jamais votre mot de passe."));
+        assert!(
+            recus[0]
+                .1
+                .contains("\"MUNASEB (test)\" comme agent MUNASEB"),
+            "{}",
+            recus[0].1
+        );
+        assert!(
+            recus[0]
+                .1
+                .ends_with("LaafiCare ne demande jamais votre mot de passe.")
+        );
         assert!(!recus[0].1.contains("http"));
     }
 
@@ -670,7 +760,8 @@ mod tests {
         let creee = creer(&pool, &sms, r, "70200092", RoleInvitation::Pharmacien)
             .await
             .unwrap();
-        let texte = &sms.0.lock().unwrap()[0].1;
+        // Copie du texte : le verrou est rendu avant l'attente qui suit.
+        let texte = sms.0.lock().unwrap()[0].1.clone();
         assert!(texte.contains("comme pharmacien"), "{texte}");
         accepter(
             &pool,
@@ -701,29 +792,77 @@ mod tests {
         let (structure_id, pro) = munaseb(&pool, "+22670200011").await;
         let r = responsable(structure_id, pro);
 
-        assert!(matches!(creer(&pool, &sms, r, "12", RoleInvitation::Responsable).await, Err(ErreurInvitation::TelephoneInvalide)));
+        assert!(matches!(
+            creer(&pool, &sms, r, "12", RoleInvitation::Responsable).await,
+            Err(ErreurInvitation::TelephoneInvalide)
+        ));
         // I11 : son propre numéro.
         assert!(matches!(
-            creer(&pool, &sms, r, "70 20 00 11", RoleInvitation::AgentAssuranceMunaseb).await,
+            creer(
+                &pool,
+                &sms,
+                r,
+                "70 20 00 11",
+                RoleInvitation::AgentAssuranceMunaseb
+            )
+            .await,
             Err(ErreurInvitation::AutoInvitation)
         ));
         // I3 : rôle non permis pour ce type de structure.
-        let clinique = Responsable { type_structure: "clinique", ..r };
+        let clinique = Responsable {
+            type_structure: "clinique",
+            ..r
+        };
         assert!(matches!(
-            creer(&pool, &sms, clinique, "70200012", RoleInvitation::AgentAssuranceMunaseb).await,
+            creer(
+                &pool,
+                &sms,
+                clinique,
+                "70200012",
+                RoleInvitation::AgentAssuranceMunaseb
+            )
+            .await,
             Err(ErreurInvitation::RoleNonPermis)
         ));
         // I10 : doublon ; un autre rôle reste possible.
-        creer(&pool, &sms, r, "70200012", RoleInvitation::AgentAssuranceMunaseb).await.unwrap();
+        creer(
+            &pool,
+            &sms,
+            r,
+            "70200012",
+            RoleInvitation::AgentAssuranceMunaseb,
+        )
+        .await
+        .unwrap();
         assert!(matches!(
-            creer(&pool, &sms, r, "70200012", RoleInvitation::AgentAssuranceMunaseb).await,
+            creer(
+                &pool,
+                &sms,
+                r,
+                "70200012",
+                RoleInvitation::AgentAssuranceMunaseb
+            )
+            .await,
             Err(ErreurInvitation::InvitationDejaEnAttente)
         ));
-        creer(&pool, &sms, r, "70200012", RoleInvitation::Responsable).await.unwrap();
+        creer(&pool, &sms, r, "70200012", RoleInvitation::Responsable)
+            .await
+            .unwrap();
         // Structure qui n'est plus validée.
-        sqlx::query("UPDATE structure SET statut = 'suspendue' WHERE id = $1").bind(structure_id).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE structure SET statut = 'suspendue' WHERE id = $1")
+            .bind(structure_id)
+            .execute(&pool)
+            .await
+            .unwrap();
         assert!(matches!(
-            creer(&pool, &sms, r, "70200013", RoleInvitation::AgentAssuranceMunaseb).await,
+            creer(
+                &pool,
+                &sms,
+                r,
+                "70200013",
+                RoleInvitation::AgentAssuranceMunaseb
+            )
+            .await,
             Err(ErreurInvitation::StructureNonValidee)
         ));
     }
@@ -737,7 +876,10 @@ mod tests {
         let r = responsable(structure_id, pro);
 
         // c : 3 SMS par numéro en 24 h, puis la même réponse sans SMS.
-        for role in [RoleInvitation::AgentAssuranceMunaseb, RoleInvitation::Responsable] {
+        for role in [
+            RoleInvitation::AgentAssuranceMunaseb,
+            RoleInvitation::Responsable,
+        ] {
             creer(&pool, &sms, r, "70200099", role).await.unwrap();
         }
         let (autre, autre_pro) = (structure_id, pro);
@@ -745,21 +887,50 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        creer(&pool, &sms, responsable(autre, autre_pro), "70200099", RoleInvitation::AgentAssuranceMunaseb).await.unwrap();
+        creer(
+            &pool,
+            &sms,
+            responsable(autre, autre_pro),
+            "70200099",
+            RoleInvitation::AgentAssuranceMunaseb,
+        )
+        .await
+        .unwrap();
         assert_eq!(sms.nombre(), 3);
         sqlx::query("UPDATE invitation SET statut = 'annulee', date_reponse = now() WHERE telephone = '+22670200099'")
             .execute(&pool)
             .await
             .unwrap();
-        creer(&pool, &sms, r, "70200099", RoleInvitation::Responsable).await.unwrap();
-        assert_eq!(sms.nombre(), 3, "4ᵉ invitation au même numéro : enregistrée, sans SMS");
+        creer(&pool, &sms, r, "70200099", RoleInvitation::Responsable)
+            .await
+            .unwrap();
+        assert_eq!(
+            sms.nombre(),
+            3,
+            "4ᵉ invitation au même numéro : enregistrée, sans SMS"
+        );
 
         // a : 20 créations par structure en 24 h (4 déjà faites).
         for i in 0..16 {
-            creer(&pool, &sms, r, &format!("7021{i:04}"), RoleInvitation::AgentAssuranceMunaseb).await.unwrap();
+            creer(
+                &pool,
+                &sms,
+                r,
+                &format!("7021{i:04}"),
+                RoleInvitation::AgentAssuranceMunaseb,
+            )
+            .await
+            .unwrap();
         }
         assert!(matches!(
-            creer(&pool, &sms, r, "70219999", RoleInvitation::AgentAssuranceMunaseb).await,
+            creer(
+                &pool,
+                &sms,
+                r,
+                "70219999",
+                RoleInvitation::AgentAssuranceMunaseb
+            )
+            .await,
             Err(ErreurInvitation::TropDeDemandes)
         ));
 
@@ -772,7 +943,14 @@ mod tests {
             .unwrap();
         let mut n = 0;
         let resultat = loop {
-            let r2 = creer(&pool, &sms, r, &format!("7022{n:04}"), RoleInvitation::AgentAssuranceMunaseb).await;
+            let r2 = creer(
+                &pool,
+                &sms,
+                r,
+                &format!("7022{n:04}"),
+                RoleInvitation::AgentAssuranceMunaseb,
+            )
+            .await;
             if r2.is_err() {
                 break r2;
             }
@@ -783,7 +961,10 @@ mod tests {
                 .await
                 .unwrap();
         };
-        assert!(matches!(resultat, Err(ErreurInvitation::TropDInvitationsEnAttente)), "{resultat:?}");
+        assert!(
+            matches!(resultat, Err(ErreurInvitation::TropDInvitationsEnAttente)),
+            "{resultat:?}"
+        );
         let en_attente: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM invitation WHERE structure_id = $1 AND statut = 'en_attente' AND expire_le > now()",
         )
@@ -805,28 +986,60 @@ mod tests {
         let emails = EmailsRecus::default();
         let (structure_id, pro) = munaseb(&pool, "+22670200031").await;
         let invite = patient(&pool, "+22670200032").await;
-        let creee = creer(&pool, &sms, responsable(structure_id, pro), "70200032", RoleInvitation::AgentAssuranceMunaseb).await.unwrap();
+        let creee = creer(
+            &pool,
+            &sms,
+            responsable(structure_id, pro),
+            "70200032",
+            RoleInvitation::AgentAssuranceMunaseb,
+        )
+        .await
+        .unwrap();
 
         // La liste de la structure ne nomme personne avant l'acceptation.
-        let avant = lister_pour_structure(&pool, structure_id, None, 50).await.unwrap();
-        assert_eq!((avant[0].statut.as_str(), avant[0].accepte_par_nom.as_deref()), ("en_attente", None));
+        let avant = lister_pour_structure(&pool, structure_id, None, 50)
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                avant[0].statut.as_str(),
+                avant[0].accepte_par_nom.as_deref()
+            ),
+            ("en_attente", None)
+        );
 
         let recues = lister_pour_patient(&pool, invite).await.unwrap();
         assert_eq!(recues.len(), 1);
         assert_eq!(
-            (recues[0].structure_nom.as_str(), recues[0].role.as_str(), recues[0].invitant_nom.as_deref()),
-            ("MUNASEB (test)", "agent_assurance_munaseb", Some("SAWADOGO"))
+            (
+                recues[0].structure_nom.as_str(),
+                recues[0].role.as_str(),
+                recues[0].invitant_nom.as_deref()
+            ),
+            (
+                "MUNASEB (test)",
+                "agent_assurance_munaseb",
+                Some("SAWADOGO")
+            )
         );
 
-        let acceptation = accepter(&pool, &emails, "http://localhost:4200", invite, creee.invitation_id, &saisie_nouveau("agent.invite@example.org"))
-            .await
-            .unwrap();
+        let acceptation = accepter(
+            &pool,
+            &emails,
+            "http://localhost:4200",
+            invite,
+            creee.invitation_id,
+            &saisie_nouveau("agent.invite@example.org"),
+        )
+        .await
+        .unwrap();
         assert!(acceptation.email_a_verifier);
-        let compte_pro: Uuid = sqlx::query_scalar("SELECT compte_id FROM affectation WHERE id = $1")
-            .bind(acceptation.affectation_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let compte_pro: Uuid =
+            sqlx::query_scalar("SELECT compte_id FROM affectation WHERE id = $1")
+                .bind(acceptation.affectation_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         let liste = affectation::lister(&pool, compte_pro).await.unwrap();
         assert_eq!(liste[0].role, "agent_assurance_munaseb");
 
@@ -836,18 +1049,32 @@ mod tests {
         // possible : l'agent pourra activer son affectation.
         let jwt = crate::jwt::JwtService::new(&"a".repeat(32));
         assert!(matches!(
-            crate::auth_professionnel::se_connecter(&pool, &jwt, "agent.invite@example.org", PRO).await,
+            crate::auth_professionnel::se_connecter(&pool, &jwt, "agent.invite@example.org", PRO)
+                .await,
             Err(crate::auth_professionnel::ErreurAuthProfessionnel::EmailNonVerifie)
         ));
         let (_, corps) = emails.0.lock().unwrap()[0].clone();
-        assert!(verification_email::verifier(&pool, &jeton_du_lien(&corps)).await.unwrap());
+        assert!(
+            verification_email::verifier(&pool, &jeton_du_lien(&corps))
+                .await
+                .unwrap()
+        );
         assert!(matches!(
-            crate::auth_professionnel::se_connecter(&pool, &jwt, "agent.invite@example.org", PRO).await,
+            crate::auth_professionnel::se_connecter(&pool, &jwt, "agent.invite@example.org", PRO)
+                .await,
             Ok(crate::auth_professionnel::ConnexionProfessionnelle::Complete(_))
         ));
 
-        let apres = lister_pour_structure(&pool, structure_id, None, 50).await.unwrap();
-        assert_eq!((apres[0].statut.as_str(), apres[0].accepte_par_nom.as_deref()), ("acceptee", Some("SAWADOGO")));
+        let apres = lister_pour_structure(&pool, structure_id, None, 50)
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                apres[0].statut.as_str(),
+                apres[0].accepte_par_nom.as_deref()
+            ),
+            ("acceptee", Some("SAWADOGO"))
+        );
         assert!(lister_pour_patient(&pool, invite).await.unwrap().is_empty());
     }
 
@@ -864,28 +1091,81 @@ mod tests {
         let pro_invite = compte(&pool, u, "professionnel").await;
         let r = responsable(structure_id, pro);
 
-        let premiere = creer(&pool, &sms, r, "70200042", RoleInvitation::AgentAssuranceMunaseb).await.unwrap();
-        let mauvais = compte_professionnel::Saisie { email_professionnel: None, mot_de_passe: "Mauvais#2026" };
+        let premiere = creer(
+            &pool,
+            &sms,
+            r,
+            "70200042",
+            RoleInvitation::AgentAssuranceMunaseb,
+        )
+        .await
+        .unwrap();
+        let mauvais = compte_professionnel::Saisie {
+            email_professionnel: None,
+            mot_de_passe: "Mauvais#2026",
+        };
         assert!(matches!(
-            accepter(&pool, &emails, "http://localhost:4200", invite, premiere.invitation_id, &mauvais).await,
-            Err(ErreurInvitation::ComptePro(ErreurComptePro::MotDePasseIncorrect))
+            accepter(
+                &pool,
+                &emails,
+                "http://localhost:4200",
+                invite,
+                premiere.invitation_id,
+                &mauvais
+            )
+            .await,
+            Err(ErreurInvitation::ComptePro(
+                ErreurComptePro::MotDePasseIncorrect
+            ))
         ));
-        let tentatives: i16 = sqlx::query_scalar("SELECT tentatives_echouees FROM compte WHERE id = $1")
-            .bind(pro_invite)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let tentatives: i16 =
+            sqlx::query_scalar("SELECT tentatives_echouees FROM compte WHERE id = $1")
+                .bind(pro_invite)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(tentatives, 1, "compté dans le verrouillage");
 
-        let bon = compte_professionnel::Saisie { email_professionnel: None, mot_de_passe: PRO };
-        let acceptation = accepter(&pool, &emails, "http://localhost:4200", invite, premiere.invitation_id, &bon).await.unwrap();
+        let bon = compte_professionnel::Saisie {
+            email_professionnel: None,
+            mot_de_passe: PRO,
+        };
+        let acceptation = accepter(
+            &pool,
+            &emails,
+            "http://localhost:4200",
+            invite,
+            premiere.invitation_id,
+            &bon,
+        )
+        .await
+        .unwrap();
         assert!(!acceptation.email_a_verifier);
-        assert!(emails.0.lock().unwrap().is_empty(), "aucun lien pour un compte existant");
+        assert!(
+            emails.0.lock().unwrap().is_empty(),
+            "aucun lien pour un compte existant"
+        );
 
         // Même rôle, déjà actif : refusé, l'invitation reste en attente.
-        let seconde = creer(&pool, &sms, r, "70200042", RoleInvitation::AgentAssuranceMunaseb).await.unwrap();
+        let seconde = creer(
+            &pool,
+            &sms,
+            r,
+            "70200042",
+            RoleInvitation::AgentAssuranceMunaseb,
+        )
+        .await
+        .unwrap();
         assert!(matches!(
-            accepter(&pool, &emails, "http://localhost:4200", invite, seconde.invitation_id, &bon).await,
+            accepter(
+                &pool,
+                &emails,
+                "http://localhost:4200",
+                invite,
+                seconde.invitation_id,
+                &bon
+            )
+            .await,
             Err(ErreurInvitation::AffectationDejaActive)
         ));
     }
@@ -900,30 +1180,74 @@ mod tests {
         let (structure_id, pro) = munaseb(&pool, "+22670200051").await;
         let invite = patient(&pool, "+22670200052").await;
         let intrus = patient(&pool, "+22670200053").await;
-        let creee = creer(&pool, &sms, responsable(structure_id, pro), "70200052", RoleInvitation::AgentAssuranceMunaseb).await.unwrap();
+        let creee = creer(
+            &pool,
+            &sms,
+            responsable(structure_id, pro),
+            "70200052",
+            RoleInvitation::AgentAssuranceMunaseb,
+        )
+        .await
+        .unwrap();
 
         assert!(lister_pour_patient(&pool, intrus).await.unwrap().is_empty());
         assert!(matches!(
-            accepter(&pool, &emails, "http://localhost:4200", intrus, creee.invitation_id, &saisie_nouveau("intrus@example.org")).await,
+            accepter(
+                &pool,
+                &emails,
+                "http://localhost:4200",
+                intrus,
+                creee.invitation_id,
+                &saisie_nouveau("intrus@example.org")
+            )
+            .await,
             Err(ErreurInvitation::InvitationInconnue)
         ));
-        assert!(matches!(refuser(&pool, intrus, creee.invitation_id).await, Err(ErreurInvitation::InvitationInconnue)));
-
-        sqlx::query("UPDATE structure SET statut = 'suspendue' WHERE id = $1").bind(structure_id).execute(&pool).await.unwrap();
         assert!(matches!(
-            accepter(&pool, &emails, "http://localhost:4200", invite, creee.invitation_id, &saisie_nouveau("invite@example.org")).await,
-            Err(ErreurInvitation::StructureNonValidee)
+            refuser(&pool, intrus, creee.invitation_id).await,
+            Err(ErreurInvitation::InvitationInconnue)
         ));
-        let comptes_pro: i64 = sqlx::query_scalar("SELECT count(*) FROM compte WHERE type_compte = 'professionnel'")
-            .fetch_one(&pool)
+
+        sqlx::query("UPDATE structure SET statut = 'suspendue' WHERE id = $1")
+            .bind(structure_id)
+            .execute(&pool)
             .await
             .unwrap();
+        assert!(matches!(
+            accepter(
+                &pool,
+                &emails,
+                "http://localhost:4200",
+                invite,
+                creee.invitation_id,
+                &saisie_nouveau("invite@example.org")
+            )
+            .await,
+            Err(ErreurInvitation::StructureNonValidee)
+        ));
+        let comptes_pro: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM compte WHERE type_compte = 'professionnel'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(comptes_pro, 1, "rien n'est créé pour l'invité");
 
-        sqlx::query("UPDATE structure SET statut = 'validee' WHERE id = $1").bind(structure_id).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE structure SET statut = 'validee' WHERE id = $1")
+            .bind(structure_id)
+            .execute(&pool)
+            .await
+            .unwrap();
         refuser(&pool, invite, creee.invitation_id).await.unwrap();
-        let liste = lister_pour_structure(&pool, structure_id, None, 50).await.unwrap();
-        assert_eq!((liste[0].statut.as_str(), liste[0].accepte_par_nom.as_deref()), ("refusee", None));
+        let liste = lister_pour_structure(&pool, structure_id, None, 50)
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                liste[0].statut.as_str(),
+                liste[0].accepte_par_nom.as_deref()
+            ),
+            ("refusee", None)
+        );
     }
 
     /// I15, I16 : annulation ; une invitation expirée se lit `expiree` et
@@ -937,30 +1261,74 @@ mod tests {
         let invite = patient(&pool, "+22670200062").await;
         let r = responsable(structure_id, pro);
 
-        let a_annuler = creer(&pool, &sms, r, "70200062", RoleInvitation::AgentAssuranceMunaseb).await.unwrap();
-        annuler(&pool, structure_id, a_annuler.invitation_id).await.unwrap();
+        let a_annuler = creer(
+            &pool,
+            &sms,
+            r,
+            "70200062",
+            RoleInvitation::AgentAssuranceMunaseb,
+        )
+        .await
+        .unwrap();
+        annuler(&pool, structure_id, a_annuler.invitation_id)
+            .await
+            .unwrap();
         assert!(matches!(
             annuler(&pool, structure_id, a_annuler.invitation_id).await,
             Err(ErreurInvitation::TransitionInvalide { ref statut_actuel }) if statut_actuel == "annulee"
         ));
         // L'invitation d'une autre structure n'existe pas pour celle-ci.
-        assert!(matches!(annuler(&pool, Uuid::nil(), a_annuler.invitation_id).await, Err(ErreurInvitation::InvitationInconnue)));
+        assert!(matches!(
+            annuler(&pool, Uuid::nil(), a_annuler.invitation_id).await,
+            Err(ErreurInvitation::InvitationInconnue)
+        ));
 
-        let a_expirer = creer(&pool, &sms, r, "70200062", RoleInvitation::AgentAssuranceMunaseb).await.unwrap();
+        let a_expirer = creer(
+            &pool,
+            &sms,
+            r,
+            "70200062",
+            RoleInvitation::AgentAssuranceMunaseb,
+        )
+        .await
+        .unwrap();
         sqlx::query("UPDATE invitation SET date_creation = now() - interval '8 days', expire_le = now() - interval '1 day' WHERE id = $1")
             .bind(a_expirer.invitation_id)
             .execute(&pool)
             .await
             .unwrap();
-        let liste = lister_pour_structure(&pool, structure_id, None, 50).await.unwrap();
-        assert_eq!(liste.iter().find(|i| i.id == a_expirer.invitation_id).unwrap().statut, "expiree");
+        let liste = lister_pour_structure(&pool, structure_id, None, 50)
+            .await
+            .unwrap();
+        assert_eq!(
+            liste
+                .iter()
+                .find(|i| i.id == a_expirer.invitation_id)
+                .unwrap()
+                .statut,
+            "expiree"
+        );
         assert!(lister_pour_patient(&pool, invite).await.unwrap().is_empty());
         assert!(matches!(
-            accepter(&pool, &emails, "http://localhost:4200", invite, a_expirer.invitation_id, &saisie_nouveau("expire@example.org")).await,
+            accepter(
+                &pool,
+                &emails,
+                "http://localhost:4200",
+                invite,
+                a_expirer.invitation_id,
+                &saisie_nouveau("expire@example.org")
+            )
+            .await,
             Err(ErreurInvitation::InvitationExpiree)
         ));
-        assert!(matches!(refuser(&pool, invite, a_expirer.invitation_id).await, Err(ErreurInvitation::InvitationExpiree)));
-        assert!(matches!(annuler(&pool, structure_id, a_expirer.invitation_id).await, Err(ErreurInvitation::InvitationExpiree)));
+        assert!(matches!(
+            refuser(&pool, invite, a_expirer.invitation_id).await,
+            Err(ErreurInvitation::InvitationExpiree)
+        ));
+        assert!(matches!(
+            annuler(&pool, structure_id, a_expirer.invitation_id).await,
+            Err(ErreurInvitation::InvitationExpiree)
+        ));
     }
 
     /// Ordre des verrous : une acceptation et une annulation lancées en même
@@ -975,22 +1343,40 @@ mod tests {
         let invite = patient(&pool, "+22670200072").await;
 
         for essai in 0..5 {
-            let creee = creer(&pool, &sms, responsable(structure_id, pro), "70200072", RoleInvitation::AgentAssuranceMunaseb)
-                .await
-                .unwrap();
+            let creee = creer(
+                &pool,
+                &sms,
+                responsable(structure_id, pro),
+                "70200072",
+                RoleInvitation::AgentAssuranceMunaseb,
+            )
+            .await
+            .unwrap();
             let (p1, p2) = (pool.clone(), pool.clone());
             let id = creee.invitation_id;
             let email = format!("simultane{essai}@example.org");
             let acceptation = tokio::spawn(async move {
                 let emails = EmailsRecus::default();
-                accepter(&p1, &emails, "http://localhost:4200", invite, id, &saisie_nouveau(&email)).await.map(|_| ())
+                accepter(
+                    &p1,
+                    &emails,
+                    "http://localhost:4200",
+                    invite,
+                    id,
+                    &saisie_nouveau(&email),
+                )
+                .await
+                .map(|_| ())
             });
             let annulation = tokio::spawn(async move { annuler(&p2, structure_id, id).await });
             let (a, b) = (acceptation.await.unwrap(), annulation.await.unwrap());
             assert!(a.is_ok() != b.is_ok(), "une seule réussit : {a:?} / {b:?}");
             for perdant in [&a, &b] {
                 if let Err(e) = perdant {
-                    assert!(matches!(e, ErreurInvitation::TransitionInvalide { .. }), "pas d'interblocage : {e:?}");
+                    assert!(
+                        matches!(e, ErreurInvitation::TransitionInvalide { .. }),
+                        "pas d'interblocage : {e:?}"
+                    );
                 }
             }
             // Si l'acceptation a gagné, l'affectation existe : on la clôt
@@ -1011,13 +1397,20 @@ mod tests {
 
     #[test]
     fn texte_du_sms() {
-        let texte = texte_sms("MUNASEB", RoleInvitation::AgentAssuranceMunaseb, "28/10/2026");
+        let texte = texte_sms(
+            "MUNASEB",
+            RoleInvitation::AgentAssuranceMunaseb,
+            "28/10/2026",
+        );
         assert_eq!(
             texte,
             "LaafiCare : invitation à rejoindre \"MUNASEB\" comme agent MUNASEB. Ouvrez ou installez LaafiCare avec ce \
              numéro pour répondre avant le 28/10/2026. LaafiCare ne demande jamais votre mot de passe."
         );
-        assert!(texte_sms("X", RoleInvitation::Responsable, "28/10/2026").contains("comme responsable."));
+        assert!(
+            texte_sms("X", RoleInvitation::Responsable, "28/10/2026")
+                .contains("comme responsable.")
+        );
     }
 
     /// Alphabet GSM 7 bits par défaut, 3GPP TS 23.038 §6.2.1 (128
@@ -1051,14 +1444,22 @@ mod tests {
     /// Parties d'un SMS GSM 7 bits : 160 septets seul, 153 par partie au-delà
     /// (TS 23.040 §9.2.3.24.1).
     fn parties(septets: usize) -> usize {
-        if septets <= 160 { 1 } else { septets.div_ceil(153) }
+        if septets <= 160 {
+            1
+        } else {
+            septets.div_ceil(153)
+        }
     }
 
     #[test]
     fn table_gsm7_complete() {
         // 128 positions moins l'échappement 0x1B.
         assert_eq!(GSM7_BASE.chars().count(), 127);
-        assert!(septets_gsm7("ê").is_none() && septets_gsm7("\u{ab}").is_none() && septets_gsm7("\u{e7}").is_none());
+        assert!(
+            septets_gsm7("ê").is_none()
+                && septets_gsm7("\u{ab}").is_none()
+                && septets_gsm7("\u{e7}").is_none()
+        );
     }
 
     /// Texte fixe (sans le nom) entièrement GSM 7 bits, pour les deux rôles ;
@@ -1080,6 +1481,13 @@ mod tests {
             assert!(parties(complet) <= 2);
         }
         // Un nom hors GSM 7 bits : UCS-2 (accepté par le porteur).
-        assert!(septets_gsm7(&texte_sms("Sant\u{e9} et Bien-\u{ea}tre", RoleInvitation::Responsable, "28/10/2026")).is_none());
+        assert!(
+            septets_gsm7(&texte_sms(
+                "Sant\u{e9} et Bien-\u{ea}tre",
+                RoleInvitation::Responsable,
+                "28/10/2026"
+            ))
+            .is_none()
+        );
     }
 }

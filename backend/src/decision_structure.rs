@@ -152,11 +152,15 @@ pub struct DetailStructure {
 }
 
 /// Détail d'une structure, `None` si elle n'existe pas.
-pub async fn detail(pool: &PgPool, structure_id: Uuid) -> Result<Option<DetailStructure>, sqlx::Error> {
-    let Some(resume) = sqlx::query_as::<_, ResumeStructure>(concat!(select_resume!(), " WHERE s.id = $1"))
-        .bind(structure_id)
-        .fetch_optional(pool)
-        .await?
+pub async fn detail(
+    pool: &PgPool,
+    structure_id: Uuid,
+) -> Result<Option<DetailStructure>, sqlx::Error> {
+    let Some(resume) =
+        sqlx::query_as::<_, ResumeStructure>(concat!(select_resume!(), " WHERE s.id = $1"))
+            .bind(structure_id)
+            .fetch_optional(pool)
+            .await?
     else {
         return Ok(None);
     };
@@ -216,7 +220,9 @@ pub async fn detail(pool: &PgPool, structure_id: Uuid) -> Result<Option<DetailSt
     .fetch_all(pool)
     .await?;
 
-    let (autres_demandes_munaseb_en_attente, munaseb_deja_validee) = if resume.type_structure == "munaseb" {
+    let (autres_demandes_munaseb_en_attente, munaseb_deja_validee) = if resume.type_structure
+        == "munaseb"
+    {
         let autres: Vec<Uuid> = sqlx::query_scalar(
             "SELECT id FROM structure WHERE type_structure = 'munaseb' AND statut = 'en_attente' AND id <> $1 ORDER BY id",
         )
@@ -271,7 +277,9 @@ pub enum ErreurDecision {
     #[error("Cette demande ne peut pas recevoir de décision dans son état actuel.")]
     TransitionInvalide { statut_actuel: String },
     /// B : la validation exige un email de responsable vérifié.
-    #[error("L'email professionnel du responsable n'est pas vérifié : la demande ne peut pas être validée.")]
+    #[error(
+        "L'email professionnel du responsable n'est pas vérifié : la demande ne peut pas être validée."
+    )]
     EmailResponsableNonVerifie,
     #[error("La date de fin de licence doit être postérieure à aujourd'hui.")]
     LicenceInvalide,
@@ -341,9 +349,16 @@ async fn verrouiller_et_controler(
     }
 
     if statut != "en_attente" {
-        return Err(ErreurDecision::TransitionInvalide { statut_actuel: statut });
+        return Err(ErreurDecision::TransitionInvalide {
+            statut_actuel: statut,
+        });
     }
-    Ok(StructureVerrouillee { statut, type_structure, email_responsable, email_responsable_verifie })
+    Ok(StructureVerrouillee {
+        statut,
+        type_structure,
+        email_responsable,
+        email_responsable_verifie,
+    })
 }
 
 /// Email au texte minimal (V9) : ni le résultat, ni le motif, ni le nom de
@@ -372,10 +387,14 @@ pub async fn valider(
     licence_expire_le: Option<NaiveDate>,
 ) -> Result<(), ErreurDecision> {
     let mut tx = pool.begin().await.map_err(|e| interne("transaction", &e))?;
-    let structure = verrouiller_et_controler(&mut tx, administrateur_compte_id, structure_id).await?;
+    let structure =
+        verrouiller_et_controler(&mut tx, administrateur_compte_id, structure_id).await?;
 
     // B : l'email de V9 part toujours vers une adresse vérifiée.
-    let adresse = match (&structure.email_responsable, structure.email_responsable_verifie) {
+    let adresse = match (
+        &structure.email_responsable,
+        structure.email_responsable_verifie,
+    ) {
         (Some(adresse), true) => adresse.clone(),
         _ => return Err(ErreurDecision::EmailResponsableNonVerifie),
     };
@@ -383,11 +402,12 @@ pub async fn valider(
     // V4 : date du Burkina (doc PostgreSQL 18 §9.9.4, D9), jamais
     // `current_date`.
     if let Some(date) = licence_expire_le {
-        let future: bool = sqlx::query_scalar("SELECT $1 > (now() AT TIME ZONE 'Africa/Ouagadougou')::date")
-            .bind(date)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| interne("contrôle de la licence", &e))?;
+        let future: bool =
+            sqlx::query_scalar("SELECT $1 > (now() AT TIME ZONE 'Africa/Ouagadougou')::date")
+                .bind(date)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| interne("contrôle de la licence", &e))?;
         if !future {
             return Err(ErreurDecision::LicenceInvalide);
         }
@@ -427,10 +447,12 @@ pub async fn valider(
         .bind(licence_expire_le)
         .execute(&mut *tx)
         .await
-        .map_err(|e| match e.as_database_error().and_then(|d| d.constraint()) {
-            Some("structure_une_seule_munaseb_validee") => ErreurDecision::MunasebDejaValidee,
-            _ => interne("validation de la structure", &e),
-        })?;
+        .map_err(
+            |e| match e.as_database_error().and_then(|d| d.constraint()) {
+                Some("structure_une_seule_munaseb_validee") => ErreurDecision::MunasebDejaValidee,
+                _ => interne("validation de la structure", &e),
+            },
+        )?;
 
     // V8 : registre des autorisations validées, rempli dans la même
     // transaction à partir des pièces actives (0012) ; aucune pour la
@@ -443,12 +465,16 @@ pub async fn valider(
     .bind(structure_id)
     .execute(&mut *tx)
     .await
-    .map_err(|e| match e.as_database_error().and_then(|d| d.constraint()) {
-        Some("autorisation_validee_pkey") => ErreurDecision::AutorisationDejaValidee,
-        _ => interne("registre des autorisations", &e),
-    })?;
+    .map_err(
+        |e| match e.as_database_error().and_then(|d| d.constraint()) {
+            Some("autorisation_validee_pkey") => ErreurDecision::AutorisationDejaValidee,
+            _ => interne("registre des autorisations", &e),
+        },
+    )?;
 
-    tx.commit().await.map_err(|e| interne("validation de la transaction", &e))?;
+    tx.commit()
+        .await
+        .map_err(|e| interne("validation de la transaction", &e))?;
     prevenir_responsable(email_sender, &adresse);
     Ok(())
 }
@@ -472,7 +498,8 @@ pub async fn refuser(
     }
 
     let mut tx = pool.begin().await.map_err(|e| interne("transaction", &e))?;
-    let structure = verrouiller_et_controler(&mut tx, administrateur_compte_id, structure_id).await?;
+    let structure =
+        verrouiller_et_controler(&mut tx, administrateur_compte_id, structure_id).await?;
     debug_assert_eq!(structure.statut, "en_attente");
 
     sqlx::query(
@@ -490,9 +517,14 @@ pub async fn refuser(
         .execute(&mut *tx)
         .await
         .map_err(|e| interne("refus de la structure", &e))?;
-    tx.commit().await.map_err(|e| interne("validation de la transaction", &e))?;
+    tx.commit()
+        .await
+        .map_err(|e| interne("validation de la transaction", &e))?;
 
-    if let (Some(adresse), true) = (&structure.email_responsable, structure.email_responsable_verifie) {
+    if let (Some(adresse), true) = (
+        &structure.email_responsable,
+        structure.email_responsable_verifie,
+    ) {
         prevenir_responsable(email_sender, adresse);
     }
     Ok(())
@@ -508,7 +540,13 @@ mod tests {
     // Base temporaire par test ; données fictives.
 
     /// Identité avec un compte du type demandé ; email vérifié si `verifie`.
-    async fn compte(pool: &PgPool, telephone: &str, email: &str, type_compte: &str, verifie: bool) -> Uuid {
+    async fn compte(
+        pool: &PgPool,
+        telephone: &str,
+        email: &str,
+        type_compte: &str,
+        verifie: bool,
+    ) -> Uuid {
         let utilisateur_id: Uuid = sqlx::query_scalar(
             "INSERT INTO utilisateur (nom, prenom, telephone, email) VALUES ('OUEDRAOGO', 'Awa', $1, $2) RETURNING id",
         )
@@ -535,7 +573,12 @@ mod tests {
     /// Structure en attente, avec son responsable (créateur et affectation),
     /// comme après une création et une soumission. Renvoie (structure,
     /// compte professionnel du responsable).
-    async fn demande(pool: &PgPool, telephone: &str, email: &str, type_structure: &str) -> (Uuid, Uuid) {
+    async fn demande(
+        pool: &PgPool,
+        telephone: &str,
+        email: &str,
+        type_structure: &str,
+    ) -> (Uuid, Uuid) {
         let pro = compte(pool, telephone, email, "professionnel", true).await;
         let structure_id: Uuid = sqlx::query_scalar(
             "INSERT INTO structure (type_structure, nom, telephone, telephone_urgence, region, email, commune, province, \
@@ -558,11 +601,22 @@ mod tests {
     }
 
     async fn administrateur(pool: &PgPool, telephone: &str) -> Uuid {
-        compte(pool, telephone, &format!("adm{telephone}@example.org").replace('+', ""), "administrateur_laaficare", true).await
+        compte(
+            pool,
+            telephone,
+            &format!("adm{telephone}@example.org").replace('+', ""),
+            "administrateur_laaficare",
+            true,
+        )
+        .await
     }
 
     async fn statut(pool: &PgPool, structure_id: Uuid) -> String {
-        sqlx::query_scalar("SELECT statut FROM structure WHERE id = $1").bind(structure_id).fetch_one(pool).await.unwrap()
+        sqlx::query_scalar("SELECT statut FROM structure WHERE id = $1")
+            .bind(structure_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
     }
 
     async fn decisions(pool: &PgPool, structure_id: Uuid) -> i64 {
@@ -580,16 +634,20 @@ mod tests {
     async fn validation_sans_licence_et_affectation_exercable(pool: PgPool) {
         let emails = EmailsRecus::default();
         let adm = administrateur(&pool, "+22670180001").await;
-        let (structure_id, pro) = demande(&pool, "+22670180002", "resp.valide@example.org", "munaseb").await;
+        let (structure_id, pro) =
+            demande(&pool, "+22670180002", "resp.valide@example.org", "munaseb").await;
 
-        valider(&pool, &emails, adm, structure_id, None).await.unwrap();
-        assert_eq!(statut(&pool, structure_id).await, "validee");
-        assert_eq!(decisions(&pool, structure_id).await, 1);
-        let licence: Option<NaiveDate> = sqlx::query_scalar("SELECT licence_expire_le FROM structure WHERE id = $1")
-            .bind(structure_id)
-            .fetch_one(&pool)
+        valider(&pool, &emails, adm, structure_id, None)
             .await
             .unwrap();
+        assert_eq!(statut(&pool, structure_id).await, "validee");
+        assert_eq!(decisions(&pool, structure_id).await, 1);
+        let licence: Option<NaiveDate> =
+            sqlx::query_scalar("SELECT licence_expire_le FROM structure WHERE id = $1")
+                .bind(structure_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(licence, None, "licence sans fin");
 
         let envoyes = emails.0.lock().unwrap().clone();
@@ -598,7 +656,10 @@ mod tests {
         assert!(!envoyes[0].1.contains("Structure fictive"), "texte minimal");
 
         let liste = affectation::lister(&pool, pro).await.unwrap();
-        assert!(liste[0].exercable, "affectation exerçable après la validation");
+        assert!(
+            liste[0].exercable,
+            "affectation exerçable après la validation"
+        );
     }
 
     #[sqlx::test]
@@ -606,14 +667,24 @@ mod tests {
     async fn validation_avec_licence_et_licence_passee_refusee(pool: PgPool) {
         let emails = EmailsRecus::default();
         let adm = administrateur(&pool, "+22670180003").await;
-        let (structure_id, _) = demande(&pool, "+22670180004", "resp.licence@example.org", "munaseb").await;
+        let (structure_id, _) =
+            demande(&pool, "+22670180004", "resp.licence@example.org", "munaseb").await;
 
         let hier = (Utc::now() - chrono::Duration::days(1)).date_naive();
-        assert!(matches!(valider(&pool, &emails, adm, structure_id, Some(hier)).await, Err(ErreurDecision::LicenceInvalide)));
-        assert_eq!(statut(&pool, structure_id).await, "en_attente", "rien n'est écrit");
+        assert!(matches!(
+            valider(&pool, &emails, adm, structure_id, Some(hier)).await,
+            Err(ErreurDecision::LicenceInvalide)
+        ));
+        assert_eq!(
+            statut(&pool, structure_id).await,
+            "en_attente",
+            "rien n'est écrit"
+        );
 
         let dans_un_an = (Utc::now() + chrono::Duration::days(365)).date_naive();
-        valider(&pool, &emails, adm, structure_id, Some(dans_un_an)).await.unwrap();
+        valider(&pool, &emails, adm, structure_id, Some(dans_un_an))
+            .await
+            .unwrap();
         let (sur_structure, sur_decision): (Option<NaiveDate>, Option<NaiveDate>) = sqlx::query_as(
             "SELECT s.licence_expire_le, d.licence_expire_le FROM structure s JOIN decision_structure d ON d.structure_id = s.id \
              WHERE s.id = $1",
@@ -622,7 +693,10 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!((sur_structure, sur_decision), (Some(dans_un_an), Some(dans_un_an)));
+        assert_eq!(
+            (sur_structure, sur_decision),
+            (Some(dans_un_an), Some(dans_un_an))
+        );
     }
 
     /// Refus : motif enregistré, visible dans `mes-demandes` du responsable.
@@ -631,22 +705,38 @@ mod tests {
     async fn refus_avec_motif_visible_par_le_responsable(pool: PgPool) {
         let emails = EmailsRecus::default();
         let adm = administrateur(&pool, "+22670180005").await;
-        let (structure_id, pro) = demande(&pool, "+22670180006", "resp.refus@example.org", "munaseb").await;
+        let (structure_id, pro) =
+            demande(&pool, "+22670180006", "resp.refus@example.org", "munaseb").await;
 
-        assert!(matches!(refuser(&pool, &emails, adm, structure_id, "  ").await, Err(ErreurDecision::MotifVide)));
+        assert!(matches!(
+            refuser(&pool, &emails, adm, structure_id, "  ").await,
+            Err(ErreurDecision::MotifVide)
+        ));
         let trop_long = "x".repeat(MOTIF_LONGUEUR_MAX + 1);
-        assert!(matches!(refuser(&pool, &emails, adm, structure_id, &trop_long).await, Err(ErreurDecision::MotifTropLong)));
+        assert!(matches!(
+            refuser(&pool, &emails, adm, structure_id, &trop_long).await,
+            Err(ErreurDecision::MotifTropLong)
+        ));
 
-        refuser(&pool, &emails, adm, structure_id, " Informations incomplètes (fictif) ").await.unwrap();
+        refuser(
+            &pool,
+            &emails,
+            adm,
+            structure_id,
+            " Informations incomplètes (fictif) ",
+        )
+        .await
+        .unwrap();
         assert_eq!(statut(&pool, structure_id).await, "refusee");
         assert_eq!(emails.0.lock().unwrap().len(), 1);
 
         // Le compte patient du responsable lit son motif (`mes-demandes`).
-        let utilisateur_id: Uuid = sqlx::query_scalar("SELECT utilisateur_id FROM compte WHERE id = $1")
-            .bind(pro)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let utilisateur_id: Uuid =
+            sqlx::query_scalar("SELECT utilisateur_id FROM compte WHERE id = $1")
+                .bind(pro)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         let patient: Uuid = sqlx::query_scalar(
             "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'patient', 'x') RETURNING id",
         )
@@ -655,7 +745,10 @@ mod tests {
         .await
         .unwrap();
         let suivi = structure::mes_demandes(&pool, patient).await.unwrap();
-        assert_eq!(suivi.demandes[0].motif_refus.as_deref(), Some("Informations incomplètes (fictif)"));
+        assert_eq!(
+            suivi.demandes[0].motif_refus.as_deref(),
+            Some("Informations incomplètes (fictif)")
+        );
     }
 
     /// V5 : seulement depuis `en_attente` ; structure inconnue.
@@ -664,16 +757,29 @@ mod tests {
     async fn transitions_refusees(pool: PgPool) {
         let emails = EmailsRecus::default();
         let adm = administrateur(&pool, "+22670180007").await;
-        let (structure_id, _) = demande(&pool, "+22670180008", "resp.transition@example.org", "munaseb").await;
-        valider(&pool, &emails, adm, structure_id, None).await.unwrap();
+        let (structure_id, _) = demande(
+            &pool,
+            "+22670180008",
+            "resp.transition@example.org",
+            "munaseb",
+        )
+        .await;
+        valider(&pool, &emails, adm, structure_id, None)
+            .await
+            .unwrap();
 
         for resultat in [
             valider(&pool, &emails, adm, structure_id, None).await,
             refuser(&pool, &emails, adm, structure_id, "Motif fictif").await,
         ] {
-            assert!(matches!(resultat, Err(ErreurDecision::TransitionInvalide { ref statut_actuel }) if statut_actuel == "validee"));
+            assert!(
+                matches!(resultat, Err(ErreurDecision::TransitionInvalide { ref statut_actuel }) if statut_actuel == "validee")
+            );
         }
-        assert!(matches!(valider(&pool, &emails, adm, Uuid::nil(), None).await, Err(ErreurDecision::StructureInconnue)));
+        assert!(matches!(
+            valider(&pool, &emails, adm, Uuid::nil(), None).await,
+            Err(ErreurDecision::StructureInconnue)
+        ));
         assert_eq!(decisions(&pool, structure_id).await, 1);
     }
 
@@ -684,18 +790,47 @@ mod tests {
     async fn seconde_munaseb_refusee(pool: PgPool) {
         let emails = EmailsRecus::default();
         let adm = administrateur(&pool, "+22670180009").await;
-        let (premiere, _) = demande(&pool, "+22670180010", "resp.premiere@example.org", "munaseb").await;
-        let (seconde, _) = demande(&pool, "+22670180011", "resp.seconde@example.org", "munaseb").await;
+        let (premiere, _) = demande(
+            &pool,
+            "+22670180010",
+            "resp.premiere@example.org",
+            "munaseb",
+        )
+        .await;
+        let (seconde, _) =
+            demande(&pool, "+22670180011", "resp.seconde@example.org", "munaseb").await;
 
         let detail_seconde = detail(&pool, seconde).await.unwrap().unwrap();
-        assert_eq!(detail_seconde.autres_demandes_munaseb_en_attente, [premiere], "avertissement M6");
+        assert_eq!(
+            detail_seconde.autres_demandes_munaseb_en_attente,
+            [premiere],
+            "avertissement M6"
+        );
 
         valider(&pool, &emails, adm, premiere, None).await.unwrap();
-        assert!(matches!(valider(&pool, &emails, adm, seconde, None).await, Err(ErreurDecision::MunasebDejaValidee)));
+        assert!(matches!(
+            valider(&pool, &emails, adm, seconde, None).await,
+            Err(ErreurDecision::MunasebDejaValidee)
+        ));
         assert_eq!(statut(&pool, seconde).await, "en_attente");
-        assert_eq!(detail(&pool, seconde).await.unwrap().unwrap().munaseb_deja_validee, Some(premiere));
+        assert_eq!(
+            detail(&pool, seconde)
+                .await
+                .unwrap()
+                .unwrap()
+                .munaseb_deja_validee,
+            Some(premiere)
+        );
         // Le refus de la seconde reste possible.
-        refuser(&pool, &emails, adm, seconde, "Une MUNASEB existe déjà (fictif)").await.unwrap();
+        refuser(
+            &pool,
+            &emails,
+            adm,
+            seconde,
+            "Une MUNASEB existe déjà (fictif)",
+        )
+        .await
+        .unwrap();
     }
 
     /// A : un administrateur ne décide jamais sur sa propre structure.
@@ -703,13 +838,15 @@ mod tests {
     #[ignore]
     async fn pas_de_decision_sur_sa_propre_structure(pool: PgPool) {
         let emails = EmailsRecus::default();
-        let (structure_id, pro) = demande(&pool, "+22670180012", "resp.admin@example.org", "munaseb").await;
+        let (structure_id, pro) =
+            demande(&pool, "+22670180012", "resp.admin@example.org", "munaseb").await;
         // Compte administrateur de la même identité que le responsable.
-        let utilisateur_id: Uuid = sqlx::query_scalar("SELECT utilisateur_id FROM compte WHERE id = $1")
-            .bind(pro)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let utilisateur_id: Uuid =
+            sqlx::query_scalar("SELECT utilisateur_id FROM compte WHERE id = $1")
+                .bind(pro)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         let adm: Uuid = sqlx::query_scalar(
             "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'administrateur_laaficare', 'x') \
              RETURNING id",
@@ -719,13 +856,27 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(matches!(valider(&pool, &emails, adm, structure_id, None).await, Err(ErreurDecision::PropreStructure)));
-        assert!(matches!(refuser(&pool, &emails, adm, structure_id, "Motif").await, Err(ErreurDecision::PropreStructure)));
-        assert_eq!((statut(&pool, structure_id).await, decisions(&pool, structure_id).await), ("en_attente".into(), 0));
+        assert!(matches!(
+            valider(&pool, &emails, adm, structure_id, None).await,
+            Err(ErreurDecision::PropreStructure)
+        ));
+        assert!(matches!(
+            refuser(&pool, &emails, adm, structure_id, "Motif").await,
+            Err(ErreurDecision::PropreStructure)
+        ));
+        assert_eq!(
+            (
+                statut(&pool, structure_id).await,
+                decisions(&pool, structure_id).await
+            ),
+            ("en_attente".into(), 0)
+        );
 
         // Un autre administrateur peut décider.
         let autre = administrateur(&pool, "+22670180013").await;
-        valider(&pool, &emails, autre, structure_id, None).await.unwrap();
+        valider(&pool, &emails, autre, structure_id, None)
+            .await
+            .unwrap();
     }
 
     /// B : validation refusée si l'email du responsable n'est plus vérifié ;
@@ -735,7 +886,13 @@ mod tests {
     async fn email_du_responsable_non_verifie(pool: PgPool) {
         let emails = EmailsRecus::default();
         let adm = administrateur(&pool, "+22670180014").await;
-        let (structure_id, pro) = demande(&pool, "+22670180015", "resp.nonverifie@example.org", "munaseb").await;
+        let (structure_id, pro) = demande(
+            &pool,
+            "+22670180015",
+            "resp.nonverifie@example.org",
+            "munaseb",
+        )
+        .await;
         sqlx::query("UPDATE utilisateur SET email_verifie_le = NULL FROM compte c WHERE c.id = $1 AND utilisateur.id = c.utilisateur_id")
             .bind(pro)
             .execute(&pool)
@@ -747,9 +904,20 @@ mod tests {
             Err(ErreurDecision::EmailResponsableNonVerifie)
         ));
         assert_eq!(statut(&pool, structure_id).await, "en_attente");
-        refuser(&pool, &emails, adm, structure_id, "Email non vérifié (fictif)").await.unwrap();
+        refuser(
+            &pool,
+            &emails,
+            adm,
+            structure_id,
+            "Email non vérifié (fictif)",
+        )
+        .await
+        .unwrap();
         assert_eq!(statut(&pool, structure_id).await, "refusee");
-        assert!(emails.0.lock().unwrap().is_empty(), "aucun email vers une adresse non vérifiée");
+        assert!(
+            emails.0.lock().unwrap().is_empty(),
+            "aucun email vers une adresse non vérifiée"
+        );
     }
 
     /// V2 : filtre et curseur.
@@ -758,17 +926,33 @@ mod tests {
     async fn liste_filtre_et_curseur(pool: PgPool) {
         let mut ids = Vec::new();
         for i in 0..3 {
-            let (id, _) = demande(&pool, &format!("+2267018002{i}"), &format!("resp.liste{i}@example.org"), "clinique").await;
+            let (id, _) = demande(
+                &pool,
+                &format!("+2267018002{i}"),
+                &format!("resp.liste{i}@example.org"),
+                "clinique",
+            )
+            .await;
             ids.push(id);
         }
         let adm = administrateur(&pool, "+22670180030").await;
-        valider(&pool, &EmailsRecus::default(), adm, ids[0], None).await.unwrap();
+        valider(&pool, &EmailsRecus::default(), adm, ids[0], None)
+            .await
+            .unwrap();
 
-        let en_attente = lister(&pool, Some(StatutStructure::EnAttente), None, 50).await.unwrap();
-        assert_eq!(en_attente.iter().map(|s| s.id).collect::<Vec<_>>(), ids[1..]);
+        let en_attente = lister(&pool, Some(StatutStructure::EnAttente), None, 50)
+            .await
+            .unwrap();
+        assert_eq!(
+            en_attente.iter().map(|s| s.id).collect::<Vec<_>>(),
+            ids[1..]
+        );
         let page1 = lister(&pool, None, None, 2).await.unwrap();
         let page2 = lister(&pool, None, Some(page1[1].id), 2).await.unwrap();
-        assert_eq!(page1.iter().chain(&page2).map(|s| s.id).collect::<Vec<_>>(), ids);
+        assert_eq!(
+            page1.iter().chain(&page2).map(|s| s.id).collect::<Vec<_>>(),
+            ids
+        );
         assert_eq!(page1[0].responsable_nom.as_deref(), Some("OUEDRAOGO"));
     }
 
@@ -786,8 +970,11 @@ mod tests {
             }
         }
         let adm = administrateur(&pool, "+22670180031").await;
-        let (structure_id, _) = demande(&pool, "+22670180032", "resp.echec@example.org", "munaseb").await;
-        valider(&pool, &EnEchec, adm, structure_id, None).await.unwrap();
+        let (structure_id, _) =
+            demande(&pool, "+22670180032", "resp.echec@example.org", "munaseb").await;
+        valider(&pool, &EnEchec, adm, structure_id, None)
+            .await
+            .unwrap();
         assert_eq!(statut(&pool, structure_id).await, "validee");
     }
 }

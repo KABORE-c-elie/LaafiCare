@@ -86,14 +86,22 @@ impl ErreurApi {
 /// Réponse d'erreur renvoyée par tous les handlers.
 pub type ReponseErreur = (StatusCode, Json<ErreurApi>);
 
-pub fn reponse_erreur(statut: StatusCode, code: &'static str, erreur: impl Into<String>) -> ReponseErreur {
+pub fn reponse_erreur(
+    statut: StatusCode,
+    code: &'static str,
+    erreur: impl Into<String>,
+) -> ReponseErreur {
     (statut, Json(ErreurApi::simple(code, erreur)))
 }
 
 /// Erreur interne : le détail va dans les logs, jamais dans la réponse.
 pub fn reponse_erreur_interne(contexte: &'static str, detail: &str) -> ReponseErreur {
     tracing::error!(detail, contexte, "erreur interne");
-    reponse_erreur(StatusCode::INTERNAL_SERVER_ERROR, "erreur_interne", "erreur interne")
+    reponse_erreur(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "erreur_interne",
+        "erreur interne",
+    )
 }
 
 /// Corps JSON lu comme `axum::Json<T>`, avec les rejets au format de l'API.
@@ -127,7 +135,10 @@ fn convertir_rejet_json(rejet: JsonRejection) -> ReponseErreur {
     // posée par le porteur) : il peut reprendre une valeur saisie par
     // erreur, y compris une donnée de santé. Le code HTTP reste celui
     // choisi par axum (`status()`).
-    (rejet.status(), Json(ErreurApi::simple(code, rejet.body_text())))
+    (
+        rejet.status(),
+        Json(ErreurApi::simple(code, rejet.body_text())),
+    )
 }
 
 /// Paramètre d'URL lu comme `axum::extract::Path<T>`, avec les rejets au
@@ -148,7 +159,10 @@ where
             // body_text() dans la réponse, jamais dans les logs (même
             // condition que pour JsonApi). Une seule famille de code :
             // l'énumération est non exhaustive, un nouveau cas tombe ici.
-            Err(rejet) => Err((rejet.status(), Json(ErreurApi::simple("chemin_invalide", rejet.body_text())))),
+            Err(rejet) => Err((
+                rejet.status(),
+                Json(ErreurApi::simple("chemin_invalide", rejet.body_text())),
+            )),
         }
     }
 }
@@ -168,7 +182,10 @@ where
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         match Query::<T>::from_request_parts(parts, state).await {
             Ok(Query(valeur)) => Ok(RequeteApi(valeur)),
-            Err(rejet) => Err((rejet.status(), Json(ErreurApi::simple("parametre_invalide", rejet.body_text())))),
+            Err(rejet) => Err((
+                rejet.status(),
+                Json(ErreurApi::simple("parametre_invalide", rejet.body_text())),
+            )),
         }
     }
 }
@@ -188,7 +205,10 @@ mod tests {
         type_acte: TypeActeMunaseb,
     }
 
-    async fn lire(content_type: Option<&str>, corps: &'static str) -> Result<JsonApi<Corps>, ReponseErreur> {
+    async fn lire(
+        content_type: Option<&str>,
+        corps: &'static str,
+    ) -> Result<JsonApi<Corps>, ReponseErreur> {
         let mut requete = axum::http::Request::builder().method("POST").uri("/");
         if let Some(valeur) = content_type {
             requete = requete.header(CONTENT_TYPE, valeur);
@@ -202,22 +222,35 @@ mod tests {
 
     #[tokio::test]
     async fn corps_valide() {
-        assert!(lire(Some("application/json"), r#"{"type_acte":"pharmacie"}"#).await.is_ok());
+        assert!(
+            lire(Some("application/json"), r#"{"type_acte":"pharmacie"}"#)
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
     async fn json_mal_forme() {
-        let erreur = lire(Some("application/json"), r#"{"type_acte":"#).await.err().unwrap();
+        let erreur = lire(Some("application/json"), r#"{"type_acte":"#)
+            .await
+            .err()
+            .unwrap();
         assert_eq!(code(&erreur), "json_invalide");
         assert!(erreur.0.is_client_error());
     }
 
     #[tokio::test]
     async fn type_d_acte_inconnu() {
-        let erreur = lire(Some("application/json"), r#"{"type_acte":"dentaire"}"#).await.err().unwrap();
+        let erreur = lire(Some("application/json"), r#"{"type_acte":"dentaire"}"#)
+            .await
+            .err()
+            .unwrap();
         assert_eq!(erreur.0, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(code(&erreur), "donnees_invalides");
-        assert!(erreur.1.0.erreur.contains("dentaire"), "le message aide à corriger la requête");
+        assert!(
+            erreur.1.0.erreur.contains("dentaire"),
+            "le message aide à corriger la requête"
+        );
     }
 
     #[tokio::test]
@@ -228,7 +261,10 @@ mod tests {
 
     #[tokio::test]
     async fn sans_content_type_json() {
-        let erreur = lire(None, r#"{"type_acte":"pharmacie"}"#).await.err().unwrap();
+        let erreur = lire(None, r#"{"type_acte":"pharmacie"}"#)
+            .await
+            .err()
+            .unwrap();
         assert_eq!(code(&erreur), "content_type_invalide");
         assert!(erreur.0.is_client_error());
     }
@@ -240,7 +276,12 @@ mod tests {
     }
 
     async fn lire_requete(uri: &str) -> Result<RequeteApi<Filtre>, ReponseErreur> {
-        let mut parts = axum::http::Request::builder().uri(uri).body(()).unwrap().into_parts().0;
+        let mut parts = axum::http::Request::builder()
+            .uri(uri)
+            .body(())
+            .unwrap()
+            .into_parts()
+            .0;
         RequeteApi::<Filtre>::from_request_parts(&mut parts, &()).await
     }
 
@@ -259,7 +300,8 @@ mod tests {
         struct AvecId {
             id: sqlx::types::Uuid,
         }
-        let lu: AvecId = serde_json::from_str(r#"{"id":"00000000-0000-7000-8000-000000000001"}"#).unwrap();
+        let lu: AvecId =
+            serde_json::from_str(r#"{"id":"00000000-0000-7000-8000-000000000001"}"#).unwrap();
         assert_eq!(lu.id.to_string(), "00000000-0000-7000-8000-000000000001");
         assert!(serde_json::from_str::<AvecId>(r#"{"id":"pas-un-uuid"}"#).is_err());
     }

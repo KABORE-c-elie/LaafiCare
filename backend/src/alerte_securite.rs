@@ -128,13 +128,22 @@ async fn sorte_de_compte(pool: &PgPool, compte_id: Uuid) -> Result<&'static str,
         .bind(compte_id)
         .fetch_one(pool)
         .await?;
-    Ok(if type_compte == "administrateur_laaficare" { "administrateur" } else { "professionnel" })
+    Ok(if type_compte == "administrateur_laaficare" {
+        "administrateur"
+    } else {
+        "professionnel"
+    })
 }
 
 /// Sujet et corps de l'email (textes D7 et R17, validés par le porteur).
 /// `sorte` : « professionnel » ou « administrateur » (mot de passe
 /// seulement).
-fn message(evenement: Evenement, quand: &str, contact: &str, sorte: &str) -> (&'static str, String) {
+fn message(
+    evenement: Evenement,
+    quand: &str,
+    contact: &str,
+    sorte: &str,
+) -> (&'static str, String) {
     match evenement {
         Evenement::CompteBloque => (
             "LaafiCare : compte bloqué",
@@ -208,7 +217,10 @@ pub async fn prevenir(
     evenement: Evenement,
 ) -> bool {
     let ligne: Result<Option<(Option<String>, String)>, sqlx::Error> =
-        sqlx::query_as(requete(evenement)).bind(compte_id).fetch_optional(pool).await;
+        sqlx::query_as(requete(evenement))
+            .bind(compte_id)
+            .fetch_optional(pool)
+            .await;
     let (adresse, quand) = match ligne {
         Ok(Some((Some(adresse), quand))) => (adresse, quand),
         Ok(Some((None, _))) => return false,
@@ -255,11 +267,19 @@ mod tests {
             Evenement::CompteBloque,
             Evenement::CompteReactive,
         ] {
-            let (sujet, corps) = message(evenement, "21/10/2026 à 10:42", "securite@example.org", "professionnel");
+            let (sujet, corps) = message(
+                evenement,
+                "21/10/2026 à 10:42",
+                "securite@example.org",
+                "professionnel",
+            );
             // Pas de tiret cadratin (décision du porteur, 2026-10-21).
             assert!(!sujet.contains('\u{2014}') && !corps.contains('\u{2014}'));
             assert!(sujet.starts_with("LaafiCare : "));
-            assert!(corps.contains("le 21/10/2026 à 10:42 (heure du Burkina Faso)"), "{corps}");
+            assert!(
+                corps.contains("le 21/10/2026 à 10:42 (heure du Burkina Faso)"),
+                "{corps}"
+            );
             assert!(corps.contains("securite@example.org"), "{corps}");
             assert!(!corps.contains("http") && !corps.contains("://"), "{corps}");
         }

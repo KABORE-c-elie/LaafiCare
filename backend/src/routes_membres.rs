@@ -29,7 +29,8 @@ fn reponse_erreur_desactivation(erreur: ErreurDesactivation) -> Response {
         }
         ErreurDesactivation::DernierResponsable => (StatusCode::CONFLICT, "dernier_responsable"),
         ErreurDesactivation::Interne(etape) => {
-            return reponse_erreur_interne("désactivation d'une affectation", etape).into_response();
+            return reponse_erreur_interne("désactivation d'une affectation", etape)
+                .into_response();
         }
     };
     reponse_erreur(statut, code, erreur.to_string()).into_response()
@@ -42,7 +43,10 @@ struct Membres {
 
 /// `GET /api/professionnels/membres` : 200 `{membres: [...]}` (DS7) ; 403
 /// `acces_refuse` pour un rôle autre que `responsable`.
-pub async fn lister(professionnel: ProfessionnelEnExercice, State(state): State<AppState>) -> Response {
+pub async fn lister(
+    professionnel: ProfessionnelEnExercice,
+    State(state): State<AppState>,
+) -> Response {
     let responsable = match responsable(&professionnel) {
         Ok(r) => r,
         Err(reponse) => return reponse,
@@ -87,10 +91,24 @@ mod tests {
     #[test]
     fn codes_des_erreurs_de_desactivation() {
         for (erreur, statut) in [
-            (ErreurDesactivation::AffectationInconnue, StatusCode::NOT_FOUND),
-            (ErreurDesactivation::TransitionInvalide { statut_actuel: "desactivee".into() }, StatusCode::CONFLICT),
-            (ErreurDesactivation::DernierResponsable, StatusCode::CONFLICT),
-            (ErreurDesactivation::Interne("test"), StatusCode::INTERNAL_SERVER_ERROR),
+            (
+                ErreurDesactivation::AffectationInconnue,
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                ErreurDesactivation::TransitionInvalide {
+                    statut_actuel: "desactivee".into(),
+                },
+                StatusCode::CONFLICT,
+            ),
+            (
+                ErreurDesactivation::DernierResponsable,
+                StatusCode::CONFLICT,
+            ),
+            (
+                ErreurDesactivation::Interne("test"),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
         ] {
             assert_eq!(reponse_erreur_desactivation(erreur).status(), statut);
         }

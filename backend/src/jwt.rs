@@ -174,7 +174,11 @@ impl JwtService {
             iat: maintenant,
             exp: maintenant + sorte.duree_secs(),
         };
-        Ok(encode(&Header::new(Algorithm::HS256), &claims, &self.encoding_key)?)
+        Ok(encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &self.encoding_key,
+        )?)
     }
 
     /// N'accepte que la sorte attendue. Signature, expiration et audience
@@ -191,7 +195,8 @@ impl JwtService {
 /// `aff` présent seulement pour `ProfessionnelEnExercice`, `sid` présent
 /// seulement pour les quatre sortes complètes.
 fn contenu_coherent(sorte: SorteJeton, affectation: Option<Uuid>, session: Option<Uuid>) -> bool {
-    sorte.porte_une_affectation() == affectation.is_some() && sorte.porte_une_session() == session.is_some()
+    sorte.porte_une_affectation() == affectation.is_some()
+        && sorte.porte_une_session() == session.is_some()
 }
 
 fn validation(sorte: SorteJeton) -> Validation {
@@ -231,12 +236,25 @@ mod tests {
     }
 
     fn emettre(service: &JwtService, sorte: SorteJeton, compte: Uuid) -> String {
-        service.emettre(sorte, compte, 0, affectation_pour(sorte), session_pour(sorte)).unwrap()
+        service
+            .emettre(
+                sorte,
+                compte,
+                0,
+                affectation_pour(sorte),
+                session_pour(sorte),
+            )
+            .unwrap()
     }
 
     /// Jeton signé avec la bonne clé mais au contenu choisi par le test.
     fn signer(service: &JwtService, contenu: serde_json::Value) -> String {
-        encode(&Header::new(Algorithm::HS256), &contenu, &service.encoding_key).unwrap()
+        encode(
+            &Header::new(Algorithm::HS256),
+            &contenu,
+            &service.encoding_key,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -244,7 +262,15 @@ mod tests {
         let service = service();
         let compte = Uuid::from_u128(1);
         for sorte in SorteJeton::TOUTES {
-            let jeton = service.emettre(sorte, compte, 3, affectation_pour(sorte), session_pour(sorte)).unwrap();
+            let jeton = service
+                .emettre(
+                    sorte,
+                    compte,
+                    3,
+                    affectation_pour(sorte),
+                    session_pour(sorte),
+                )
+                .unwrap();
             let claims = service.verifier(&jeton, sorte).unwrap();
             assert_eq!(claims.sub, compte);
             assert_eq!(claims.ver, 3);
@@ -277,7 +303,10 @@ mod tests {
             let jeton = emettre(&service, emise, Uuid::from_u128(1));
             for attendue in SorteJeton::TOUTES {
                 if attendue != emise {
-                    assert!(service.verifier(&jeton, attendue).is_err(), "{emise:?} accepté comme {attendue:?}");
+                    assert!(
+                        service.verifier(&jeton, attendue).is_err(),
+                        "{emise:?} accepté comme {attendue:?}"
+                    );
                 }
             }
         }
@@ -296,14 +325,22 @@ mod tests {
         assert!(service.verifier(&jeton, sorte).is_ok());
 
         let claims = service.verifier(&jeton, sorte).unwrap();
-        let hs512 = encode(&Header::new(Algorithm::HS512), &claims, &service.encoding_key).unwrap();
+        let hs512 = encode(
+            &Header::new(Algorithm::HS512),
+            &claims,
+            &service.encoding_key,
+        )
+        .unwrap();
         assert!(service.verifier(&hs512, sorte).is_err(), "HS512");
 
         // En-têtes base64url de {"alg":"RS256","typ":"JWT"} et
         // {"alg":"none","typ":"JWT"}, recollés au contenu et à la signature
         // d'un jeton HS256 valable.
         let (_, reste) = jeton.split_once('.').unwrap();
-        for entete in ["eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9", "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0"] {
+        for entete in [
+            "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9",
+            "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0",
+        ] {
             let falsifie = format!("{entete}.{reste}");
             assert!(service.verifier(&falsifie, sorte).is_err(), "{entete}");
         }
@@ -367,7 +404,13 @@ mod tests {
             Err(ErreurJeton::ContenuIncoherent)
         ));
         assert!(matches!(
-            service.emettre(SorteJeton::Patient, compte, 0, Some(Uuid::from_u128(7)), sid),
+            service.emettre(
+                SorteJeton::Patient,
+                compte,
+                0,
+                Some(Uuid::from_u128(7)),
+                sid
+            ),
             Err(ErreurJeton::ContenuIncoherent)
         ));
 
@@ -381,7 +424,11 @@ mod tests {
                 "ver": 0, "sid": sid, "iat": maintenant, "exp": maintenant + 60
             }),
         );
-        assert!(service.verifier(&sans_aff, SorteJeton::ProfessionnelEnExercice).is_err());
+        assert!(
+            service
+                .verifier(&sans_aff, SorteJeton::ProfessionnelEnExercice)
+                .is_err()
+        );
         let avec_aff = signer(
             &service,
             json!({
@@ -389,7 +436,11 @@ mod tests {
                 "ver": 0, "aff": Uuid::from_u128(7), "sid": sid, "iat": maintenant, "exp": maintenant + 60
             }),
         );
-        assert!(service.verifier(&avec_aff, SorteJeton::ProfessionnelSansAffectation).is_err());
+        assert!(
+            service
+                .verifier(&avec_aff, SorteJeton::ProfessionnelSansAffectation)
+                .is_err()
+        );
     }
 
     /// Décision W1 : les sortes complètes exigent `sid`, les autres le
@@ -401,9 +452,16 @@ mod tests {
         let maintenant = jsonwebtoken::get_current_timestamp();
         for sorte in SorteJeton::TOUTES {
             let aff = affectation_pour(sorte);
-            let mauvaise_session = if sorte.porte_une_session() { None } else { Some(Uuid::from_u128(9)) };
+            let mauvaise_session = if sorte.porte_une_session() {
+                None
+            } else {
+                Some(Uuid::from_u128(9))
+            };
             assert!(
-                matches!(service.emettre(sorte, compte, 0, aff, mauvaise_session), Err(ErreurJeton::ContenuIncoherent)),
+                matches!(
+                    service.emettre(sorte, compte, 0, aff, mauvaise_session),
+                    Err(ErreurJeton::ContenuIncoherent)
+                ),
                 "{sorte:?}"
             );
             let jeton = signer(
@@ -427,6 +485,10 @@ mod tests {
 
     #[test]
     fn refuse_un_jeton_illisible() {
-        assert!(service().verifier("pas-un-jeton-valide", SorteJeton::Patient).is_err());
+        assert!(
+            service()
+                .verifier("pas-un-jeton-valide", SorteJeton::Patient)
+                .is_err()
+        );
     }
 }

@@ -87,7 +87,10 @@ pub fn normaliser(saisie: &str) -> Result<String, TelephoneInvalide> {
         chiffres.to_string()
     } else if chiffres.len() == LONGUEUR_NUMERO_NATIONAL {
         format!("{INDICATIF_BURKINA}{chiffres}")
-    } else if let Some(reste) = chiffres.strip_prefix("00").filter(|r| r.starts_with(INDICATIF_BURKINA)) {
+    } else if let Some(reste) = chiffres
+        .strip_prefix("00")
+        .filter(|r| r.starts_with(INDICATIF_BURKINA))
+    {
         reste.to_string()
     } else if chiffres.starts_with(INDICATIF_BURKINA) {
         chiffres.to_string()
@@ -101,7 +104,11 @@ pub fn normaliser(saisie: &str) -> Result<String, TelephoneInvalide> {
         (7..=15).contains(&international.len()) && !international.starts_with('0')
     };
 
-    if valide { Ok(format!("+{international}")) } else { Err(TelephoneInvalide) }
+    if valide {
+        Ok(format!("+{international}"))
+    } else {
+        Err(TelephoneInvalide)
+    }
 }
 
 #[cfg(test)]
@@ -120,7 +127,7 @@ mod tests {
             "70 12 34 56",
             "70-12-34-56",
             "70.12.34.56",
-            "70\u{a0}12\u{a0}34\u{a0}56", // espaces insécables
+            "70\u{a0}12\u{a0}34\u{a0}56",       // espaces insécables
             "70\u{2011}12\u{2011}34\u{2011}56", // tirets insécables
             "70\u{2013}12\u{2014}34\u{2212}56", // demi-cadratin, cadratin, signe moins
             "+226 70 12 34 56",
@@ -151,15 +158,15 @@ mod tests {
         for saisie in [
             "",
             "   ",
-            "7012345",          // 7 chiffres
-            "701234567",        // 9 chiffres
-            "+226 7012345",     // 7 chiffres après +226
-            "+226 701234567",   // 9 chiffres après +226
-            "(70) 12 34 56",    // parenthèses non retirées (décision T2)
+            "7012345",        // 7 chiffres
+            "701234567",      // 9 chiffres
+            "+226 7012345",   // 7 chiffres après +226
+            "+226 701234567", // 9 chiffres après +226
+            "(70) 12 34 56",  // parenthèses non retirées (décision T2)
             "70 12 34 5A",
-            "0033612345678",    // 00 suivi d'un autre indicatif : non prévu
-            "+0612345678",      // indicatif commençant par 0
-            "+12345",           // trop court
+            "0033612345678",     // 00 suivi d'un autre indicatif : non prévu
+            "+0612345678",       // indicatif commençant par 0
+            "+12345",            // trop court
             "+1234567890123456", // trop long
         ] {
             assert_eq!(n(saisie), Err(TelephoneInvalide), "saisie : {saisie:?}");
