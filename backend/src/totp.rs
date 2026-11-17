@@ -442,11 +442,11 @@ async fn verifier_code_a(
 /// `XXXXX-XXXXX` ; hachés sans le tiret, en Argon2id (NIST §3.1.2 : sous
 /// 112 bits, hachage de mot de passe salé exigé).
 ///
-/// Les 10 hachages Argon2id sont faits hors des fils de tokio
-/// (`spawn_blocking`, même raison que `mot_de_passe::hacher_async`) : ils
-/// occuperaient sinon un fil du moteur pendant une à deux secondes.
+/// Les 10 hachages Argon2id sont faits hors des fils de tokio, un calcul par
+/// cœur au plus (`mot_de_passe::calcul_argon2`) : ils occuperaient sinon un
+/// fil du moteur pendant une à deux secondes.
 async fn generer_codes_secours() -> Result<(Vec<String>, Vec<String>), ErreurTotp> {
-    tokio::task::spawn_blocking(|| {
+    mot_de_passe::calcul_argon2(|| {
         let mut codes = Vec::with_capacity(NOMBRE_CODES_SECOURS);
         let mut hachages = Vec::with_capacity(NOMBRE_CODES_SECOURS);
         for _ in 0..NOMBRE_CODES_SECOURS {
@@ -481,7 +481,8 @@ fn normaliser_code_secours(saisie: &str) -> Option<String> {
 /// condition `utilise_le IS NULL` de la mise à jour.
 ///
 /// Remédiation de l'audit (reprise le 2026-11-17) :
-/// - la boucle entière tourne hors des fils de tokio (`spawn_blocking`) :
+/// - la boucle entière tourne hors des fils de tokio, un calcul par cœur au
+///   plus (`mot_de_passe::calcul_argon2`) :
 ///   jusqu'à 10 vérifications Argon2id d'affilée bloqueraient sinon un fil
 ///   du moteur, et avec lui les autres requêtes ;
 /// - un hachage illisible en base n'arrête plus la boucle : il est compté
@@ -511,7 +512,7 @@ pub async fn verifier_code_secours(
     // Le code saisi est un secret : sa copie est effacée de la mémoire à la
     // fin du calcul (crate `zeroize`).
     let code = zeroize::Zeroizing::new(code);
-    let trouve = tokio::task::spawn_blocking(move || {
+    let trouve = mot_de_passe::calcul_argon2(move || {
         let mut trouve = None;
         for (id, hachage) in &disponibles {
             match mot_de_passe::verifier(&code, hachage) {

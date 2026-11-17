@@ -17,6 +17,9 @@ use argon2::{
     Algorithm, Argon2, Params, Version,
     password_hash::{Error, PasswordHasher, PasswordVerifier, phc::PasswordHash},
 };
+use std::sync::OnceLock;
+
+use tokio::sync::Semaphore;
 use unicode_normalization::UnicodeNormalization;
 
 // Longueurs, référence NIST SP 800-63B révision 4 (26 août 2025), §3.1.1.2,
@@ -205,7 +208,7 @@ pub enum ErreurHachage {
 /// `zeroize`, déjà utilisée pour les secrets).
 pub async fn hacher_async(mot_de_passe: &str) -> Result<String, ErreurHachage> {
     let copie = zeroize::Zeroizing::new(mot_de_passe.to_owned());
-    Ok(tokio::task::spawn_blocking(move || hacher(&copie)).await??)
+    Ok(calcul_argon2(move || hacher(&copie)).await??)
 }
 
 /// `verifier`, hors des fils du moteur asynchrone (même raison que
@@ -213,7 +216,35 @@ pub async fn hacher_async(mot_de_passe: &str) -> Result<String, ErreurHachage> {
 pub async fn verifier_async(mot_de_passe: &str, hash: &str) -> Result<bool, ErreurHachage> {
     let copie = zeroize::Zeroizing::new(mot_de_passe.to_owned());
     let hash = hash.to_owned();
-    Ok(tokio::task::spawn_blocking(move || verifier(&copie, &hash)).await??)
+    Ok(calcul_argon2(move || verifier(&copie, &hash)).await??)
+}
+
+/// Nombre de calculs Argon2id menés en même temps, au plus : un par cœur.
+static CALCULS_SIMULTANES: OnceLock<Semaphore> = OnceLock::new();
+
+/// Exécute un calcul Argon2id (un ou plusieurs hachages) hors des fils de
+/// tokio, **jamais plus d'un par cœur à la fois**.
+///
+/// Doc de tokio 1.53, `spawn_blocking` : la limite des fils bloquants est
+/// « very large by default » (512, `Builder::max_blocking_threads`) ; « When
+/// running many CPU-bound computations, a semaphore or some other
+/// synchronization primitive should be used to limit the number of
+/// computations executed in parallel ». Sans cette limite, chaque calcul
+/// prenant 19 Mio, une rafale de connexions pourrait réserver jusqu'à
+/// 512 × 19 Mio de mémoire. Avec elle, la borne redevient celle d'avant le
+/// déport (19 Mio par cœur), et les demandes en trop attendent leur tour
+/// sans bloquer le reste du serveur.
+pub(crate) async fn calcul_argon2<R: Send + 'static>(
+    calcul: impl FnOnce() -> R + Send + 'static,
+) -> Result<R, tokio::task::JoinError> {
+    let semaphore = CALCULS_SIMULTANES.get_or_init(|| {
+        Semaphore::new(std::thread::available_parallelism().map_or(1, |n| n.get()))
+    });
+    // `acquire` n'échoue que sur un sémaphore fermé (doc de tokio,
+    // `Semaphore::acquire`) ; celui-ci ne l'est jamais. Le permis est rendu
+    // quand `_permis` disparaît, après le calcul.
+    let _permis = semaphore.acquire().await.ok();
+    tokio::task::spawn_blocking(calcul).await
 }
 
 #[cfg(test)]
@@ -360,6 +391,37 @@ mod tests {
     fn hachage_corrompu_renvoie_une_erreur_pas_un_faux() {
         let resultat = verifier("peu-importe", "pas-un-hachage-valide");
         assert!(resultat.is_err());
+    }
+
+    /// Jamais plus d'un calcul par cœur à la fois, même avec beaucoup de
+    /// demandes simultanées (doc de tokio, `spawn_blocking`).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn calculs_limites_au_nombre_de_coeurs() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let en_cours = Arc::new(AtomicUsize::new(0));
+        let maximum = Arc::new(AtomicUsize::new(0));
+        let taches: Vec<_> = (0..64)
+            .map(|_| {
+                let (en_cours, maximum) = (en_cours.clone(), maximum.clone());
+                tokio::spawn(calcul_argon2(move || {
+                    let n = en_cours.fetch_add(1, Ordering::SeqCst) + 1;
+                    maximum.fetch_max(n, Ordering::SeqCst);
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    en_cours.fetch_sub(1, Ordering::SeqCst);
+                }))
+            })
+            .collect();
+        for tache in taches {
+            tache.await.unwrap().unwrap();
+        }
+        let coeurs = std::thread::available_parallelism().map_or(1, |n| n.get());
+        assert!(
+            maximum.load(Ordering::SeqCst) <= coeurs,
+            "{} > {coeurs}",
+            maximum.load(Ordering::SeqCst)
+        );
     }
 
     /// Les versions asynchrones donnent les mêmes résultats, normalisation

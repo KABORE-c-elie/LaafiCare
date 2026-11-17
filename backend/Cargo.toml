@@ -31,8 +31,9 @@ sha2 = "0.11.0"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "migrate", "macros"] }
 thiserror = "2.0.20"
 # signal : Ctrl+C et SIGTERM pour l'arrêt propre du serveur (doc de tokio,
-# module `tokio::signal`, fonctionnalité `signal`).
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal"] }
+# module `tokio::signal`, fonctionnalité `signal`). sync : le sémaphore qui
+# limite les calculs Argon2id simultanés (`mot_de_passe::calcul_argon2`).
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal", "sync"] }
 # Second facteur TOTP, RFC 6238 (décision Z1). 6.0.0 stable, vérifiée sur
 # crates.io le 2026-10-05. otpauth : URL `otpauth://` (Z2) ; gen_secret :
 # secret de 160 bits généré par la crate ; zeroize : secret effacé de la
