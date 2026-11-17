@@ -48,16 +48,20 @@ pub const INVITATIONS_EN_ATTENTE_MAX: i64 = 50;
 pub const SMS_INVITATION_PAR_NUMERO_24H: i64 = 3;
 
 /// Rôles auxquels on peut inviter (I3). Liste fermée par type de structure
-/// dans `roles_permis` (section 14) : lignes `munaseb` et, depuis le
-/// 2026-11-16, `pharmacie` (décisions D3 et D5 du porteur : responsable et
-/// pharmacien ; pas de préparateur en V1, rôle absent de la liste fermée de
-/// la migration 0012).
+/// dans `roles_permis` (section 14) : lignes `munaseb`, `pharmacie` (depuis
+/// le 2026-11-16) et `clinique` (depuis le 2026-11-17).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoleInvitation {
     Responsable,
     AgentAssuranceMunaseb,
     Pharmacien,
+    /// Module médecin (décisions du porteur du 2026-11-17).
+    AuxiliairePharmacie,
+    Medecin,
+    /// Sage-femme comprise : une spécialité d'infirmier (CLAUDE.md §6).
+    Infirmier,
+    AgentAccueil,
 }
 
 impl RoleInvitation {
@@ -66,26 +70,52 @@ impl RoleInvitation {
             RoleInvitation::Responsable => "responsable",
             RoleInvitation::AgentAssuranceMunaseb => "agent_assurance_munaseb",
             RoleInvitation::Pharmacien => "pharmacien",
+            RoleInvitation::AuxiliairePharmacie => "auxiliaire_pharmacie",
+            RoleInvitation::Medecin => "medecin",
+            RoleInvitation::Infirmier => "infirmier",
+            RoleInvitation::AgentAccueil => "agent_accueil",
         }
     }
 
-    /// Libellé du SMS (alphabet GSM 7 bits, voir `texte_sms`).
+    /// Libellé du SMS (alphabet GSM 7 bits, voir `texte_sms`) : sans
+    /// accent, pour ne jamais dépendre de la table GSM.
     fn libelle(self) -> &'static str {
         match self {
             RoleInvitation::Responsable => "responsable",
             RoleInvitation::AgentAssuranceMunaseb => "agent MUNASEB",
             RoleInvitation::Pharmacien => "pharmacien",
+            RoleInvitation::AuxiliairePharmacie => "auxiliaire de pharmacie",
+            RoleInvitation::Medecin => "medecin",
+            RoleInvitation::Infirmier => "infirmier",
+            RoleInvitation::AgentAccueil => "agent d'accueil",
         }
     }
 }
 
+/// Rôles qu'un responsable peut proposer, par type de structure :
+/// - `clinique` (module médecin, décision MD7 du porteur, 2026-11-17) :
+///   médecin, infirmier (sage-femme comprise) et agent d'accueil ; les rôles
+///   d'encadrement (directeur, chef de service, major) viendront avec leurs
+///   droits ;
+/// - `pharmacie` : pharmacien et auxiliaire de pharmacie (décision du
+///   porteur du 2026-11-17, qui remplace D5).
 fn roles_permis(type_structure: &str) -> &'static [RoleInvitation] {
     match type_structure {
         "munaseb" => &[
             RoleInvitation::Responsable,
             RoleInvitation::AgentAssuranceMunaseb,
         ],
-        "pharmacie" => &[RoleInvitation::Responsable, RoleInvitation::Pharmacien],
+        "pharmacie" => &[
+            RoleInvitation::Responsable,
+            RoleInvitation::Pharmacien,
+            RoleInvitation::AuxiliairePharmacie,
+        ],
+        "clinique" => &[
+            RoleInvitation::Responsable,
+            RoleInvitation::Medecin,
+            RoleInvitation::Infirmier,
+            RoleInvitation::AgentAccueil,
+        ],
         _ => &[],
     }
 }
@@ -1465,12 +1495,35 @@ mod tests {
     /// Texte fixe (sans le nom) entièrement GSM 7 bits, pour les deux rôles ;
     /// avec un nom de 100 caractères GSM 7 bits, 306 septets au plus, soit 2
     /// parties.
+    /// Rôles permis (décisions du porteur du 2026-11-17) : la clinique
+    /// invite médecins, infirmiers et agents d'accueil ; la pharmacie, des
+    /// pharmaciens et des auxiliaires ; jamais un rôle d'un autre type.
+    #[test]
+    fn roles_permis_par_type() {
+        use RoleInvitation as R;
+        assert_eq!(
+            roles_permis("clinique"),
+            &[R::Responsable, R::Medecin, R::Infirmier, R::AgentAccueil]
+        );
+        assert_eq!(
+            roles_permis("pharmacie"),
+            &[R::Responsable, R::Pharmacien, R::AuxiliairePharmacie]
+        );
+        assert!(!roles_permis("munaseb").contains(&R::Medecin));
+        assert!(!roles_permis("clinique").contains(&R::Pharmacien));
+        assert!(roles_permis("hopital").is_empty());
+    }
+
     #[test]
     fn sms_en_gsm7_et_en_deux_parties_au_plus() {
         for role in [
             RoleInvitation::AgentAssuranceMunaseb,
             RoleInvitation::Responsable,
             RoleInvitation::Pharmacien,
+            RoleInvitation::AuxiliairePharmacie,
+            RoleInvitation::Medecin,
+            RoleInvitation::Infirmier,
+            RoleInvitation::AgentAccueil,
         ] {
             let fixe = texte_sms("", role, "28/10/2026");
             assert!(septets_gsm7(&fixe).is_some(), "{fixe}");

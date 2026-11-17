@@ -441,7 +441,8 @@ Profil du patient connecté.
   "prenom": "Awa",
   "telephone": "+22670000000",
   "date_naissance": "1995-04-12",
-  "lieu_naissance": "Koudougou"
+  "lieu_naissance": "Koudougou",
+  "sexe": null
 }
 ```
 
@@ -453,6 +454,7 @@ Profil du patient connecté.
 | `telephone` | forme normalisée (`+226…`) |
 | `date_naissance` | `AAAA-MM-JJ` |
 | `lieu_naissance` | texte saisi à l'inscription |
+| `sexe` | `feminin`, `masculin`, ou `null` tant que la personne ne l'a pas donné (ajouté le 2026-11-17, facultatif) |
 
 - **Erreurs** :
 
@@ -464,6 +466,15 @@ Profil du patient connecté.
 
 - **Révocation** : après une réinitialisation du mot de passe, ou quand la session du jeton a été fermée (déconnexion, déconnexion partout, vol détecté), le jeton est refusé (401 `jeton_invalide`) même s'il n'a pas encore expiré. L'application tente un renouvellement (section 1.7) ; s'il répond 401, elle renvoie la personne à l'écran de connexion.
 - **Compte verrouillé** (trop d'essais de mot de passe) : un jeton déjà reçu reste valable ; le verrouillage ne bloque que les nouvelles connexions.
+
+#### 2.2.7 `PUT /api/patients/moi/sexe` (2026-11-17)
+
+Le patient donne, change ou retire son sexe, **facultatif**.
+
+- **Appelant** : jeton `laaficare:patient`.
+- **Corps** : `{"sexe": "feminin"}`, `{"sexe": "masculin"}` ou `{"sexe": null}` (retire la valeur ; un champ absent vaut `null`).
+- **Réponse** : **204**.
+- **Erreurs** : 422 `donnees_invalides` pour une autre valeur ; 401 comme `GET /api/patients/moi`.
 
 ### 2.3 Agent MUNASEB
 
@@ -837,9 +848,9 @@ L'email d'un compte professionnel doit être vérifié avant toute connexion et 
 | 422 | `donnees_invalides` | champ manquant |
 | 500 | `erreur_interne` | panne |
 
-### 2.8 Demande de structure (MUNASEB pour l'instant)
+### 2.8 Demande de structure (MUNASEB, pharmacie, clinique)
 
-N'importe quel patient peut créer sa structure ; il en devient **responsable**. Tout se fait avec le **jeton patient** (`laaficare:patient`). L'écran qui portera ce parcours (application mobile, ou espace patient du web) reste à décider. Seul le type `munaseb` est ouvert pour l'instant : les autres attendent la liste de leurs pièces justificatives.
+N'importe quel patient peut créer sa structure ; il en devient **responsable**. Tout se fait avec le **jeton patient** (`laaficare:patient`). L'écran qui portera ce parcours (application mobile, ou espace patient du web) reste à décider. Types ouverts : `munaseb`, `pharmacie` (2026-11-16) et `clinique` (2026-11-17, module médecin ; deux pièces exigées : `autorisation_creation` et `autorisation_ouverture_exploitation`). Les autres (`hopital`, `laboratoire`) attendent la liste de leurs pièces justificatives : 422 `type_non_disponible`.
 
 Cycle : `brouillon` (création) → `en_attente` (soumission) → `validee` ou `refusee` (décision de l'équipe LaafiCare, étape 3.8). Une seule demande non validée à la fois par personne.
 
@@ -1045,15 +1056,17 @@ Réservé à l'équipe LaafiCare : jeton d'accès `laaficare:administrateur` (se
   - 422 `motif_vide`, `motif_trop_long`.
 - Après un refus, le responsable abandonne sa demande (section 2.8) et en crée une nouvelle. Corriger et soumettre à nouveau la même demande viendra plus tard.
 
-### 2.10 Invitations (MUNASEB pour l'instant)
+### 2.10 Invitations (MUNASEB, pharmacie, clinique)
 
 Le **responsable** d'une structure validée invite au numéro de téléphone. La personne répond depuis son **compte patient**. Une invitation vaut **7 jours**. Une invitation expirée se lit `expiree` et n'a plus aucune suite.
 
 - **Ce que voit l'invitant** : jamais si un compte existe pour le numéro. La réponse et le SMS sont les mêmes dans tous les cas, et aucun nom n'apparaît avant l'acceptation.
-- **Le SMS**, sans lien ni code, entièrement dans l'alphabet GSM 7 bits (3GPP TS 23.038) : `LaafiCare : invitation à rejoindre "{structure}" comme {agent MUNASEB | responsable}. Ouvrez ou installez LaafiCare avec ce numéro pour répondre avant le {JJ/MM/AAAA}. LaafiCare ne demande jamais votre mot de passe.` Avec un nom de 100 caractères GSM 7 bits, il tient en 2 parties au plus. Un nom qui contient un caractère hors de cet alphabet (un `ê`, par exemple) le fait partir en UCS-2, plus long.
+- **Le SMS**, sans lien ni code, entièrement dans l'alphabet GSM 7 bits (3GPP TS 23.038) : `LaafiCare : invitation à rejoindre "{structure}" comme {agent MUNASEB | responsable | pharmacien | auxiliaire de pharmacie | medecin | infirmier | agent d'accueil}. Ouvrez ou installez LaafiCare avec ce numéro pour répondre avant le {JJ/MM/AAAA}. LaafiCare ne demande jamais votre mot de passe.` Avec un nom de 100 caractères GSM 7 bits, il tient en 2 parties au plus. Un nom qui contient un caractère hors de cet alphabet (un `ê`, par exemple) le fait partir en UCS-2, plus long.
 - **En développement**, le SMS s'affiche dans le terminal du serveur.
 - **Pour la MUNASEB**, deux rôles : `agent_assurance_munaseb` et `responsable`.
-- **Pour une pharmacie** (ajouté le 2026-11-16), deux rôles : `pharmacien` et `responsable`. Pas de préparateur en V1.
+- **Pour une pharmacie** (ajouté le 2026-11-16) : `pharmacien`, `responsable` et, depuis le 2026-11-17, `auxiliaire_pharmacie` (remplace la décision D5 « pas de préparateur »).
+- **Pour une clinique** (ajouté le 2026-11-17) : `medecin`, `infirmier` (la sage-femme est une spécialité d'infirmier, section 2.17), `agent_accueil` et `responsable`.
+- Tout autre rôle : 422 `role_non_permis`.
 
 #### Côté responsable : jeton `laaficare:professionnel_en_exercice` sur une affectation `responsable`
 
@@ -1391,7 +1404,8 @@ La seule recherche de l'agent est le **numéro de carte** (de n'importe quelle a
 Pour une **officine** validée et sous licence (type `pharmacie`, section 2.8). Jeton `laaficare:professionnel_en_exercice` sur une affectation de cette pharmacie :
 
 - **pharmacien ou responsable** : toutes les routes ci-dessous, sauf deux ;
-- **responsable seulement** : `PUT /api/pharmacie/prix/{medicament_id}` et `PUT /api/pharmacie/reglages`. Un pharmacien reçoit **403 `acces_refuse`**.
+- **responsable seulement** : `PUT /api/pharmacie/prix/{medicament_id}` et `PUT /api/pharmacie/reglages`. Un pharmacien reçoit **403 `acces_refuse`** ;
+- **auxiliaire de pharmacie** (`auxiliaire_pharmacie`, 2026-11-17) : les lectures (catalogue, équivalents, stock, lots, journal, ventes, alertes) et les écritures **entrées, ventes, pertes et inventaires**. Il reçoit **403 `acces_refuse`** sur les annulations, les seuils, les prix, les réglages, les dépenses et le rapport. **Il ne reçoit jamais de prix d'achat** : les champs `prix_achat_unitaire_fcfa` et `valeur_achat_fcfa` sont **absents** de toutes ses réponses (le serveur les retire). Il saisit le prix d'achat d'une entrée (lu sur la facture du fournisseur), mais la réponse ne le reprend pas.
 
 Tout autre rôle, une autre sorte de structure ou une pharmacie non validée : 403 `acces_refuse`.
 
@@ -1553,6 +1567,27 @@ Comment chaque nombre est calculé :
 
 ---
 
+### 2.17 Profil professionnel : numéro d'ordre et spécialité (2026-11-17)
+
+Le numéro d'ordre et la spécialité appartiennent à la **personne**, pas à l'affectation : un médecin les garde d'une structure à l'autre. Le numéro est en **texte libre** (aucune source n'en donne le format) ; l'**équipe LaafiCare le contrôle** et le marque vérifié. **Tout changement annule la vérification.** La vérification n'est exigée nulle part pour l'instant (question dans `docs/points-ouverts.md`).
+
+Spécialités (liste courte, à valider par le porteur) : `medecine_generale`, `gynecologie_obstetrique`, `pediatrie`, `chirurgie`, `sage_femme` (la sage-femme est une spécialité d'infirmier).
+
+#### `GET /api/professionnels/profil` et `PUT /api/professionnels/profil`
+
+- **Appelant** : jeton `laaficare:professionnel_sans_affectation` ou `laaficare:professionnel_en_exercice`.
+- **Corps du PUT** : `{"numero_ordre": "…" | null, "specialite": "pediatrie" | null}`. Un champ absent ou `null` est vidé. Numéro : 1 à 50 caractères, sans retour à la ligne (espaces autour retirés).
+- **Réponse 200** (les deux) : `{"numero_ordre", "specialite", "verifie": false, "verifie_le": null}`.
+- **Erreurs** : 422 `numero_ordre_invalide` ; 422 `donnees_invalides` (spécialité hors liste).
+
+#### `GET /api/administrateurs/profils-professionnels?limite=&apres=`
+
+Jeton administrateur. Profils avec un numéro, pas encore vérifiés : `{"profils": [{"compte_id", "nom", "prenom", "email", "numero_ordre", "specialite", "modifie_le"}], "suivant"}`.
+
+#### `POST /api/administrateurs/profils-professionnels/{compte_id}/verifier`
+
+Jeton administrateur. Corps : `{"numero_ordre": "…", "specialite": "…" | null}`, **les valeurs que l'équipe a lues et contrôlées**. 204 ; **409 `verification_impossible`** si le profil a changé depuis, n'a pas de numéro, est déjà vérifié ou n'existe pas.
+
 ## 3. Codes d'erreur : index
 
 | `code` | HTTP | Routes |
@@ -1610,6 +1645,8 @@ Comment chaque nombre est calculé :
 | `depense_inconnue` | 404 | annulation d'une dépense (section 2.16 ; aussi pour une dépense d'une autre pharmacie) |
 | `cle_idempotence_invalide` | 400 | créations de la pharmacie (en-tête `Idempotency-Key`) |
 | `cle_idempotence_reutilisee` | 422 | créations de la pharmacie (même clé, autre requête) |
+| `numero_ordre_invalide` | 422 | profil professionnel (section 2.17) |
+| `verification_impossible` | 409 | vérification d'un profil professionnel par l'équipe |
 | `erreur_interne` | 500 | toutes |
 
 ---

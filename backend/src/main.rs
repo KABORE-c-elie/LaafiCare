@@ -9,6 +9,7 @@ mod routes_mot_de_passe;
 mod routes_patient;
 mod routes_pharmacie;
 mod routes_professionnel;
+mod routes_profil_professionnel;
 mod routes_remboursement_munaseb;
 mod routes_session;
 mod routes_structure;
@@ -292,6 +293,23 @@ pub(crate) fn routeur(state: AppState) -> Router {
             post(routes_patient::se_connecter),
         )
         .route("/api/patients/moi", get(routes_patient::moi))
+        .route(
+            "/api/patients/moi/sexe",
+            axum::routing::put(routes_patient::modifier_sexe),
+        )
+        // Profil professionnel (module médecin, docs/api.md §2.17).
+        .route(
+            "/api/professionnels/profil",
+            get(routes_profil_professionnel::lire).put(routes_profil_professionnel::modifier),
+        )
+        .route(
+            "/api/administrateurs/profils-professionnels",
+            get(routes_profil_professionnel::lister_a_verifier),
+        )
+        .route(
+            "/api/administrateurs/profils-professionnels/{compte_id}/verifier",
+            post(routes_profil_professionnel::verifier),
+        )
         .route("/api/sessions/renouveler", post(routes_session::renouveler))
         .route(
             "/api/sessions/deconnexion",

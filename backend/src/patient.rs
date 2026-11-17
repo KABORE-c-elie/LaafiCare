@@ -21,6 +21,54 @@ pub struct ProfilPatient {
     pub telephone: String,
     pub date_naissance: NaiveDate,
     pub lieu_naissance: String,
+    /// Facultatif (décision du porteur du 2026-11-17, migration 0035) :
+    /// `null` tant que la personne ne l'a pas donné. Champ ajouté : la
+    /// réponse existante ne change pas.
+    pub sexe: Option<Sexe>,
+}
+
+/// Sexe du patient (migration 0035). Deux valeurs ; aucun texte officiel
+/// lu ne fixe la liste (docs/points-ouverts.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Sexe {
+    Feminin,
+    Masculin,
+}
+
+impl Sexe {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Sexe::Feminin => "feminin",
+            Sexe::Masculin => "masculin",
+        }
+    }
+
+    /// Valeur lue en base ; une valeur hors liste est impossible (CHECK).
+    pub fn depuis_base(valeur: Option<&str>) -> Option<Self> {
+        match valeur {
+            Some("feminin") => Some(Sexe::Feminin),
+            Some("masculin") => Some(Sexe::Masculin),
+            _ => None,
+        }
+    }
+}
+
+/// Le patient donne, change ou retire son sexe (`None`).
+pub async fn modifier_sexe(
+    pool: &PgPool,
+    compte_id: Uuid,
+    sexe: Option<Sexe>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE patient p SET sexe = $2 FROM compte c \
+         WHERE c.id = $1 AND c.type_compte = 'patient' AND p.utilisateur_id = c.utilisateur_id",
+    )
+    .bind(compte_id)
+    .bind(sexe.map(Sexe::as_str))
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -54,9 +102,10 @@ pub async fn profil(pool: &PgPool, compte_id: Uuid) -> Result<ProfilPatient, Err
         Option<String>,
         Option<NaiveDate>,
         Option<String>,
+        Option<String>,
     );
     let ligne: Option<Ligne> = sqlx::query_as(
-        "SELECT u.nom, u.prenom, u.telephone, p.nip, p.date_naissance, p.lieu_naissance \
+        "SELECT u.nom, u.prenom, u.telephone, p.nip, p.date_naissance, p.lieu_naissance, p.sexe \
          FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
          LEFT JOIN patient p ON p.utilisateur_id = u.id \
          WHERE c.id = $1 AND c.type_compte = 'patient'",
@@ -65,7 +114,7 @@ pub async fn profil(pool: &PgPool, compte_id: Uuid) -> Result<ProfilPatient, Err
     .fetch_optional(pool)
     .await?;
 
-    let Some((nom, prenom, telephone, nip, date_naissance, lieu_naissance)) = ligne else {
+    let Some((nom, prenom, telephone, nip, date_naissance, lieu_naissance, sexe)) = ligne else {
         return Err(ErreurProfil::Interne(format!(
             "compte patient introuvable : {compte_id}"
         )));
@@ -91,6 +140,7 @@ pub async fn profil(pool: &PgPool, compte_id: Uuid) -> Result<ProfilPatient, Err
         telephone,
         date_naissance,
         lieu_naissance,
+        sexe: Sexe::depuis_base(sexe.as_deref()),
     })
 }
 
@@ -142,8 +192,20 @@ mod tests {
                 telephone: "+22670020001".into(),
                 date_naissance: NaiveDate::from_ymd_opt(1995, 4, 12).unwrap(),
                 lieu_naissance: "Koudougou".into(),
+                sexe: None,
             }
         );
+
+        // Sexe facultatif : donné, puis retiré.
+        modifier_sexe(&pool, compte_id, Some(Sexe::Feminin))
+            .await
+            .unwrap();
+        assert_eq!(
+            profil(&pool, compte_id).await.unwrap().sexe,
+            Some(Sexe::Feminin)
+        );
+        modifier_sexe(&pool, compte_id, None).await.unwrap();
+        assert_eq!(profil(&pool, compte_id).await.unwrap().sexe, None);
 
         // Compte inconnu : erreur interne (l'extracteur l'a normalement écarté).
         assert!(matches!(

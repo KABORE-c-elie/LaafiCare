@@ -73,11 +73,17 @@ impl TypeStructure {
         .find(|t| t.en_base() == valeur)
     }
 
-    /// E2 : la MUNASEB, qui se soumet sans pièce (U6 b), et la pharmacie
-    /// (officine, décisions D3 et D4 du porteur, 2026-11-16). Les autres
-    /// types attendent la liste de leurs pièces exigées (U6 a).
+    /// E2 : la MUNASEB, qui se soumet sans pièce (U6 b), la pharmacie
+    /// (officine, décisions D3 et D4 du porteur, 2026-11-16) et la clinique
+    /// (module médecin, décision MD7 du porteur, 2026-11-17 : ses deux
+    /// pièces sont déjà définies, §14). L'hôpital et le laboratoire
+    /// attendent la liste de leurs pièces exigées (U6 a) ; le CSPS n'est pas
+    /// un type (MD8, docs/points-ouverts.md).
     pub fn disponible(self) -> bool {
-        matches!(self, TypeStructure::Munaseb | TypeStructure::Pharmacie)
+        matches!(
+            self,
+            TypeStructure::Munaseb | TypeStructure::Pharmacie | TypeStructure::Clinique
+        )
     }
 
     /// Pièces exigées à la soumission, liste fermée dans le code (§14) :
@@ -904,7 +910,7 @@ mod tests {
         let cas: Vec<Cas<'_>> = vec![
             (
                 NouvelleStructure {
-                    type_structure: TypeStructure::Clinique,
+                    type_structure: TypeStructure::Hopital,
                     ..base()
                 },
                 |e| matches!(e, ErreurStructure::TypeNonDisponible),

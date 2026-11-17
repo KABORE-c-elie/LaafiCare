@@ -56,6 +56,11 @@ const COMMENTAIRE_MAX: usize = 1000;
 pub enum RolePharmacie {
     Pharmacien,
     Responsable,
+    /// Auxiliaire de pharmacie (décision du porteur du 2026-11-17, qui
+    /// remplace D5) : entrées, ventes, pertes et inventaires seulement ;
+    /// jamais les prix d'achat, les dépenses ni le bénéfice net (les routes
+    /// retirent les prix d'achat de ses réponses, `routes_pharmacie`).
+    Auxiliaire,
 }
 
 impl RolePharmacie {
@@ -63,7 +68,14 @@ impl RolePharmacie {
         match self {
             RolePharmacie::Pharmacien => "pharmacien",
             RolePharmacie::Responsable => "responsable",
+            RolePharmacie::Auxiliaire => "auxiliaire_pharmacie",
         }
+    }
+
+    /// Le pharmacien et le responsable voient les prix d'achat ;
+    /// l'auxiliaire jamais.
+    pub fn voit_prix_achat(self) -> bool {
+        !matches!(self, RolePharmacie::Auxiliaire)
     }
 }
 

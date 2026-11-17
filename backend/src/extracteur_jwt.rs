@@ -545,7 +545,8 @@ impl FromRequestParts<AppState> for MembreMunaseb {
 
 /// Personnel d'une pharmacie en exercice (pharmacie, étapes 3 à 5 ; CLAUDE.md
 /// §15, D5) : un professionnel en exercice dont l'affectation a le rôle
-/// `pharmacien` ou `responsable`, dans une structure de type `pharmacie`
+/// `pharmacien`, `responsable` ou `auxiliaire_pharmacie` (depuis le
+/// 2026-11-17), dans une structure de type `pharmacie`
 /// (validée et sous licence, contrôlé par `ProfessionnelEnExercice`). Sinon :
 /// 403 `acces_refuse`. La pharmacie est celle de l'affectation, jamais un
 /// identifiant lu dans la requête : chaque lecture et chaque écriture filtre
@@ -567,6 +568,7 @@ impl FromRequestParts<AppState> for PersonnelPharmacie {
         let role = match exercice.role.as_str() {
             "pharmacien" => RolePharmacie::Pharmacien,
             "responsable" => RolePharmacie::Responsable,
+            "auxiliaire_pharmacie" => RolePharmacie::Auxiliaire,
             _ => return Err(RefusAuthentification::Interdit),
         };
         if exercice.type_structure != "pharmacie" {
@@ -580,9 +582,32 @@ impl FromRequestParts<AppState> for PersonnelPharmacie {
     }
 }
 
+/// Pharmacien ou responsable d'une pharmacie en exercice, jamais
+/// l'auxiliaire (décision du porteur du 2026-11-17 : il fait les entrées,
+/// les ventes, les pertes et les inventaires, rien d'autre) : seuils et
+/// annulations. L'auxiliaire reçoit 403 `acces_refuse`.
+#[derive(Debug)]
+pub struct PharmacienPharmacie(pub AffectationPharmacie);
+
+impl FromRequestParts<AppState> for PharmacienPharmacie {
+    type Rejection = RefusAuthentification;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let PersonnelPharmacie(affectation) =
+            PersonnelPharmacie::from_request_parts(parts, state).await?;
+        if affectation.role == RolePharmacie::Auxiliaire {
+            return Err(RefusAuthentification::Interdit);
+        }
+        Ok(PharmacienPharmacie(affectation))
+    }
+}
+
 /// Responsable d'une pharmacie en exercice : prix de vente, réglages,
 /// dépenses et rapports (décision du porteur, 2026-11-16, CLAUDE.md §15).
-/// Un pharmacien reçoit 403 `acces_refuse`.
+/// Un pharmacien ou un auxiliaire reçoit 403 `acces_refuse`.
 #[derive(Debug)]
 pub struct ResponsablePharmacie(pub AffectationPharmacie);
 

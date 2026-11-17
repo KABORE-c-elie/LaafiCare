@@ -214,6 +214,26 @@ pub async fn moi(
         .map_err(|ErreurProfil::Interne(detail)| reponse_erreur_interne("profil patient", &detail))
 }
 
+#[derive(Deserialize)]
+pub struct SexeRequete {
+    /// `feminin`, `masculin`, ou `null` pour le retirer.
+    pub sexe: Option<patient::Sexe>,
+}
+
+/// `PUT /api/patients/moi/sexe` -- le patient donne, change ou retire son
+/// sexe, facultatif (décision du porteur du 2026-11-17). 204. Une autre
+/// valeur répond 422 `donnees_invalides` (corps illisible, `JsonApi`).
+pub async fn modifier_sexe(
+    patient: PatientAuthentifie,
+    State(state): State<AppState>,
+    JsonApi(corps): JsonApi<SexeRequete>,
+) -> Result<StatusCode, ReponseErreur> {
+    patient::modifier_sexe(&state.db, patient.compte_id, corps.sexe)
+        .await
+        .map_err(|e| reponse_erreur_interne("sexe du patient", &e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

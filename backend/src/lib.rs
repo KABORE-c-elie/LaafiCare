@@ -34,6 +34,7 @@ pub mod otp;
 pub mod outils_administrateur;
 pub mod patient;
 pub mod piece_justificative;
+pub mod profil_professionnel;
 pub mod reinitialisation;
 pub mod session;
 pub mod sms;

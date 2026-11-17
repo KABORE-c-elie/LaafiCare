@@ -626,7 +626,7 @@ Aucun cycle avec `session::renouveler`, qui ne verrouille ni structure ni affect
 - **D2** : d'abord le stock (BF-04) et les équivalents par DCI, sans ordonnance ; le module médecin plus tard.
 - **D3** : officine d'abord (type `pharmacie`) ; pharmacie hospitalière avec le type hôpital, plus tard.
 - **D4** : une seule pièce exigée, `autorisation_ouverture_exploitation`, seul document nommé par un texte officiel trouvé (arrêté n° 2006-040/MS/CAB, article 4 b, dans `docs/Reglementation, loi et reference/`) ; liste à confirmer par la DGPML ou l'Ordre.
-- **D5** : rôles `responsable` et `pharmacien` ; **pas de préparateur** en V1 (absent de la liste fermée des rôles, droits inconnus).
+- **D5** : rôles `responsable` et `pharmacien` ; **pas de préparateur** en V1 (absent de la liste fermée des rôles, droits inconnus). **Remplacée le 2026-11-17** par le rôle `auxiliaire_pharmacie` (§17).
 - **D6** : un **catalogue national unique**, tenu par l'équipe LaafiCare par un **outil local d'import** (jamais une route) ; **aucune donnée réelle** tant que le fichier officiel (liste nationale des médicaments essentiels 2023) n'est pas dans `docs/Reglementation, loi et reference/` ; les tests n'utilisent que des médicaments fictifs.
 - **D7** : prix de vente **par pharmacie** ; prix d'achat **par lot** (le diagramme qui met `prix` sur `Medicament` est à corriger).
 - **D8** : sortie par lot **FEFO** (le lot qui périme le plus tôt), proposée par le système ; source OMS à vérifier (`docs/points-ouverts.md`).
@@ -683,3 +683,16 @@ Aucun cycle avec `session::renouveler`, qui ne verrouille ni structure ni affect
 **Refusé** : le cache `moka` de 15 s sur le contrôle d'exercice (règle D4 : un accès retiré est refusé dès la requête suivante). **Non repris** : la tâche de maintenance périodique (purges déjà faites à la connexion et à l'envoi du code, décisions Q-b et O7 b ; purge des jetons d'email jamais décidée, question dans `docs/points-ouverts.md`) ; CORS (`CorsLayer::very_permissive` acceptait toute origine avec les identifiants ; le web passe par le proxy d'Angular, question pour la production dans `docs/points-ouverts.md`).
 
 **Formatage et bilan** : tout `backend/` formaté par `cargo fmt` (commit « Formatage du code avec rustfmt ») ; `cargo fmt --check` passe. Les 8 avertissements clippy de l'ancien code corrigés (commit à part ; `result_large_err` sur la `Response` d'axum : exception documentée aux trois endroits) ; `cargo clippy --all-targets` sans avertissement. `cargo audit` : un nouvel avis informatif, RUSTSEC-2026-0543 (`chrono` « unmaintained »), noté dans `docs/points-ouverts.md`. Suite : 347 tests au départ, 353 à la fin, 0 échec.
+
+---
+
+## 17. Module médecin (itération ouverte le 2026-11-17, branche `backend-medecin`)
+
+**Décisions du porteur (2026-11-17)**, après la passe 1 (lecture et proposition) : MD1 à MD20 acceptées avec ses changements, et les « vues par rôle ». Migrations à partir de 0035. Questions encore ouvertes : `docs/points-ouverts.md`, « Module médecin ».
+
+**Étape 1 (fait)** — migration 0035 :
+- **clinique ouverte** (MD7) : `TypeStructure::disponible` ; ses deux pièces (§14). Hôpital et CSPS plus tard (MD8) ;
+- **rôles** : `roles_permis` `clinique` → responsable, `medecin`, `infirmier` (sage-femme comprise), `agent_accueil` ; `pharmacie` → + `auxiliaire_pharmacie` (**remplace D5**) ;
+- **auxiliaire de pharmacie** : entrées, ventes, pertes, inventaires (`PersonnelPharmacie`) ; annulations et seuils réservés au pharmacien et au responsable (`PharmacienPharmacie`) ; **jamais un prix d'achat** : `routes_pharmacie::selon_role` retire `prix_achat_unitaire_fcfa` et `valeur_achat_fcfa` de toutes ses réponses, à toute profondeur ;
+- **profil professionnel** (MD9, MD10) : numéro d'ordre en texte libre et spécialité (liste courte à valider), vérifiés par l'équipe ; tout changement efface la vérification (trigger) ; non exigé pour l'instant (`profil_professionnel.rs`, `docs/api.md` §2.17) ;
+- **sexe du patient** : facultatif, `PUT /api/patients/moi/sexe`, champ `sexe` ajouté à `GET /api/patients/moi`.

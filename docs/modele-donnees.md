@@ -249,7 +249,7 @@ Validation, refus, suspension ou réactivation, avec l'administrateur, la date, 
 
 ### `affectation` : un rôle dans un établissement
 
-Elle relie un **compte professionnel** à un **établissement** avec un **rôle** : responsable, directeur, chef de service, major, médecin, infirmier (sage-femme comprise), agent d'accueil, pharmacien, biologiste ou agent MUNASEB. Une personne peut avoir plusieurs rôles, dans un ou plusieurs établissements.
+Elle relie un **compte professionnel** à un **établissement** avec un **rôle** : responsable, directeur, chef de service, major, médecin, infirmier (sage-femme comprise), agent d'accueil, pharmacien, auxiliaire de pharmacie (depuis la migration 0035), biologiste ou agent MUNASEB. Une personne peut avoir plusieurs rôles, dans un ou plusieurs établissements.
 
 Règles garanties par la base :
 
@@ -331,6 +331,18 @@ Une ligne par clé `Idempotency-Key` reçue : pharmacie, clé, opération, empre
 
 ---
 
+## 7. Module médecin (2026-11-17)
+
+### `profil_professionnel` : numéro d'ordre et spécialité
+
+Une ligne par compte professionnel : numéro d'ordre (texte libre, 50 caractères au plus), spécialité (liste courte : médecine générale, gynécologie-obstétrique, pédiatrie, chirurgie, sage-femme), date de vérification et administrateur qui l'a faite. Ils appartiennent à la **personne**, pas à l'établissement. **Tout changement du numéro ou de la spécialité efface la vérification**, garanti par la base. Seul un compte administrateur peut vérifier ; un profil ne s'efface pas. Fichier : [`profil_professionnel.rs`](../backend/src/profil_professionnel.rs). Migration 0035.
+
+### `patient.sexe`
+
+Facultatif : `feminin`, `masculin`, ou vide tant que la personne ne l'a pas donné. Migration 0035.
+
+---
+
 ## Les migrations, une par une
 
 | N° | Ce qu'elle apporte |
@@ -369,5 +381,6 @@ Une ligne par clé `Idempotency-Key` reçue : pharmacie, clé, opération, empre
 | 0032 | Dépenses des pharmacies (`depense_pharmacie`), par le seul responsable, jamais modifiées : une correction est une annulation tracée |
 | 0033 | Lot saisi au mois seul (`lot_stock.expiration_mois_seul`) : la date enregistrée est alors la veille du mois imprimé (règle prudente) |
 | 0034 | Index (audit technique, repris le 2026-11-17) : clés étrangères vers des lignes effacées par le code (codes de secours d'un second facteur désactivé, jetons d'une session purgée), et requêtes réelles (demandes d'un créateur, pièces d'une structure, délai d'envoi d'un lien, sessions d'une affectation retirée, journaux paginés du stock et des dépenses). Aucune donnée ne change |
+| 0035 | Module médecin, étape 1 : rôle `auxiliaire_pharmacie` (affectations, invitations, auteurs des ventes et des mouvements), profil professionnel (numéro d'ordre, spécialité, vérification par l'équipe, effacée à chaque changement), sexe du patient (facultatif) |
 
 Une migration déjà appliquée ne change plus jamais : toute évolution passe par une nouvelle migration. Un test vérifie aussi qu'aucun caractère invisible ne s'y glisse ([`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs)).

@@ -3,12 +3,16 @@
 //! inventaire express, journal, prix, seuils, réglages, alertes et
 //! équivalents par DCI.
 //!
-//! Droits (D5 et décision du porteur du 2026-11-16) :
-//! - `PersonnelPharmacie` (pharmacien ou responsable d'une pharmacie validée
-//!   et sous licence) : lectures, entrées, ventes, pertes, inventaires,
-//!   annulations, seuils ;
-//! - `ResponsablePharmacie` : prix de vente et réglages (un pharmacien reçoit
-//!   403 `acces_refuse` avant la lecture du corps).
+//! Droits (D5, décisions du porteur du 2026-11-16 et du 2026-11-17) :
+//! - `PersonnelPharmacie` (pharmacien, responsable ou auxiliaire d'une
+//!   pharmacie validée et sous licence) : lectures, entrées, ventes, pertes,
+//!   inventaires ; pour l'auxiliaire, les prix d'achat sont retirés des
+//!   réponses (`selon_role`) ;
+//! - `PharmacienPharmacie` (pharmacien ou responsable) : annulations et
+//!   seuils ;
+//! - `ResponsablePharmacie` : prix de vente, réglages, dépenses et rapport
+//!   (un pharmacien ou un auxiliaire reçoit 403 `acces_refuse` avant la
+//!   lecture du corps).
 //!
 //! La pharmacie est toujours celle de l'affectation du jeton, jamais un
 //! identifiant de la requête : un objet d'une autre pharmacie répond 404,
@@ -34,7 +38,7 @@ use crate::erreur_api::{
     CheminApi, Complement, ErreurApi, JsonApi, ReponseErreur, RequeteApi, reponse_erreur,
     reponse_erreur_interne,
 };
-use crate::extracteur_jwt::{PersonnelPharmacie, ResponsablePharmacie};
+use crate::extracteur_jwt::{PersonnelPharmacie, PharmacienPharmacie, ResponsablePharmacie};
 use laaficare_backend::benefice_pharmacie::{
     self as benefice, AnnulationDepense, ChoixPeriode, Depense, ErreurBenefice, NouvelleDepense,
     Rapport,
@@ -44,7 +48,7 @@ use laaficare_backend::idempotence::{self, Cle, ErreurIdempotence};
 use laaficare_backend::stock_pharmacie::{
     self as stock, Alertes, Annulation, Equivalents, ErreurStock, EtatMedicament, Inventaire, Lot,
     Mouvement, NouvelInventaire, NouvelleEntree, NouvellePerte, NouvelleVente, PrixVente, Reglages,
-    Seuils, Vente,
+    RolePharmacie, Seuils, Vente,
 };
 
 // Mêmes bornes que les autres listes de l'API.
@@ -142,6 +146,41 @@ fn interne(contexte: &'static str) -> impl FnOnce(sqlx::Error) -> ReponseErreur 
     move |e| reponse_erreur_interne(contexte, &e.to_string())
 }
 
+/// Champs qui disent un prix d'achat : jamais montrés à l'auxiliaire de
+/// pharmacie (décision du porteur du 2026-11-17).
+const CHAMPS_PRIX_ACHAT: [&str; 2] = ["prix_achat_unitaire_fcfa", "valeur_achat_fcfa"];
+
+fn retirer_prix_achat(valeur: &mut serde_json::Value) {
+    match valeur {
+        serde_json::Value::Object(champs) => {
+            for champ in CHAMPS_PRIX_ACHAT {
+                champs.remove(champ);
+            }
+            champs.values_mut().for_each(retirer_prix_achat);
+        }
+        serde_json::Value::Array(elements) => elements.iter_mut().for_each(retirer_prix_achat),
+        _ => {}
+    }
+}
+
+/// Réponse d'une route lue ou écrite par tout le personnel : pour
+/// l'auxiliaire, les prix d'achat sont retirés **à toute profondeur**,
+/// côté serveur, avant l'envoi. Les autres rôles reçoivent exactement la
+/// même réponse qu'avant (contrat de docs/api.md §2.15 inchangé). Le test
+/// `auxiliaire_sans_prix_achat` vérifie qu'aucun champ contenant « achat »
+/// n'atteint l'auxiliaire.
+pub(crate) fn selon_role<T: Serialize>(
+    role: RolePharmacie,
+    reponse: &T,
+) -> Result<Json<serde_json::Value>, ReponseErreur> {
+    let mut valeur = serde_json::to_value(reponse)
+        .map_err(|e| reponse_erreur_interne("pharmacie : réponse", &e.to_string()))?;
+    if !role.voit_prix_achat() {
+        retirer_prix_achat(&mut valeur);
+    }
+    Ok(Json(valeur))
+}
+
 // ---------------------------------------------------------------------
 // Catalogue
 // ---------------------------------------------------------------------
@@ -215,7 +254,7 @@ pub async fn etat(
     PersonnelPharmacie(personnel): PersonnelPharmacie,
     State(state): State<AppState>,
     RequeteApi(page): RequeteApi<PageApres>,
-) -> Result<Json<EtatReponse>, ReponseErreur> {
+) -> Result<Json<serde_json::Value>, ReponseErreur> {
     let limite = limite_valide(page.limite)?;
     let medicaments = stock::etat(&state.db, personnel.structure_id, page.apres, limite)
         .await
@@ -225,10 +264,13 @@ pub async fn etat(
     } else {
         None
     };
-    Ok(Json(EtatReponse {
-        medicaments,
-        suivant,
-    }))
+    selon_role(
+        personnel.role,
+        &EtatReponse {
+            medicaments,
+            suivant,
+        },
+    )
 }
 
 #[derive(Debug, Serialize)]
@@ -244,14 +286,17 @@ pub async fn lots(
     PersonnelPharmacie(personnel): PersonnelPharmacie,
     State(state): State<AppState>,
     CheminApi(medicament_id): CheminApi<Uuid>,
-) -> Result<Json<LotsReponse>, ReponseErreur> {
+) -> Result<Json<serde_json::Value>, ReponseErreur> {
     let lots = stock::lots_du_medicament(&state.db, personnel.structure_id, medicament_id)
         .await
         .map_err(interne("lots"))?;
-    Ok(Json(LotsReponse {
-        medicament_id,
-        lots,
-    }))
+    selon_role(
+        personnel.role,
+        &LotsReponse {
+            medicament_id,
+            lots,
+        },
+    )
 }
 
 #[derive(Deserialize)]
@@ -273,7 +318,7 @@ pub async fn journal(
     PersonnelPharmacie(personnel): PersonnelPharmacie,
     State(state): State<AppState>,
     RequeteApi(page): RequeteApi<PageAvant>,
-) -> Result<Json<JournalReponse>, ReponseErreur> {
+) -> Result<Json<serde_json::Value>, ReponseErreur> {
     let limite = limite_valide(page.limite)?;
     let mouvements = stock::journal(&state.db, personnel.structure_id, page.avant, limite)
         .await
@@ -283,10 +328,13 @@ pub async fn journal(
     } else {
         None
     };
-    Ok(Json(JournalReponse {
-        mouvements,
-        suivant,
-    }))
+    selon_role(
+        personnel.role,
+        &JournalReponse {
+            mouvements,
+            suivant,
+        },
+    )
 }
 
 /// `GET /api/pharmacie/ventes/{id}` : une vente et ses lignes.
@@ -294,12 +342,12 @@ pub async fn vente(
     PersonnelPharmacie(personnel): PersonnelPharmacie,
     State(state): State<AppState>,
     CheminApi(vente_id): CheminApi<Uuid>,
-) -> Result<Json<Vente>, ReponseErreur> {
-    stock::vente(&state.db, personnel.structure_id, vente_id)
+) -> Result<Json<serde_json::Value>, ReponseErreur> {
+    let vente = stock::vente(&state.db, personnel.structure_id, vente_id)
         .await
         .map_err(interne("vente"))?
-        .map(Json)
-        .ok_or_else(|| mapper_erreur(ErreurStock::VenteInconnue))
+        .ok_or_else(|| mapper_erreur(ErreurStock::VenteInconnue))?;
+    selon_role(personnel.role, &vente)
 }
 
 /// `GET /api/pharmacie/alertes` : seuils franchis, lots bientôt périmés et
@@ -324,12 +372,12 @@ pub async fn entrer(
     State(state): State<AppState>,
     entetes: HeaderMap,
     JsonApi(corps): JsonApi<NouvelleEntree>,
-) -> Result<(StatusCode, Json<Lot>), ReponseErreur> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ReponseErreur> {
     let cle = cle_idempotence(&entetes)?;
-    let lot = stock::entrer(&state.db, personnel, cle.as_ref(), &corps)
+    let lot: Lot = stock::entrer(&state.db, personnel, cle.as_ref(), &corps)
         .await
         .map_err(mapper_erreur)?;
-    Ok((StatusCode::CREATED, Json(lot)))
+    Ok((StatusCode::CREATED, selon_role(personnel.role, &lot)?))
 }
 
 /// `POST /api/pharmacie/ventes` : vente au comptoir (201), sans donnée
@@ -339,18 +387,18 @@ pub async fn vendre(
     State(state): State<AppState>,
     entetes: HeaderMap,
     JsonApi(corps): JsonApi<NouvelleVente>,
-) -> Result<(StatusCode, Json<Vente>), ReponseErreur> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ReponseErreur> {
     let cle = cle_idempotence(&entetes)?;
-    let vente = stock::vendre(&state.db, personnel, cle.as_ref(), &corps)
+    let vente: Vente = stock::vendre(&state.db, personnel, cle.as_ref(), &corps)
         .await
         .map_err(mapper_erreur)?;
-    Ok((StatusCode::CREATED, Json(vente)))
+    Ok((StatusCode::CREATED, selon_role(personnel.role, &vente)?))
 }
 
 /// `POST /api/pharmacie/ventes/{id}/annuler` : annulation d'une vente
 /// entière (200, la vente annulée).
 pub async fn annuler_vente(
-    PersonnelPharmacie(personnel): PersonnelPharmacie,
+    PharmacienPharmacie(personnel): PharmacienPharmacie,
     State(state): State<AppState>,
     CheminApi(vente_id): CheminApi<Uuid>,
     entetes: HeaderMap,
@@ -369,12 +417,12 @@ pub async fn declarer_perte(
     State(state): State<AppState>,
     entetes: HeaderMap,
     JsonApi(corps): JsonApi<NouvellePerte>,
-) -> Result<(StatusCode, Json<Mouvement>), ReponseErreur> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ReponseErreur> {
     let cle = cle_idempotence(&entetes)?;
-    let mouvement = stock::declarer_perte(&state.db, personnel, cle.as_ref(), &corps)
+    let mouvement: Mouvement = stock::declarer_perte(&state.db, personnel, cle.as_ref(), &corps)
         .await
         .map_err(mapper_erreur)?;
-    Ok((StatusCode::CREATED, Json(mouvement)))
+    Ok((StatusCode::CREATED, selon_role(personnel.role, &mouvement)?))
 }
 
 /// `POST /api/pharmacie/inventaires` : inventaire express (201).
@@ -383,18 +431,21 @@ pub async fn inventorier(
     State(state): State<AppState>,
     entetes: HeaderMap,
     JsonApi(corps): JsonApi<NouvelInventaire>,
-) -> Result<(StatusCode, Json<Inventaire>), ReponseErreur> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ReponseErreur> {
     let cle = cle_idempotence(&entetes)?;
-    let inventaire = stock::inventorier(&state.db, personnel, cle.as_ref(), &corps)
+    let inventaire: Inventaire = stock::inventorier(&state.db, personnel, cle.as_ref(), &corps)
         .await
         .map_err(mapper_erreur)?;
-    Ok((StatusCode::CREATED, Json(inventaire)))
+    Ok((
+        StatusCode::CREATED,
+        selon_role(personnel.role, &inventaire)?,
+    ))
 }
 
 /// `POST /api/pharmacie/mouvements/{id}/annuler` : annulation d'une entrée,
 /// d'une perte ou d'un écart d'inventaire (201, l'écriture inverse).
 pub async fn annuler_mouvement(
-    PersonnelPharmacie(personnel): PersonnelPharmacie,
+    PharmacienPharmacie(personnel): PharmacienPharmacie,
     State(state): State<AppState>,
     CheminApi(mouvement_id): CheminApi<Uuid>,
     entetes: HeaderMap,
@@ -438,7 +489,7 @@ pub async fn fixer_prix(
 
 /// `PUT /api/pharmacie/seuils/{medicament_id}` : seuils d'alerte (204).
 pub async fn fixer_seuils(
-    PersonnelPharmacie(personnel): PersonnelPharmacie,
+    PharmacienPharmacie(personnel): PharmacienPharmacie,
     State(state): State<AppState>,
     CheminApi(medicament_id): CheminApi<Uuid>,
     JsonApi(corps): JsonApi<Seuils>,
@@ -670,6 +721,20 @@ pub(crate) mod tests {
             .map_err(|r| r.into_response().status())
     }
 
+    pub(crate) async fn pharmacien(
+        state: &AppState,
+        en_tete: &str,
+    ) -> Result<PharmacienPharmacie, StatusCode> {
+        PharmacienPharmacie::from_request_parts(&mut parts(en_tete, None), state)
+            .await
+            .map_err(|r| r.into_response().status())
+    }
+
+    /// Identifiant `id` d'une réponse JSON.
+    pub(crate) fn id_de(valeur: &serde_json::Value) -> Uuid {
+        valeur["id"].as_str().unwrap().parse().unwrap()
+    }
+
     pub(crate) async fn responsable(
         state: &AppState,
         en_tete: &str,
@@ -834,7 +899,7 @@ pub(crate) mod tests {
         let (statut, Json(lot)) = entree(Some("e-1"), corps.clone()).await.unwrap();
         assert_eq!(statut, StatusCode::CREATED);
         let (_, Json(rejoue)) = entree(Some("e-1"), corps.clone()).await.unwrap();
-        assert_eq!(rejoue.id, lot.id);
+        assert_eq!(rejoue["id"], lot["id"]);
         let (s, Json(e)) = entree(Some("e-1"), nouvelle_entree(x, "LOT-2", 60, 10, 100))
             .await
             .unwrap_err();
@@ -871,7 +936,7 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(v.total_fcfa, 600);
+        assert_eq!(v["total_fcfa"].as_i64(), Some(600));
         let (s, Json(e)) = vendre(
             personnel(&state, &jeton_pharm).await.unwrap(),
             State(state.clone()),
@@ -899,15 +964,15 @@ pub(crate) mod tests {
         let (s, Json(e)) = vente(
             personnel(&state, &jeton_autre).await.unwrap(),
             State(state.clone()),
-            CheminApi(v.id),
+            CheminApi(id_de(&v)),
         )
         .await
         .unwrap_err();
         assert_eq!((s, e.code), (StatusCode::NOT_FOUND, "vente_inconnue"));
         let (s, _) = annuler_vente(
-            personnel(&state, &jeton_autre).await.unwrap(),
+            pharmacien(&state, &jeton_autre).await.unwrap(),
             State(state.clone()),
-            CheminApi(v.id),
+            CheminApi(id_de(&v)),
             entetes(None),
             JsonApi(Annulation {
                 motif: "Intrusion".into(),
@@ -923,7 +988,7 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        assert!(lots_autre.lots.is_empty());
+        assert_eq!(lots_autre["lots"].as_array().map(Vec::len), Some(0));
         let Json(journal_autre) = journal(
             personnel(&state, &jeton_autre).await.unwrap(),
             State(state.clone()),
@@ -934,7 +999,10 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        assert!(journal_autre.mouvements.is_empty());
+        assert_eq!(
+            journal_autre["mouvements"].as_array().map(Vec::len),
+            Some(0)
+        );
         let Json(etat_autre) = etat(
             personnel(&state, &jeton_autre).await.unwrap(),
             State(state.clone()),
@@ -945,13 +1013,13 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        assert!(etat_autre.medicaments.is_empty());
+        assert_eq!(etat_autre["medicaments"].as_array().map(Vec::len), Some(0));
         let (s, _) = declarer_perte(
             personnel(&state, &jeton_autre).await.unwrap(),
             State(state.clone()),
             entetes(None),
             JsonApi(NouvellePerte {
-                lot_id: lot.id,
+                lot_id: id_de(&lot),
                 quantite: 1,
                 motif: stock::MotifPerte::Casse,
                 commentaire: None,
@@ -972,7 +1040,13 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        assert_eq!((e.medicaments.len(), e.suivant), (1, Some(x)));
+        assert_eq!(
+            (
+                e["medicaments"].as_array().map(Vec::len),
+                e["suivant"].as_str()
+            ),
+            (Some(1), Some(x.to_string().as_str()))
+        );
         let (s, _) = journal(
             personnel(&state, &jeton_pharm).await.unwrap(),
             State(state.clone()),
@@ -1193,5 +1267,175 @@ pub(crate) mod tests {
         .await
         .unwrap();
         assert_eq!((s, a.montant_fcfa), (StatusCode::CREATED, -50_000));
+    }
+}
+
+#[cfg(test)]
+mod tests_auxiliaire {
+    use super::tests::{
+        catalogue_fictif, en_exercice, entetes, etat_de_test, id_de, nouvelle_entree, personnel,
+        pharmacien, responsable,
+    };
+    use super::*;
+
+    fn sans_achat(valeur: &serde_json::Value) {
+        let texte = valeur.to_string();
+        assert!(!texte.contains("achat"), "prix d'achat montré : {texte}");
+    }
+
+    /// L'auxiliaire de pharmacie (décision du porteur du 2026-11-17) fait
+    /// les entrées, les ventes, les pertes et les inventaires, sans jamais
+    /// recevoir un prix d'achat ; il est refusé (403) sur les annulations,
+    /// les seuils, les prix, les réglages, les dépenses et le rapport. Le
+    /// responsable voit toujours les prix d'achat.
+    #[sqlx::test]
+    #[ignore]
+    async fn auxiliaire_sans_prix_achat(pool: sqlx::PgPool) {
+        let state = etat_de_test(&pool);
+        let (jeton_resp, pharmacie) = en_exercice(
+            &state,
+            "+22670630001",
+            "pharmacie",
+            "validee",
+            "responsable",
+            None,
+        )
+        .await;
+        let (jeton_aux, _) = en_exercice(
+            &state,
+            "+22670630002",
+            "pharmacie",
+            "validee",
+            "auxiliaire_pharmacie",
+            Some(pharmacie),
+        )
+        .await;
+        let (x, _, _) = catalogue_fictif(&pool).await;
+        let _prix = fixer_prix(
+            responsable(&state, &jeton_resp).await.unwrap(),
+            State(state.clone()),
+            CheminApi(x),
+            JsonApi(NouveauPrix {
+                prix_unitaire_fcfa: 300,
+            }),
+        )
+        .await
+        .unwrap();
+
+        // Écritures de l'auxiliaire : réponses sans prix d'achat.
+        let aux = || personnel(&state, &jeton_aux);
+        let (_, Json(lot)) = entrer(
+            aux().await.unwrap(),
+            State(state.clone()),
+            entetes(None),
+            JsonApi(nouvelle_entree(x, "LOT-AUX", 60, 10, 100)),
+        )
+        .await
+        .unwrap();
+        sans_achat(&lot);
+        let (_, Json(vente_aux)) = vendre(
+            aux().await.unwrap(),
+            State(state.clone()),
+            entetes(None),
+            JsonApi(NouvelleVente {
+                sur_ordonnance_papier: false,
+                lignes: vec![stock::LigneDemandee {
+                    medicament_id: x,
+                    quantite: 1,
+                    lot_id: None,
+                }],
+            }),
+        )
+        .await
+        .unwrap();
+        sans_achat(&vente_aux);
+        assert_eq!(vente_aux["total_fcfa"].as_i64(), Some(300));
+        let (_, Json(perte)) = declarer_perte(
+            aux().await.unwrap(),
+            State(state.clone()),
+            entetes(None),
+            JsonApi(NouvellePerte {
+                lot_id: id_de(&lot),
+                quantite: 1,
+                motif: stock::MotifPerte::Casse,
+                commentaire: None,
+            }),
+        )
+        .await
+        .unwrap();
+        sans_achat(&perte);
+        let (_, Json(inventaire)) = inventorier(
+            aux().await.unwrap(),
+            State(state.clone()),
+            entetes(None),
+            JsonApi(NouvelInventaire {
+                lignes: vec![stock::LigneInventaire {
+                    lot_id: id_de(&lot),
+                    quantite_comptee: 7,
+                }],
+            }),
+        )
+        .await
+        .unwrap();
+        sans_achat(&inventaire);
+        assert_eq!(inventaire["ecarts"].as_array().map(Vec::len), Some(1));
+
+        // Lectures de l'auxiliaire : sans prix d'achat.
+        let Json(l) = lots(aux().await.unwrap(), State(state.clone()), CheminApi(x))
+            .await
+            .unwrap();
+        sans_achat(&l);
+        let Json(j) = journal(
+            aux().await.unwrap(),
+            State(state.clone()),
+            RequeteApi(PageAvant {
+                limite: None,
+                avant: None,
+            }),
+        )
+        .await
+        .unwrap();
+        sans_achat(&j);
+        assert_eq!(j["mouvements"].as_array().map(Vec::len), Some(4));
+        let Json(e) = etat(
+            aux().await.unwrap(),
+            State(state.clone()),
+            RequeteApi(PageApres {
+                limite: None,
+                apres: None,
+            }),
+        )
+        .await
+        .unwrap();
+        sans_achat(&e);
+        let Json(v) = vente(
+            aux().await.unwrap(),
+            State(state.clone()),
+            CheminApi(id_de(&vente_aux)),
+        )
+        .await
+        .unwrap();
+        sans_achat(&v);
+
+        // Le responsable voit toujours les prix d'achat.
+        let Json(l) = lots(
+            personnel(&state, &jeton_resp).await.unwrap(),
+            State(state.clone()),
+            CheminApi(x),
+        )
+        .await
+        .unwrap();
+        assert_eq!(l["lots"][0]["prix_achat_unitaire_fcfa"].as_i64(), Some(100));
+
+        // Refus : annulations et seuils (pharmacien ou responsable) ; prix,
+        // réglages, dépenses et rapport (responsable).
+        assert_eq!(
+            pharmacien(&state, &jeton_aux).await.err(),
+            Some(StatusCode::FORBIDDEN)
+        );
+        assert_eq!(
+            responsable(&state, &jeton_aux).await.err(),
+            Some(StatusCode::FORBIDDEN)
+        );
     }
 }
