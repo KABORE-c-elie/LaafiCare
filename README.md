@@ -222,6 +222,8 @@ git checkout dev
 | `URL_APPLICATION_WEB` | adresse de l'application web, sans `/` final : les liens envoyés par email y mènent ; obligatoire ; `https://` exigé en production | `http://localhost:4200` |
 | `CONTACT_SECURITE` | adresse email de l'équipe, donnée dans les alertes de sécurité (second facteur enregistré ou désactivé) ; obligatoire ; en production, une vraie adresse (les adresses d'exemple sont refusées) | `securite@example.org` |
 | `SERVER_PORT` | port du serveur | `8080` |
+| `SERVER_HOST` | facultatif : adresse d'écoute ; `127.0.0.1` si absente (joignable depuis cette machine seulement) ; `0.0.0.0` seulement en production, derrière un proxy HTTPS | `127.0.0.1` |
+| `DATABASE_MAX_CONNECTIONS`, `DATABASE_MIN_CONNECTIONS`, `DATABASE_ACQUIRE_TIMEOUT_SECS`, `DATABASE_IDLE_TIMEOUT_SECS`, `DATABASE_MAX_LIFETIME_SECS` | facultatives : taille du pool de connexions du serveur et ses délais (5, 0, 5 s, 10 min, 30 min si absentes) ; une valeur fausse empêche le démarrage | `5` |
 | `JWT_SECRET` | signe les jetons de connexion, 32 caractères au moins | 64 caractères hexadécimaux générés |
 | `TOTP_CLE_CHIFFREMENT` | chiffre les secrets du second facteur, exactement 64 caractères hexadécimaux | une autre valeur générée |
 

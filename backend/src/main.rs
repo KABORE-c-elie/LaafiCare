@@ -13,7 +13,7 @@ mod routes_professionnel;
 mod routes_session;
 mod routes_structure;
 
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{Json, Router, extract::State, http::StatusCode, routing::get, routing::post};
@@ -126,7 +126,7 @@ async fn main() {
     // l'abandon. Le message ci-dessous couvre les deux causes réelles vues en
     // test (base arrêtée, mauvais identifiants), car l'erreur de sqlx seule
     // (« pool timed out ») ne les distingue pas.
-    let pool = db::connecter(&config.database_url)
+    let pool = db::connecter_avec(&config.database_url, &config.pool)
         .await
         .unwrap_or_else(|_| {
             tracing::error!(
@@ -342,9 +342,10 @@ async fn main() {
             taches_reinitialisation: Arc::new(laaficare_backend::reinitialisation::LimiteTaches::default()),
         });
 
-    // 127.0.0.1 : cohérent avec PostgreSQL exposé en local seulement. À
-    // élargir quand l'app mobile aura besoin d'un accès depuis le réseau.
-    let adresse = SocketAddr::from((Ipv4Addr::LOCALHOST, config.server_port));
+    // 127.0.0.1 par défaut (SERVER_HOST, `config.rs`) : cohérent avec
+    // PostgreSQL exposé en local seulement. Une autre adresse est un choix
+    // explicite de la configuration.
+    let adresse = SocketAddr::from((config.server_host, config.server_port));
     let listener = tokio::net::TcpListener::bind(adresse)
         .await
         .unwrap_or_else(|erreur| {

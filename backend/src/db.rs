@@ -13,19 +13,46 @@ use sqlx::postgres::PgPoolOptions;
 const MAX_TENTATIVES: u32 = 6;
 const DELAI_INITIAL: Duration = Duration::from_secs(1);
 
-// Explicites car la doc de sqlx 0.9 (PoolOptions) n'indique pas leurs valeurs
-// par défaut. 5 connexions suffisent pour un développeur seul en local (le
-// maximum de PostgreSQL est de 100) ; à réviser avant un déploiement
-// multi-utilisateurs.
-//
 // DATABASE_URL pointe sur 127.0.0.1, jamais sur `localhost` (cause mesurée le
 // 2026-09-25) : sous Windows, `localhost` se résout d'abord en `::1` (IPv6),
 // or le docker-compose ne publie PostgreSQL que sur 127.0.0.1:5433. La
 // tentative IPv6 est refusée au bout de ~2 s (2 087 ms mesurés) avant le
 // repli sur IPv4 -- d'où le « slow acquire » de sqlx à chaque nouvelle
 // connexion, et des tests `#[sqlx::test]` très lents.
-const MAX_CONNEXIONS: u32 = 5;
-const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Dimensionnement du pool de connexions (remédiation de l'audit, reprise
+/// le 2026-11-17). Le serveur les lit dans l'environnement (variables
+/// `DATABASE_*`, toutes facultatives, `config.rs`) ; les outils et la
+/// commande `migrer` gardent les valeurs par défaut.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OptionsPool {
+    pub max_connexions: u32,
+    pub min_connexions: u32,
+    pub acquire_timeout: Duration,
+    pub idle_timeout: Duration,
+    pub max_lifetime: Duration,
+}
+
+impl Default for OptionsPool {
+    /// - 5 connexions au plus et 5 s d'attente : valeurs déjà retenues par
+    ///   le projet (un développeur seul en local ; le maximum de PostgreSQL
+    ///   est de 100) ; à relever en production par les variables.
+    /// - 0 connexion minimale, 10 min d'inactivité, 30 min de durée de vie :
+    ///   les valeurs par défaut de sqlx 0.9 (`PoolOptions::new`, lues dans la
+    ///   source de sqlx-core 0.9.0, `pool/options.rs`), écrites ici pour
+    ///   qu'elles ne changent pas en silence avec une nouvelle version. La
+    ///   doc de `max_lifetime` recommande de recycler les connexions
+    ///   (« it is better to retire connections periodically »).
+    fn default() -> Self {
+        OptionsPool {
+            max_connexions: 5,
+            min_connexions: 0,
+            acquire_timeout: Duration::from_secs(5),
+            idle_timeout: Duration::from_secs(10 * 60),
+            max_lifetime: Duration::from_secs(30 * 60),
+        }
+    }
+}
 
 // `PoolOptions::connect` ouvre une connexion immédiatement et renvoie l'erreur
 // telle quelle si elle échoue : la doc de sqlx 0.9 ne décrit aucun mécanisme
@@ -60,19 +87,31 @@ pub async fn migrations_manquantes(pool: &PgPool) -> Result<usize, sqlx::Error> 
 }
 
 pub async fn connecter(database_url: &str) -> Result<PgPool, sqlx::Error> {
+    connecter_avec(database_url, &OptionsPool::default()).await
+}
+
+/// `connecter`, avec un pool dimensionné par l'appelant (le serveur).
+pub async fn connecter_avec(database_url: &str, options: &OptionsPool) -> Result<PgPool, sqlx::Error> {
     let mut tentative: u32 = 1;
     let mut delai = DELAI_INITIAL;
 
     loop {
         let resultat = PgPoolOptions::new()
-            .max_connections(MAX_CONNEXIONS)
-            .acquire_timeout(ACQUIRE_TIMEOUT)
+            .max_connections(options.max_connexions)
+            .min_connections(options.min_connexions)
+            .acquire_timeout(options.acquire_timeout)
+            .idle_timeout(options.idle_timeout)
+            .max_lifetime(options.max_lifetime)
             .connect(database_url)
             .await;
 
         match resultat {
             Ok(pool) => {
-                tracing::info!(tentative, "connexion à PostgreSQL établie");
+                tracing::info!(
+                    tentative,
+                    max_connexions = options.max_connexions,
+                    "connexion à PostgreSQL établie"
+                );
                 return Ok(pool);
             }
             Err(erreur) if tentative >= MAX_TENTATIVES => {

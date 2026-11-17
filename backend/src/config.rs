@@ -2,17 +2,28 @@
 
 use std::env;
 use std::fmt;
+use std::net::{IpAddr, Ipv4Addr};
+use std::time::Duration;
 
 use zeroize::Zeroizing;
 
 use crate::adresse_email;
+use crate::db::OptionsPool;
 
 // Pas de `#[derive(Debug)]` volontaire : `database_url` contient le mot de
 // passe de la base. Sans `Debug`, un `{:?}` oublié dans un log ne peut pas le
 // faire fuiter (le compilateur refuse).
 pub struct Config {
     pub database_url: String,
+    /// Adresse d'écoute (variable `SERVER_HOST`, facultative) : 127.0.0.1
+    /// par défaut, le serveur n'est joignable que depuis la machine même.
+    /// `0.0.0.0` l'ouvre au réseau (conteneur derrière un proxy en
+    /// production) : un choix explicite, jamais un défaut.
+    pub server_host: IpAddr,
     pub server_port: u16,
+    /// Dimensionnement du pool de connexions (variables `DATABASE_*`,
+    /// facultatives ; défauts dans `db::OptionsPool`).
+    pub pool: OptionsPool,
     pub jwt_secret: String,
     /// Clé AES-256 du chiffrement des secrets TOTP (décision Z4), distincte
     /// du secret JWT. Sa perte rend tous les TOTP inutilisables : en
@@ -71,6 +82,17 @@ pub enum ConfigError {
 
     #[error("SERVER_PORT invalide : « {0} » n'est pas un numéro de port (0 à 65535)")]
     PortInvalide(String),
+
+    #[error("SERVER_HOST invalide : « {0} » n'est pas une adresse IP (ex. 127.0.0.1 ou 0.0.0.0)")]
+    HoteInvalide(String),
+
+    // Une valeur présente mais fausse arrête le démarrage : retomber en
+    // silence sur la valeur par défaut cacherait la faute de frappe.
+    #[error("{0} invalide : un nombre entier positif attendu")]
+    NombreInvalide(&'static str),
+
+    #[error("DATABASE_MIN_CONNECTIONS ne peut pas dépasser DATABASE_MAX_CONNECTIONS")]
+    PoolIncoherent,
 
     // RFC 7518 §3.2 : « A key of the same size as the hash output (for
     // instance, 256 bits for "HS256") or larger MUST be used ». 256 bits =
@@ -143,10 +165,18 @@ impl Config {
         let environnement = parse_environnement(env::var("ENVIRONNEMENT").ok().as_deref())?;
         let url_application_web = valider_url_application_web(&lire("URL_APPLICATION_WEB")?, environnement)?;
         let contact_securite = valider_contact_securite(&lire("CONTACT_SECURITE")?, environnement)?;
+        // Exceptions assumées à « aucune valeur par défaut » (remédiation de
+        // l'audit, 2026-11-17) : ces réglages ne touchent ni la sécurité des
+        // données ni les envois, et leur défaut est le choix le plus fermé
+        // (écoute locale, petit pool).
+        let server_host = parse_hote(env::var("SERVER_HOST").ok().as_deref())?;
+        let pool = lire_options_pool(|nom| env::var(nom).ok())?;
 
         Ok(Config {
             database_url,
+            server_host,
             server_port,
+            pool,
             jwt_secret,
             totp_cle_chiffrement,
             environnement,
@@ -241,6 +271,52 @@ fn lire(nom: &'static str) -> Result<String, ConfigError> {
         .ok_or(ConfigError::Manquante(nom))
 }
 
+/// `SERVER_HOST` absent ou vide : 127.0.0.1. Analyse par la bibliothèque
+/// standard (`IpAddr::from_str`) : une adresse IPv4 ou IPv6, jamais un nom
+/// d'hôte (« localhost » se résoudrait d'abord en IPv6 sous Windows, voir
+/// `db.rs`).
+fn parse_hote(valeur: Option<&str>) -> Result<IpAddr, ConfigError> {
+    match valeur.map(str::trim).filter(|v| !v.is_empty()) {
+        None => Ok(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        Some(v) => v.parse().map_err(|_| ConfigError::HoteInvalide(v.to_string())),
+    }
+}
+
+/// Options du pool, chacune facultative : absente ou vide, la valeur de
+/// `OptionsPool::default()`. Le lecteur de variables est passé en
+/// paramètre pour être testé sans toucher l'environnement du processus.
+fn lire_options_pool(lire: impl Fn(&'static str) -> Option<String>) -> Result<OptionsPool, ConfigError> {
+    let defaut = OptionsPool::default();
+    let nombre = |nom: &'static str, defaut: u64| -> Result<u64, ConfigError> {
+        match lire(nom).as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+            None => Ok(defaut),
+            Some(v) => v.parse::<u64>().ok().filter(|n| *n >= 1).ok_or(ConfigError::NombreInvalide(nom)),
+        }
+    };
+    let entier = |nom: &'static str, defaut: u32| -> Result<u32, ConfigError> {
+        u32::try_from(nombre(nom, u64::from(defaut))?).map_err(|_| ConfigError::NombreInvalide(nom))
+    };
+    // Le minimum peut valoir 0 (défaut de sqlx) : lu à part.
+    let min_connexions = match lire("DATABASE_MIN_CONNECTIONS").as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        None => defaut.min_connexions,
+        Some(v) => v.parse::<u32>().map_err(|_| ConfigError::NombreInvalide("DATABASE_MIN_CONNECTIONS"))?,
+    };
+    let options = OptionsPool {
+        max_connexions: entier("DATABASE_MAX_CONNECTIONS", defaut.max_connexions)?,
+        min_connexions,
+        acquire_timeout: Duration::from_secs(nombre("DATABASE_ACQUIRE_TIMEOUT_SECS", defaut.acquire_timeout.as_secs())?),
+        idle_timeout: Duration::from_secs(nombre("DATABASE_IDLE_TIMEOUT_SECS", defaut.idle_timeout.as_secs())?),
+        max_lifetime: Duration::from_secs(nombre("DATABASE_MAX_LIFETIME_SECS", defaut.max_lifetime.as_secs())?),
+    };
+    // La doc de sqlx (`min_connections`) borne déjà le minimum au maximum,
+    // mais recommande que l'application le vérifie elle-même (« it should be
+    // checking this condition itself and returning a nicer error »).
+    if options.min_connexions > options.max_connexions {
+        return Err(ConfigError::PoolIncoherent);
+    }
+    Ok(options)
+}
+
 // `u16` : un port TCP va de 0 à 65535, donc le parsing refuse de lui-même
 // les valeurs hors plage et non numériques.
 fn parse_port(valeur: &str) -> Result<u16, ConfigError> {
@@ -280,6 +356,46 @@ fn decoder_cle_totp(valeur: &str) -> Result<CleTotp, ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adresse_d_ecoute() {
+        assert_eq!(parse_hote(None).unwrap(), IpAddr::V4(Ipv4Addr::LOCALHOST), "défaut : local seulement");
+        assert_eq!(parse_hote(Some("  ")).unwrap(), IpAddr::V4(Ipv4Addr::LOCALHOST));
+        assert_eq!(parse_hote(Some("0.0.0.0")).unwrap(), IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        assert_eq!(parse_hote(Some("::1")).unwrap().to_string(), "::1");
+        for faux in ["localhost", "127.0.0", "0.0.0.0:8080"] {
+            assert!(matches!(parse_hote(Some(faux)), Err(ConfigError::HoteInvalide(_))), "{faux}");
+        }
+    }
+
+    #[test]
+    fn options_du_pool() {
+        let aucune = |_: &'static str| None;
+        assert_eq!(lire_options_pool(aucune).unwrap(), OptionsPool::default());
+        let avec = |valeurs: &'static [(&'static str, &'static str)]| {
+            move |nom: &'static str| valeurs.iter().find(|(n, _)| *n == nom).map(|(_, v)| v.to_string())
+        };
+        let lu = lire_options_pool(avec(&[
+            ("DATABASE_MAX_CONNECTIONS", "20"),
+            ("DATABASE_MIN_CONNECTIONS", "2"),
+            ("DATABASE_ACQUIRE_TIMEOUT_SECS", "8"),
+        ]))
+        .unwrap();
+        assert_eq!((lu.max_connexions, lu.min_connexions, lu.acquire_timeout.as_secs()), (20, 2, 8));
+        assert_eq!(lu.idle_timeout, OptionsPool::default().idle_timeout);
+        for faux in [
+            &[("DATABASE_MAX_CONNECTIONS", "0")][..],
+            &[("DATABASE_MAX_CONNECTIONS", "dix")],
+            &[("DATABASE_ACQUIRE_TIMEOUT_SECS", "-5")],
+            &[("DATABASE_MAX_CONNECTIONS", "99999999999")],
+        ] {
+            assert!(matches!(lire_options_pool(avec(faux)), Err(ConfigError::NombreInvalide(_))), "{faux:?}");
+        }
+        assert!(matches!(
+            lire_options_pool(avec(&[("DATABASE_MAX_CONNECTIONS", "3"), ("DATABASE_MIN_CONNECTIONS", "4")])),
+            Err(ConfigError::PoolIncoherent)
+        ));
+    }
 
     #[test]
     fn cle_totp_hexadecimale_decodee() {
