@@ -33,13 +33,20 @@ async fn executer() -> Result<(), String> {
     println!("1. Patient (recherché par son téléphone)");
     println!("2. Professionnel (recherché par son email)");
     println!("3. Administrateur (recherché par son email)");
-    let type_compte = match console::lire_ligne("Choix : ").map_err(|e| e.to_string())?.as_str() {
+    let type_compte = match console::lire_ligne("Choix : ")
+        .map_err(|e| e.to_string())?
+        .as_str()
+    {
         "1" => TypeCompte::Patient,
         "2" => TypeCompte::Professionnel,
         "3" => TypeCompte::Administrateur,
         _ => return Err("Choix inconnu.".into()),
     };
-    let question = if type_compte == TypeCompte::Patient { "Téléphone : " } else { "Email : " };
+    let question = if type_compte == TypeCompte::Patient {
+        "Téléphone : "
+    } else {
+        "Email : "
+    };
     let identifiant = console::lire_ligne(question).map_err(|e| e.to_string())?;
     let cible = outils_administrateur::trouver_compte(&contexte.pool, type_compte, &identifiant)
         .await
@@ -53,9 +60,12 @@ async fn executer() -> Result<(), String> {
     if !console::confirmer("Est-ce bien cette personne ?").map_err(|e| e.to_string())? {
         return Err("Arrêt, rien n'a été modifié.".into());
     }
-    let motif = console::lire_ligne("Motif (par exemple « téléphone perdu ») : ").map_err(|e| e.to_string())?;
+    let motif = console::lire_ligne("Motif (par exemple « téléphone perdu ») : ")
+        .map_err(|e| e.to_string())?;
     // Y2 : on atteste le contrôle de la carte ; son numéro n'est pas saisi.
-    let cnib_verifiee = console::confirmer("Avez-vous vérifié la CNIB de la personne, en sa présence ?").map_err(|e| e.to_string())?;
+    let cnib_verifiee =
+        console::confirmer("Avez-vous vérifié la CNIB de la personne, en sa présence ?")
+            .map_err(|e| e.to_string())?;
 
     let resultat = outils_administrateur::desactiver_totp(
         &contexte.pool,
@@ -73,7 +83,9 @@ async fn executer() -> Result<(), String> {
     if resultat.personne_prevenue {
         println!("La personne a été prévenue par email.");
     } else {
-        println!("La personne n'a pas pu être prévenue par email (pas d'email, ou envoi impossible).");
+        println!(
+            "La personne n'a pas pu être prévenue par email (pas d'email, ou envoi impossible)."
+        );
     }
     if resultat.fenetre_ouverte {
         println!(

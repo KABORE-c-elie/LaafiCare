@@ -15,11 +15,11 @@ use zeroize::Zeroizing;
 
 use crate::auth_administrateur::FENETRE_REENROLEMENT_MINUTES;
 use crate::config::{self, Config, Environnement, Programme};
-use crate::sms::{SmsSender, SmsSenderConsole};
 use crate::db;
 use crate::email::{EmailSender, EmailSenderConsole};
 use crate::mot_de_passe::RegleMotDePasse;
 use crate::outils_administrateur::{self, AdministrateurEnCours, ErreurOutil, Operateur};
+use crate::sms::{SmsSender, SmsSenderConsole};
 
 /// Essais pour coller le jeton reçu par email, avant d'arrêter l'outil.
 const ESSAIS_JETON: u32 = 3;
@@ -43,7 +43,9 @@ pub fn lire_secret(question: &str) -> io::Result<Zeroizing<String>> {
 /// Mot de passe choisi, saisi deux fois. `None` si les deux saisies
 /// diffèrent.
 pub fn lire_nouveau_mot_de_passe() -> io::Result<Option<Zeroizing<String>>> {
-    let premier = lire_secret("Mot de passe administrateur (8 à 128 caractères, une lettre, un chiffre, un caractère spécial) : ")?;
+    let premier = lire_secret(
+        "Mot de passe administrateur (8 à 128 caractères, une lettre, un chiffre, un caractère spécial) : ",
+    )?;
     let second = lire_secret("Le même mot de passe, une seconde fois : ")?;
     Ok((*premier == *second).then_some(premier))
 }
@@ -72,7 +74,9 @@ pub fn expliquer(erreur: &ErreurOutil) -> String {
         .map(|regle| match regle {
             RegleMotDePasse::LongueurMin => "au moins 8 caractères",
             RegleMotDePasse::LongueurMax => "au plus 128 caractères",
-            RegleMotDePasse::CaractereDeControle => "aucun caractère de contrôle (tabulation, retour à la ligne)",
+            RegleMotDePasse::CaractereDeControle => {
+                "aucun caractère de contrôle (tabulation, retour à la ligne)"
+            }
             RegleMotDePasse::Lettre => "au moins une lettre",
             RegleMotDePasse::Chiffre => "au moins un chiffre",
             RegleMotDePasse::CaractereSpecial => "au moins un caractère spécial, par exemple ! @ #",
@@ -91,7 +95,8 @@ pub async fn terminer(pool: &PgPool, en_cours: &AdministrateurEnCours) -> Result
         println!("Un code de vérification a été envoyé à {}.", en_cours.email);
         let mut essai = 1;
         loop {
-            let jeton = lire_secret("Code reçu par email (la saisie ne s'affiche pas) : ").map_err(|e| e.to_string())?;
+            let jeton = lire_secret("Code reçu par email (la saisie ne s'affiche pas) : ")
+                .map_err(|e| e.to_string())?;
             match outils_administrateur::verifier_email(pool, en_cours.compte_id, &jeton).await {
                 Ok(()) => break,
                 Err(ErreurOutil::JetonInvalide) if essai < ESSAIS_JETON => {
@@ -99,19 +104,34 @@ pub async fn terminer(pool: &PgPool, en_cours: &AdministrateurEnCours) -> Result
                     essai += 1;
                 }
                 Err(erreur) => {
-                    return Err(format!("{} Relancez l'outil pour reprendre (un nouveau code sera envoyé).", expliquer(&erreur)));
+                    return Err(format!(
+                        "{} Relancez l'outil pour reprendre (un nouveau code sera envoyé).",
+                        expliquer(&erreur)
+                    ));
                 }
             }
         }
         println!("Email vérifié.");
     }
-    outils_administrateur::ouvrir_fenetre(pool, en_cours.compte_id).await.map_err(|e| expliquer(&e))?;
+    outils_administrateur::ouvrir_fenetre(pool, en_cours.compte_id)
+        .await
+        .map_err(|e| expliquer(&e))?;
     println!();
-    println!("Fenêtre ouverte pour {FENETRE_REENROLEMENT_MINUTES} minutes. Dans ce délai, l'administrateur :");
-    println!("  1. se connecte : POST /api/administrateurs/connexion (email et mot de passe administrateur) ;");
-    println!("  2. avec le jeton de réenrôlement reçu : POST /api/administrateurs/reenrolement/commencer ;");
-    println!("  3. ajoute le compte dans son application d'authentification, puis confirme avec un premier");
-    println!("     code : POST /api/administrateurs/reenrolement/confirmer, et note ses codes de secours.");
+    println!(
+        "Fenêtre ouverte pour {FENETRE_REENROLEMENT_MINUTES} minutes. Dans ce délai, l'administrateur :"
+    );
+    println!(
+        "  1. se connecte : POST /api/administrateurs/connexion (email et mot de passe administrateur) ;"
+    );
+    println!(
+        "  2. avec le jeton de réenrôlement reçu : POST /api/administrateurs/reenrolement/commencer ;"
+    );
+    println!(
+        "  3. ajoute le compte dans son application d'authentification, puis confirme avec un premier"
+    );
+    println!(
+        "     code : POST /api/administrateurs/reenrolement/confirmer, et note ses codes de secours."
+    );
     println!("Si la fenêtre expire, relancer l'outil pour reprendre.");
     Ok(())
 }
@@ -122,7 +142,8 @@ pub async fn authentifier_operateur(contexte: &Contexte) -> Result<Operateur, St
     println!("Authentification de l'administrateur qui lance l'outil.");
     let adresse = lire_ligne("Votre email administrateur : ").map_err(|e| e.to_string())?;
     let mot_de_passe = lire_secret("Votre mot de passe : ").map_err(|e| e.to_string())?;
-    let code = lire_secret("Code de votre application d'authentification : ").map_err(|e| e.to_string())?;
+    let code = lire_secret("Code de votre application d'authentification : ")
+        .map_err(|e| e.to_string())?;
     outils_administrateur::authentifier_operateur(
         &contexte.pool,
         &contexte.config.totp_cle_chiffrement,
@@ -139,8 +160,17 @@ pub async fn authentifier_operateur(contexte: &Contexte) -> Result<Operateur, St
 /// la règle reste identique partout, et un outil qui en enverrait plus tard
 /// serait déjà couvert. Sortie de `demarrer` pour être testée sans `.env` ni
 /// base.
-fn verifier_envois_des_outils(environnement: Environnement, email: &dyn EmailSender) -> Result<(), config::ConfigError> {
-    config::verifier_envois(environnement, &[("SMS", SmsSenderConsole.simule()), ("email", email.simule())])
+fn verifier_envois_des_outils(
+    environnement: Environnement,
+    email: &dyn EmailSender,
+) -> Result<(), config::ConfigError> {
+    config::verifier_envois(
+        environnement,
+        &[
+            ("SMS", SmsSenderConsole.simule()),
+            ("email", email.simule()),
+        ],
+    )
 }
 
 /// Ce dont chaque outil a besoin pour travailler.
@@ -159,22 +189,31 @@ pub struct Contexte {
 pub async fn demarrer() -> Result<Contexte, String> {
     match dotenvy::dotenv() {
         Ok(_) => {}
-        Err(dotenvy::Error::LineParse(..)) => return Err("fichier .env mal formé (erreur de syntaxe)".into()),
+        Err(dotenvy::Error::LineParse(..)) => {
+            return Err("fichier .env mal formé (erreur de syntaxe)".into());
+        }
         Err(erreur) if erreur.not_found() => {}
         Err(_) => return Err("fichier .env illisible".into()),
     }
-    let config = Config::from_env(Programme::Outils).map_err(|e| format!("configuration invalide : {e}"))?;
+    let config =
+        Config::from_env(Programme::Outils).map_err(|e| format!("configuration invalide : {e}"))?;
     let email = EmailSenderConsole;
-    verifier_envois_des_outils(config.environnement, &email).map_err(|e| format!("configuration invalide : {e}"))?;
+    verifier_envois_des_outils(config.environnement, &email)
+        .map_err(|e| format!("configuration invalide : {e}"))?;
     let pool = db::connecter(&config.database_url).await.map_err(|_| {
         "base injoignable : vérifier que PostgreSQL est démarré et que DATABASE_URL_OUTILS est correct".to_string()
     })?;
-    let manquantes =
-        db::migrations_manquantes(&pool).await.map_err(|_| "lecture de la base impossible".to_string())?;
+    let manquantes = db::migrations_manquantes(&pool)
+        .await
+        .map_err(|_| "lecture de la base impossible".to_string())?;
     if manquantes > 0 {
         return Err("base pas à jour : lancer `cargo run --bin migrer`".into());
     }
-    Ok(Contexte { config, pool, email })
+    Ok(Contexte {
+        config,
+        pool,
+        email,
+    })
 }
 
 #[cfg(test)]
@@ -201,7 +240,9 @@ mod tests {
     /// tout passe.
     #[test]
     fn outils_refuses_en_production_avec_un_envoi_simule() {
-        assert!(verifier_envois_des_outils(Environnement::Developpement, &EmailSenderConsole).is_ok());
+        assert!(
+            verifier_envois_des_outils(Environnement::Developpement, &EmailSenderConsole).is_ok()
+        );
         assert!(matches!(
             verifier_envois_des_outils(Environnement::Production, &EmailSenderConsole),
             Err(ConfigError::EnvoiSimuleEnProduction(_))

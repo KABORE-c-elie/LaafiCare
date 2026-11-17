@@ -107,7 +107,11 @@ pub async fn lister_pour_patient(
 /// Marque une notification comme lue. Faux si elle n'existe pas ou
 /// appartient à une autre personne (404). Une notification déjà lue reste
 /// trouvée : rejouer la requête n'a pas d'effet (réseau instable, E6).
-pub async fn marquer_lue(pool: &PgPool, compte_id: Uuid, notification_id: Uuid) -> Result<bool, sqlx::Error> {
+pub async fn marquer_lue(
+    pool: &PgPool,
+    compte_id: Uuid,
+    notification_id: Uuid,
+) -> Result<bool, sqlx::Error> {
     let trouvee: Option<Uuid> = sqlx::query_scalar(
         "UPDATE notification n SET lu = true FROM compte c \
          WHERE n.id = $2 AND c.id = $1 AND c.type_compte = 'patient' AND c.utilisateur_id = n.utilisateur_id \
@@ -164,19 +168,38 @@ mod tests {
         let mut ids = Vec::new();
         for i in 0..3 {
             ids.push(
-                creer(&pool, ua, TypeNotification::RemboursementStatut, "Remboursement MUNASEB", &format!("Message {i}"), None)
-                    .await
-                    .unwrap(),
+                creer(
+                    &pool,
+                    ua,
+                    TypeNotification::RemboursementStatut,
+                    "Remboursement MUNASEB",
+                    &format!("Message {i}"),
+                    None,
+                )
+                .await
+                .unwrap(),
             );
         }
-        let de_b = creer(&pool, ub, TypeNotification::RemboursementStatut, "Remboursement MUNASEB", "Message B", None)
-            .await
-            .unwrap();
+        let de_b = creer(
+            &pool,
+            ub,
+            TypeNotification::RemboursementStatut,
+            "Remboursement MUNASEB",
+            "Message B",
+            None,
+        )
+        .await
+        .unwrap();
 
         let (page1, non_lues) = lister_pour_patient(&pool, a, None, 2).await.unwrap();
         assert_eq!(non_lues, 3);
-        assert_eq!(page1.iter().map(|n| n.id).collect::<Vec<_>>(), [ids[2], ids[1]]);
-        let (page2, _) = lister_pour_patient(&pool, a, Some(ids[1]), 2).await.unwrap();
+        assert_eq!(
+            page1.iter().map(|n| n.id).collect::<Vec<_>>(),
+            [ids[2], ids[1]]
+        );
+        let (page2, _) = lister_pour_patient(&pool, a, Some(ids[1]), 2)
+            .await
+            .unwrap();
         assert_eq!(page2.iter().map(|n| n.id).collect::<Vec<_>>(), [ids[0]]);
 
         // Celle de B n'existe pas pour A ; rien n'est modifié.
@@ -191,12 +214,19 @@ mod tests {
 
         marquer_toutes_lues(&pool, a).await.unwrap();
         assert_eq!(lister_pour_patient(&pool, a, None, 50).await.unwrap().1, 0);
-        assert_eq!(lister_pour_patient(&pool, b, None, 50).await.unwrap().1, 1, "celles de B ne changent pas");
+        assert_eq!(
+            lister_pour_patient(&pool, b, None, 50).await.unwrap().1,
+            1,
+            "celles de B ne changent pas"
+        );
     }
 
     #[test]
     fn le_type_correspond_a_la_valeur_du_check_sql() {
-        assert_eq!(TypeNotification::RemboursementStatut.as_str(), "remboursement_statut");
+        assert_eq!(
+            TypeNotification::RemboursementStatut.as_str(),
+            "remboursement_statut"
+        );
     }
 
     // Base temporaire par test, jamais la base de développement : voir
@@ -237,9 +267,16 @@ mod tests {
         // Un lien vers une demande inexistante est refusé par la clé
         // étrangère : l'erreur remonte à l'appelant, qui décide.
         assert!(
-            creer(&pool, utilisateur_id, TypeNotification::RemboursementStatut, "t", "m", Some(Uuid::nil()))
-                .await
-                .is_err()
+            creer(
+                &pool,
+                utilisateur_id,
+                TypeNotification::RemboursementStatut,
+                "t",
+                "m",
+                Some(Uuid::nil())
+            )
+            .await
+            .is_err()
         );
     }
 }

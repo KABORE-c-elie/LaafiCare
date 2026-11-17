@@ -108,8 +108,9 @@ pub fn controler(mot_de_passe: &str) -> Result<(), MotDePasseNonConforme> {
     if !normalise.chars().any(|c| c.is_ascii_digit()) {
         regles_non_respectees.push(RegleMotDePasse::Chiffre);
     }
-    let est_special =
-        |c: char| !c.is_alphabetic() && !c.is_ascii_digit() && !c.is_whitespace() && !c.is_control();
+    let est_special = |c: char| {
+        !c.is_alphabetic() && !c.is_ascii_digit() && !c.is_whitespace() && !c.is_control()
+    };
     if !normalise.chars().any(est_special) {
         regles_non_respectees.push(RegleMotDePasse::CaractereSpecial);
     }
@@ -117,7 +118,9 @@ pub fn controler(mot_de_passe: &str) -> Result<(), MotDePasseNonConforme> {
     if regles_non_respectees.is_empty() {
         Ok(())
     } else {
-        Err(MotDePasseNonConforme { regles_non_respectees })
+        Err(MotDePasseNonConforme {
+            regles_non_respectees,
+        })
     }
 }
 
@@ -271,7 +274,10 @@ mod tests {
     }
 
     fn regles(mot_de_passe: &str) -> Vec<RegleMotDePasse> {
-        controler(mot_de_passe).err().map(|e| e.regles_non_respectees).unwrap_or_default()
+        controler(mot_de_passe)
+            .err()
+            .map(|e| e.regles_non_respectees)
+            .unwrap_or_default()
     }
 
     #[test]
@@ -289,26 +295,39 @@ mod tests {
     fn regles_non_respectees_toutes_listees() {
         assert_eq!(
             regles("abc"),
-            vec![RegleMotDePasse::LongueurMin, RegleMotDePasse::Chiffre, RegleMotDePasse::CaractereSpecial]
+            vec![
+                RegleMotDePasse::LongueurMin,
+                RegleMotDePasse::Chiffre,
+                RegleMotDePasse::CaractereSpecial
+            ]
         );
         assert_eq!(regles("12345678!"), vec![RegleMotDePasse::Lettre]);
     }
 
     #[test]
     fn espace_permise_mais_pas_caractere_special() {
-        assert_eq!(regles("mon fils Ali 12"), vec![RegleMotDePasse::CaractereSpecial]);
+        assert_eq!(
+            regles("mon fils Ali 12"),
+            vec![RegleMotDePasse::CaractereSpecial]
+        );
     }
 
     #[test]
     fn chiffre_de_0_a_9_seulement() {
         // « ² » et « ¾ » ne sont pas des chiffres ; ils comptent comme
         // caractères spéciaux.
-        assert_eq!(regles("Bonjour\u{b2}\u{be}"), vec![RegleMotDePasse::Chiffre]);
+        assert_eq!(
+            regles("Bonjour\u{b2}\u{be}"),
+            vec![RegleMotDePasse::Chiffre]
+        );
     }
 
     #[test]
     fn caractere_de_controle_refuse() {
-        assert_eq!(regles("Bonjour1!\t"), vec![RegleMotDePasse::CaractereDeControle]);
+        assert_eq!(
+            regles("Bonjour1!\t"),
+            vec![RegleMotDePasse::CaractereDeControle]
+        );
     }
 
     #[test]
@@ -319,13 +338,20 @@ mod tests {
         assert!(controler("Abcdef1!").is_ok());
         let max = format!("Ab1!{}", "x".repeat(LONGUEUR_MOT_DE_PASSE_MAX - 4));
         assert!(controler(&max).is_ok());
-        assert_eq!(regles(&format!("{max}x")), vec![RegleMotDePasse::LongueurMax]);
+        assert_eq!(
+            regles(&format!("{max}x")),
+            vec![RegleMotDePasse::LongueurMax]
+        );
     }
 
     #[test]
     fn noms_envoyes_aux_applications() {
         assert_eq!(
-            serde_json::to_string(&vec![RegleMotDePasse::Chiffre, RegleMotDePasse::CaractereSpecial]).unwrap(),
+            serde_json::to_string(&vec![
+                RegleMotDePasse::Chiffre,
+                RegleMotDePasse::CaractereSpecial
+            ])
+            .unwrap(),
             r#"["chiffre","caractere_special"]"#
         );
     }
@@ -343,7 +369,10 @@ mod tests {
         let hash = hacher_async("Caf\u{e9}#2026").await.unwrap();
         assert!(verifier_async("Cafe\u{301}#2026", &hash).await.unwrap());
         assert!(!verifier_async("Autre#2026", &hash).await.unwrap());
-        assert!(verifier("Caf\u{e9}#2026", &hash).unwrap(), "compatible avec la version synchrone");
+        assert!(
+            verifier("Caf\u{e9}#2026", &hash).unwrap(),
+            "compatible avec la version synchrone"
+        );
         assert!(matches!(
             verifier_async("x", "pas-un-hachage-valide").await,
             Err(ErreurHachage::Argon2(_))

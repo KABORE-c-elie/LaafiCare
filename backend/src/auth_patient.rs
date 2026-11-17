@@ -85,9 +85,11 @@ impl From<telephone::TelephoneInvalide> for ErreurAuthPatient {
 impl From<otp::ErreurDemandeOtp> for ErreurAuthPatient {
     fn from(erreur: otp::ErreurDemandeOtp) -> Self {
         match erreur {
-            otp::ErreurDemandeOtp::TropDeDemandes { reessayer_dans_secs } => {
-                ErreurAuthPatient::TropDeDemandes { reessayer_dans_secs: Some(reessayer_dans_secs) }
-            }
+            otp::ErreurDemandeOtp::TropDeDemandes {
+                reessayer_dans_secs,
+            } => ErreurAuthPatient::TropDeDemandes {
+                reessayer_dans_secs: Some(reessayer_dans_secs),
+            },
             otp::ErreurDemandeOtp::CompteBloque => ErreurAuthPatient::CompteBloque,
             otp::ErreurDemandeOtp::Base(erreur) => ErreurAuthPatient::Interne(erreur.to_string()),
         }
@@ -96,11 +98,17 @@ impl From<otp::ErreurDemandeOtp> for ErreurAuthPatient {
 
 /// Résultat d'une vérification d'OTP traduit pour les flux patient :
 /// `Valide` passe, les deux autres deviennent une erreur.
-async fn verifier_otp(pool: &PgPool, utilisateur_id: Uuid, code_otp: &str) -> Result<(), ErreurAuthPatient> {
+async fn verifier_otp(
+    pool: &PgPool,
+    utilisateur_id: Uuid,
+    code_otp: &str,
+) -> Result<(), ErreurAuthPatient> {
     match otp::verifier(pool, utilisateur_id, code_otp).await? {
         otp::VerificationOtp::Valide => Ok(()),
         otp::VerificationOtp::Invalide => Err(ErreurAuthPatient::CodeInvalide),
-        otp::VerificationOtp::EssaisEpuises => Err(ErreurAuthPatient::TropDeDemandes { reessayer_dans_secs: None }),
+        otp::VerificationOtp::EssaisEpuises => Err(ErreurAuthPatient::TropDeDemandes {
+            reessayer_dans_secs: None,
+        }),
     }
 }
 
@@ -143,19 +151,24 @@ async fn identite_et_compte_patient(
 /// après 24h, sinon son téléphone reste bloqué indéfiniment par la
 /// contrainte `UNIQUE` -- décision actée avec le porteur, pas de nettoyage
 /// automatique pour l'instant.
-async fn trouver_ou_creer_utilisateur(pool: &PgPool, telephone: &str) -> Result<Uuid, ErreurAuthPatient> {
-    if let Some(id) = sqlx::query_scalar::<_, Uuid>("SELECT id FROM utilisateur WHERE telephone = $1")
-        .bind(telephone)
-        .fetch_optional(pool)
-        .await?
+async fn trouver_ou_creer_utilisateur(
+    pool: &PgPool,
+    telephone: &str,
+) -> Result<Uuid, ErreurAuthPatient> {
+    if let Some(id) =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM utilisateur WHERE telephone = $1")
+            .bind(telephone)
+            .fetch_optional(pool)
+            .await?
     {
         return Ok(id);
     }
 
-    let id: Uuid = sqlx::query_scalar("INSERT INTO utilisateur (telephone) VALUES ($1) RETURNING id")
-        .bind(telephone)
-        .fetch_one(pool)
-        .await?;
+    let id: Uuid =
+        sqlx::query_scalar("INSERT INTO utilisateur (telephone) VALUES ($1) RETURNING id")
+            .bind(telephone)
+            .fetch_one(pool)
+            .await?;
     Ok(id)
 }
 
@@ -168,7 +181,10 @@ async fn trouver_ou_creer_utilisateur(pool: &PgPool, telephone: &str) -> Result<
 /// normalisé**, vers lequel l'appelant envoie le SMS via `SmsSender` --
 /// jamais vers le numéro tel que saisi (décision T4). Ce module reste
 /// indépendant du canal d'envoi.
-pub async fn demander_otp(pool: &PgPool, telephone_saisi: &str) -> Result<(String, String), ErreurAuthPatient> {
+pub async fn demander_otp(
+    pool: &PgPool,
+    telephone_saisi: &str,
+) -> Result<(String, String), ErreurAuthPatient> {
     let telephone = telephone::normaliser(telephone_saisi)?;
     let utilisateur_id = trouver_ou_creer_utilisateur(pool, &telephone).await?;
     let code = otp::generer_et_enregistrer(pool, utilisateur_id).await?;
@@ -207,8 +223,9 @@ pub async fn creer_compte(
     // Aucune identité : aucun OTP n'a pu être généré pour ce téléphone
     // (`otp::generer_et_enregistrer` exige un `utilisateur_id` existant),
     // donc `code_otp` ne peut de toute façon pas être valide.
-    let (utilisateur_id, compte_patient) =
-        identite_et_compte_patient(pool, &telephone).await?.ok_or(ErreurAuthPatient::CodeInvalide)?;
+    let (utilisateur_id, compte_patient) = identite_et_compte_patient(pool, &telephone)
+        .await?
+        .ok_or(ErreurAuthPatient::CodeInvalide)?;
 
     // OTP vérifié AVANT de regarder si le compte existe déjà : sinon un
     // appelant sans code valide pourrait sonder n'importe quel numéro pour
@@ -265,7 +282,11 @@ pub async fn creer_compte(
 
 /// Ouvre une session patient et renvoie la paire de jetons (`session.rs`),
 /// qui lit elle-même la `version_jeton` réelle du compte (décision C2).
-async fn ouvrir_session(pool: &PgPool, jwt: &JwtService, compte_id: Uuid) -> Result<PaireJetons, ErreurAuthPatient> {
+async fn ouvrir_session(
+    pool: &PgPool,
+    jwt: &JwtService,
+    compte_id: Uuid,
+) -> Result<PaireJetons, ErreurAuthPatient> {
     session::ouvrir(pool, compte_id, None)
         .await
         .and_then(|session| session.en_paire(jwt))
@@ -284,8 +305,9 @@ pub async fn reinitialiser_mot_de_passe(
     let telephone = telephone::normaliser(telephone_saisi)?;
     mot_de_passe::controler(nouveau_mot_de_passe)?;
 
-    let (utilisateur_id, compte_patient) =
-        identite_et_compte_patient(pool, &telephone).await?.ok_or(ErreurAuthPatient::CodeInvalide)?;
+    let (utilisateur_id, compte_patient) = identite_et_compte_patient(pool, &telephone)
+        .await?
+        .ok_or(ErreurAuthPatient::CodeInvalide)?;
 
     // Même ordre que `creer_compte`, même raison : prouver le contrôle du
     // numéro avant de révéler quoi que ce soit sur l'état du compte.
@@ -314,7 +336,13 @@ pub async fn reinitialiser_mot_de_passe(
     .bind(compte_id)
     .execute(&mut *tx)
     .await?;
-    session::fermer_toutes(&mut tx, compte_id, MotifRevocation::ReinitialisationMotDePasse, false).await?;
+    session::fermer_toutes(
+        &mut tx,
+        compte_id,
+        MotifRevocation::ReinitialisationMotDePasse,
+        false,
+    )
+    .await?;
     tx.commit().await?;
 
     Ok(())
@@ -360,7 +388,8 @@ pub async fn se_connecter(
 
     // `verifier` n'accepte qu'un compte existant : `compte` est forcément
     // présent ici.
-    let compte_id = compte.ok_or_else(|| ErreurAuthPatient::Interne("compte vérifié introuvable".into()))?;
+    let compte_id =
+        compte.ok_or_else(|| ErreurAuthPatient::Interne("compte vérifié introuvable".into()))?;
 
     ouvrir_session(pool, jwt, compte_id).await
 }
@@ -393,35 +422,101 @@ mod tests {
         // --- création de compte ---
         let (code, _) = demander_otp(&pool, telephone).await.unwrap();
 
-        assert!(matches!(
-            creer_compte(&pool, &jwt, telephone, "000000", "Test", "Auth", chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), "Ouagadougou", "Motdepasse-123").await,
-            Err(ErreurAuthPatient::CodeInvalide)
-        ), "un mauvais code doit être refusé");
+        assert!(
+            matches!(
+                creer_compte(
+                    &pool,
+                    &jwt,
+                    telephone,
+                    "000000",
+                    "Test",
+                    "Auth",
+                    chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                    "Ouagadougou",
+                    "Motdepasse-123"
+                )
+                .await,
+                Err(ErreurAuthPatient::CodeInvalide)
+            ),
+            "un mauvais code doit être refusé"
+        );
 
-        assert!(matches!(
-            creer_compte(&pool, &jwt, telephone, &code, "Test", "Auth", chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), "Ouagadougou", "court").await,
-            Err(ErreurAuthPatient::MotDePasseNonConforme(_))
-        ), "un mot de passe non conforme doit être refusé sans consommer le code");
+        assert!(
+            matches!(
+                creer_compte(
+                    &pool,
+                    &jwt,
+                    telephone,
+                    &code,
+                    "Test",
+                    "Auth",
+                    chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                    "Ouagadougou",
+                    "court"
+                )
+                .await,
+                Err(ErreurAuthPatient::MotDePasseNonConforme(_))
+            ),
+            "un mot de passe non conforme doit être refusé sans consommer le code"
+        );
 
-        let jeton = creer_compte(&pool, &jwt, telephone, &code, "Test", "Auth", chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), "Ouagadougou", "Motdepasse-123")
-            .await
-            .expect("la création doit réussir avec un code et un mot de passe valides");
+        let jeton = creer_compte(
+            &pool,
+            &jwt,
+            telephone,
+            &code,
+            "Test",
+            "Auth",
+            chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+            "Ouagadougou",
+            "Motdepasse-123",
+        )
+        .await
+        .expect("la création doit réussir avec un code et un mot de passe valides");
         assert!(!jeton.jeton_acces.is_empty());
         assert_eq!(jeton.jeton_renouvellement.en_clair().len(), 64);
 
-        assert!(matches!(
-            creer_compte(&pool, &jwt, telephone, &code, "Test", "Auth", chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), "Ouagadougou", "Motdepasse-123").await,
-            Err(ErreurAuthPatient::CodeInvalide)
-        ), "le code déjà utilisé ne doit pas être réutilisable (règle NIST, otp.rs)");
+        assert!(
+            matches!(
+                creer_compte(
+                    &pool,
+                    &jwt,
+                    telephone,
+                    &code,
+                    "Test",
+                    "Auth",
+                    chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                    "Ouagadougou",
+                    "Motdepasse-123"
+                )
+                .await,
+                Err(ErreurAuthPatient::CodeInvalide)
+            ),
+            "le code déjà utilisé ne doit pas être réutilisable (règle NIST, otp.rs)"
+        );
 
         // --- mot de passe oublié, sur le compte qu'on vient de créer ---
         laisser_passer_une_minute(&pool).await;
         let (code2, _) = demander_otp(&pool, telephone).await.unwrap();
 
-        assert!(matches!(
-            creer_compte(&pool, &jwt, telephone, &code2, "Test", "Auth", chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(), "Ouagadougou", "Motdepasse-123").await,
-            Err(ErreurAuthPatient::TelephoneDejaUtilise)
-        ), "creer_compte sur un compte déjà complet doit être refusé");
+        assert!(
+            matches!(
+                creer_compte(
+                    &pool,
+                    &jwt,
+                    telephone,
+                    &code2,
+                    "Test",
+                    "Auth",
+                    chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                    "Ouagadougou",
+                    "Motdepasse-123"
+                )
+                .await,
+                Err(ErreurAuthPatient::TelephoneDejaUtilise)
+            ),
+            "creer_compte sur un compte déjà complet doit être refusé"
+        );
         // code2 vient d'être consommé par l'appel ci-dessus (vérifié avec
         // succès avant l'échec métier) : il en faut un nouveau, comme un
         // vrai client redemanderait pour le bon flux.
@@ -434,10 +529,14 @@ mod tests {
 
         // --- mot de passe oublié sur une inscription jamais finalisée ---
         let (code3, _) = demander_otp(&pool, telephone_abandonne).await.unwrap();
-        assert!(matches!(
-            reinitialiser_mot_de_passe(&pool, telephone_abandonne, &code3, "Motdepasse-123").await,
-            Err(ErreurAuthPatient::TelephoneInconnu)
-        ), "aucun compte complet sous ce numéro : rien à réinitialiser");
+        assert!(
+            matches!(
+                reinitialiser_mot_de_passe(&pool, telephone_abandonne, &code3, "Motdepasse-123")
+                    .await,
+                Err(ErreurAuthPatient::TelephoneInconnu)
+            ),
+            "aucun compte complet sous ce numéro : rien à réinitialiser"
+        );
     }
 
     fn refuse(resultat: Result<PaireJetons, ErreurAuthPatient>) -> bool {
@@ -453,13 +552,25 @@ mod tests {
         let naissance = NaiveDate::from_ymd_opt(1990, 1, 1).unwrap();
 
         let (code, _) = demander_otp(&pool, telephone).await.unwrap();
-        creer_compte(&pool, &jwt, telephone, &code, "Test", "Connexion", naissance, "Ouagadougou", bon)
-            .await
-            .unwrap();
+        creer_compte(
+            &pool,
+            &jwt,
+            telephone,
+            &code,
+            "Test",
+            "Connexion",
+            naissance,
+            "Ouagadougou",
+            bon,
+        )
+        .await
+        .unwrap();
 
         // --- succès : jeton patient pour ce compte ---
         let jeton = se_connecter(&pool, &jwt, telephone, bon).await.unwrap();
-        let claims = jwt.verifier(&jeton.jeton_acces, SorteJeton::Patient).unwrap();
+        let claims = jwt
+            .verifier(&jeton.jeton_acces, SorteJeton::Patient)
+            .unwrap();
         assert!(claims.sid.is_some(), "le jeton d'accès porte sa session");
         let (compte_id, version_jeton): (Uuid, i32) = sqlx::query_as(
             "SELECT c.id, c.version_jeton FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
@@ -469,11 +580,22 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!((claims.sub, claims.ver, claims.aff), (compte_id, version_jeton, None));
+        assert_eq!(
+            (claims.sub, claims.ver, claims.aff),
+            (compte_id, version_jeton, None)
+        );
 
         // --- le même numéro saisi sous d'autres formes (décision C3) ---
-        for saisie in ["70 01 60 01", "70-01-60-01", "70.01.60.01", "00226 70016001", "226 70 01 60 01"] {
-            se_connecter(&pool, &jwt, saisie, bon).await.unwrap_or_else(|e| panic!("{saisie:?} : {e:?}"));
+        for saisie in [
+            "70 01 60 01",
+            "70-01-60-01",
+            "70.01.60.01",
+            "00226 70016001",
+            "226 70 01 60 01",
+        ] {
+            se_connecter(&pool, &jwt, saisie, bon)
+                .await
+                .unwrap_or_else(|e| panic!("{saisie:?} : {e:?}"));
         }
         // L'OTP renvoie le numéro normalisé, vers lequel part le SMS.
         laisser_passer_une_minute(&pool).await;
@@ -484,43 +606,67 @@ mod tests {
             se_connecter(&pool, &jwt, "70 01 60", bon).await,
             Err(ErreurAuthPatient::TelephoneInvalide)
         ));
-        assert!(matches!(demander_otp(&pool, "(70) 01 60 01").await, Err(ErreurAuthPatient::TelephoneInvalide)));
+        assert!(matches!(
+            demander_otp(&pool, "(70) 01 60 01").await,
+            Err(ErreurAuthPatient::TelephoneInvalide)
+        ));
 
         // --- même réponse pour un mauvais mot de passe, un numéro inconnu,
         // une inscription inachevée (OTP demandé, aucun compte) ---
-        assert!(refuse(se_connecter(&pool, &jwt, telephone, "Mauvais-mdp-1").await));
+        assert!(refuse(
+            se_connecter(&pool, &jwt, telephone, "Mauvais-mdp-1").await
+        ));
         assert!(refuse(se_connecter(&pool, &jwt, "+22670016999", bon).await));
         let telephone_inacheve = "+22670016002";
         demander_otp(&pool, telephone_inacheve).await.unwrap();
-        assert!(refuse(se_connecter(&pool, &jwt, telephone_inacheve, bon).await));
+        assert!(refuse(
+            se_connecter(&pool, &jwt, telephone_inacheve, bon).await
+        ));
 
         // Texte court, identique dans tous les cas (décisions P1, L1).
-        assert_eq!(ErreurAuthPatient::IdentifiantsInvalides.to_string(), "Numéro ou mot de passe incorrect.");
+        assert_eq!(
+            ErreurAuthPatient::IdentifiantsInvalides.to_string(),
+            "Numéro ou mot de passe incorrect."
+        );
 
         // --- verrouillage : 5 échecs, puis le bon mot de passe est refusé ---
         se_connecter(&pool, &jwt, telephone, bon).await.unwrap(); // compteur remis à zéro
         for _ in 0..5 {
-            assert!(refuse(se_connecter(&pool, &jwt, telephone, "Mauvais-mdp-1").await));
+            assert!(refuse(
+                se_connecter(&pool, &jwt, telephone, "Mauvais-mdp-1").await
+            ));
         }
-        assert!(refuse(se_connecter(&pool, &jwt, telephone, bon).await), "refusé pendant le verrouillage");
+        assert!(
+            refuse(se_connecter(&pool, &jwt, telephone, bon).await),
+            "refusé pendant le verrouillage"
+        );
 
         // --- réinitialisation par OTP : nouveau mot de passe, verrouillage
         // levé, version de jeton augmentée (C2) ---
-        let version_avant: i32 = sqlx::query_scalar("SELECT version_jeton FROM compte WHERE id = $1")
-            .bind(compte_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let version_avant: i32 =
+            sqlx::query_scalar("SELECT version_jeton FROM compte WHERE id = $1")
+                .bind(compte_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         laisser_passer_une_minute(&pool).await;
         let (code_reinit, _) = demander_otp(&pool, telephone).await.unwrap();
-        reinitialiser_mot_de_passe(&pool, telephone, &code_reinit, "Nouveau-mdp-2").await.unwrap();
-        se_connecter(&pool, &jwt, telephone, "Nouveau-mdp-2").await.unwrap();
-        assert!(refuse(se_connecter(&pool, &jwt, telephone, bon).await), "l'ancien mot de passe ne marche plus");
-        let version_apres: i32 = sqlx::query_scalar("SELECT version_jeton FROM compte WHERE id = $1")
-            .bind(compte_id)
-            .fetch_one(&pool)
+        reinitialiser_mot_de_passe(&pool, telephone, &code_reinit, "Nouveau-mdp-2")
             .await
             .unwrap();
+        se_connecter(&pool, &jwt, telephone, "Nouveau-mdp-2")
+            .await
+            .unwrap();
+        assert!(
+            refuse(se_connecter(&pool, &jwt, telephone, bon).await),
+            "l'ancien mot de passe ne marche plus"
+        );
+        let version_apres: i32 =
+            sqlx::query_scalar("SELECT version_jeton FROM compte WHERE id = $1")
+                .bind(compte_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(version_apres, version_avant + 1);
         // Toutes les sessions ouvertes avant la réinitialisation sont fermées
         // (seule reste celle de la connexion qui a suivi).
@@ -539,7 +685,10 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(ouvertes_avant, 1, "seule la session de la connexion suivante est ouverte");
+        assert_eq!(
+            ouvertes_avant, 1,
+            "seule la session de la connexion suivante est ouverte"
+        );
 
         // --- mot de passe non conforme : toutes les règles listées ---
         laisser_passer_une_minute(&pool).await;
@@ -547,7 +696,11 @@ mod tests {
         match reinitialiser_mot_de_passe(&pool, telephone, &code_faible, "abc").await {
             Err(ErreurAuthPatient::MotDePasseNonConforme(regles)) => assert_eq!(
                 regles,
-                vec![RegleMotDePasse::LongueurMin, RegleMotDePasse::Chiffre, RegleMotDePasse::CaractereSpecial]
+                vec![
+                    RegleMotDePasse::LongueurMin,
+                    RegleMotDePasse::Chiffre,
+                    RegleMotDePasse::CaractereSpecial
+                ]
             ),
             autre => panic!("MotDePasseNonConforme attendu, obtenu {autre:?}"),
         }

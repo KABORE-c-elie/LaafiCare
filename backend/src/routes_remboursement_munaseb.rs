@@ -9,21 +9,22 @@
 //! `agent_assurance_munaseb` (étape 3.9) ; chaque transition est
 //! enregistrée avec cette affectation (J8).
 
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::Json;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sqlx::types::Uuid;
 
 use crate::AppState;
 use crate::erreur_api::{
-    CheminApi, ErreurApi, JsonApi, ReponseErreur, RequeteApi, reponse_erreur, reponse_erreur_interne,
+    CheminApi, ErreurApi, JsonApi, ReponseErreur, RequeteApi, reponse_erreur,
+    reponse_erreur_interne,
 };
 use crate::extracteur_jwt::AgentMunaseb;
 use laaficare_backend::demande_remboursement_munaseb::{
-    self as remboursement, Acte, DetailDemande, ErreurDemandeRemboursement, ErreurTransition, ResumeDemande,
-    StatutDemande, TypeActeMunaseb,
+    self as remboursement, Acte, DetailDemande, ErreurDemandeRemboursement, ErreurTransition,
+    ResumeDemande, StatutDemande, TypeActeMunaseb,
 };
 
 // ---------------------------------------------------------------------
@@ -38,17 +39,28 @@ fn mapper_erreur_remboursement(erreur: ErreurDemandeRemboursement) -> ReponseErr
         E::NipInvalide => (StatusCode::UNPROCESSABLE_ENTITY, "nip_invalide", None),
         E::PatientInconnu => (StatusCode::NOT_FOUND, "patient_inconnu", None),
         E::PartenaireInconnu => (StatusCode::NOT_FOUND, "partenaire_inconnu", None),
-        E::ReferenceActeDejaUtilisee => (StatusCode::CONFLICT, "reference_acte_deja_utilisee", None),
-        E::PartenaireSuspendu => (StatusCode::UNPROCESSABLE_ENTITY, "partenaire_suspendu", None),
-        E::NonCouvert => (StatusCode::UNPROCESSABLE_ENTITY, "non_couvert", None),
-        E::EnCarence { debut_couverture } => {
-            (StatusCode::UNPROCESSABLE_ENTITY, "en_carence", Some(*debut_couverture))
+        E::ReferenceActeDejaUtilisee => {
+            (StatusCode::CONFLICT, "reference_acte_deja_utilisee", None)
         }
+        E::PartenaireSuspendu => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "partenaire_suspendu",
+            None,
+        ),
+        E::NonCouvert => (StatusCode::UNPROCESSABLE_ENTITY, "non_couvert", None),
+        E::EnCarence { debut_couverture } => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "en_carence",
+            Some(*debut_couverture),
+        ),
         E::Interne(detail) => return reponse_erreur_interne("DemandeRemboursement", detail),
     };
     (
         statut,
-        Json(ErreurApi { debut_couverture, ..ErreurApi::simple(code, erreur.to_string()) }),
+        Json(ErreurApi {
+            debut_couverture,
+            ..ErreurApi::simple(code, erreur.to_string())
+        }),
     )
 }
 
@@ -133,7 +145,11 @@ pub async fn lister(
     let demandes = remboursement::lister_demandes(&state.db, filtre.statut, filtre.apres, limite)
         .await
         .map_err(|e| reponse_erreur_interne("lister_demandes", &e.to_string()))?;
-    let suivant = if demandes.len() as i64 == limite { demandes.last().map(|d| d.id) } else { None };
+    let suivant = if demandes.len() as i64 == limite {
+        demandes.last().map(|d| d.id)
+    } else {
+        None
+    };
     Ok(Json(ListeReponse { demandes, suivant }))
 }
 
@@ -147,7 +163,13 @@ pub async fn detail(
         .await
         .map_err(|e| reponse_erreur_interne("detail_demande", &e.to_string()))?
         .map(Json)
-        .ok_or_else(|| reponse_erreur(StatusCode::NOT_FOUND, "demande_inconnue", "demande inconnue"))
+        .ok_or_else(|| {
+            reponse_erreur(
+                StatusCode::NOT_FOUND,
+                "demande_inconnue",
+                "demande inconnue",
+            )
+        })
 }
 
 // ---------------------------------------------------------------------
@@ -158,16 +180,21 @@ fn mapper_erreur_transition(erreur: ErreurTransition) -> ReponseErreur {
     use ErreurTransition as E;
     let (statut, code, statut_actuel) = match &erreur {
         E::DemandeInconnue => (StatusCode::NOT_FOUND, "demande_inconnue", None),
-        E::TransitionInvalide { statut_actuel } => {
-            (StatusCode::CONFLICT, "transition_invalide", Some(statut_actuel.clone()))
-        }
+        E::TransitionInvalide { statut_actuel } => (
+            StatusCode::CONFLICT,
+            "transition_invalide",
+            Some(statut_actuel.clone()),
+        ),
         E::MotifVide => (StatusCode::UNPROCESSABLE_ENTITY, "motif_vide", None),
         E::MotifTropLong => (StatusCode::UNPROCESSABLE_ENTITY, "motif_trop_long", None),
         E::Interne(detail) => return reponse_erreur_interne("transition de demande", detail),
     };
     (
         statut,
-        Json(ErreurApi { statut_actuel, ..ErreurApi::simple(code, erreur.to_string()) }),
+        Json(ErreurApi {
+            statut_actuel,
+            ..ErreurApi::simple(code, erreur.to_string())
+        }),
     )
 }
 
@@ -198,7 +225,9 @@ pub async fn valider(
     let montant_rembourse_fcfa = remboursement::valider(&state.db, demande_id, agent)
         .await
         .map_err(mapper_erreur_transition)?;
-    Ok(Json(ValidationReponse { montant_rembourse_fcfa }))
+    Ok(Json(ValidationReponse {
+        montant_rembourse_fcfa,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -240,15 +269,49 @@ mod tests {
         use ErreurDemandeRemboursement as E;
         let debut = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
         for (erreur, statut, code) in [
-            (E::MontantInvalide, StatusCode::UNPROCESSABLE_ENTITY, "montant_invalide"),
-            (E::NipInvalide, StatusCode::UNPROCESSABLE_ENTITY, "nip_invalide"),
+            (
+                E::MontantInvalide,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "montant_invalide",
+            ),
+            (
+                E::NipInvalide,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "nip_invalide",
+            ),
             (E::PatientInconnu, StatusCode::NOT_FOUND, "patient_inconnu"),
-            (E::PartenaireInconnu, StatusCode::NOT_FOUND, "partenaire_inconnu"),
-            (E::ReferenceActeDejaUtilisee, StatusCode::CONFLICT, "reference_acte_deja_utilisee"),
-            (E::PartenaireSuspendu, StatusCode::UNPROCESSABLE_ENTITY, "partenaire_suspendu"),
-            (E::NonCouvert, StatusCode::UNPROCESSABLE_ENTITY, "non_couvert"),
-            (E::EnCarence { debut_couverture: debut }, StatusCode::UNPROCESSABLE_ENTITY, "en_carence"),
-            (E::Interne("détail secret".into()), StatusCode::INTERNAL_SERVER_ERROR, "erreur_interne"),
+            (
+                E::PartenaireInconnu,
+                StatusCode::NOT_FOUND,
+                "partenaire_inconnu",
+            ),
+            (
+                E::ReferenceActeDejaUtilisee,
+                StatusCode::CONFLICT,
+                "reference_acte_deja_utilisee",
+            ),
+            (
+                E::PartenaireSuspendu,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "partenaire_suspendu",
+            ),
+            (
+                E::NonCouvert,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "non_couvert",
+            ),
+            (
+                E::EnCarence {
+                    debut_couverture: debut,
+                },
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "en_carence",
+            ),
+            (
+                E::Interne("détail secret".into()),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "erreur_interne",
+            ),
         ] {
             let est_carence = matches!(erreur, E::EnCarence { .. });
             let (s, Json(corps)) = mapper_erreur_remboursement(erreur);
@@ -287,7 +350,11 @@ mod tests {
         };
         let db = &state.db;
         let scalaire = |requete: &'static str, telephone: &'static str| async move {
-            sqlx::query_scalar::<_, Uuid>(requete).bind(telephone).fetch_one(db).await.unwrap()
+            sqlx::query_scalar::<_, Uuid>(requete)
+                .bind(telephone)
+                .fetch_one(db)
+                .await
+                .unwrap()
         };
 
         // Demande en attente (données fictives).
@@ -375,10 +442,18 @@ mod tests {
                 .fetch_one(&state.db)
                 .await
                 .unwrap();
-                let session = session::ouvrir(&state.db, compte, Some(affectation)).await.unwrap();
+                let session = session::ouvrir(&state.db, compte, Some(affectation))
+                    .await
+                    .unwrap();
                 let jeton = state
                     .jwt
-                    .emettre(SorteJeton::ProfessionnelEnExercice, compte, 0, Some(affectation), Some(session.session_id))
+                    .emettre(
+                        SorteJeton::ProfessionnelEnExercice,
+                        compte,
+                        0,
+                        Some(affectation),
+                        Some(session.session_id),
+                    )
                     .unwrap();
                 (affectation, format!("Bearer {jeton}"))
             }
@@ -388,24 +463,40 @@ mod tests {
         let extraire = |en_tete: String| {
             let state = state.clone();
             async move {
-                let mut parts = Request::builder().header(AUTHORIZATION, en_tete).body(()).unwrap().into_parts().0;
+                let mut parts = Request::builder()
+                    .header(AUTHORIZATION, en_tete)
+                    .body(())
+                    .unwrap()
+                    .into_parts()
+                    .0;
                 AgentMunaseb::from_request_parts(&mut parts, &state).await
             }
         };
         let statut_demande = || async {
-            sqlx::query_scalar::<_, String>("SELECT statut FROM demande_remboursement_munaseb WHERE id = $1")
-                .bind(demande)
-                .fetch_one(db)
-                .await
-                .unwrap()
+            sqlx::query_scalar::<_, String>(
+                "SELECT statut FROM demande_remboursement_munaseb WHERE id = $1",
+            )
+            .bind(demande)
+            .fetch_one(db)
+            .await
+            .unwrap()
         };
 
-        let refus = extraire(jeton_b).await.map_err(IntoResponse::into_response).unwrap_err();
+        let refus = extraire(jeton_b)
+            .await
+            .map_err(IntoResponse::into_response)
+            .unwrap_err();
         assert_eq!(refus.status(), StatusCode::FORBIDDEN);
-        assert_eq!(statut_demande().await, "en_attente", "la demande n'a pas changé");
+        assert_eq!(
+            statut_demande().await,
+            "en_attente",
+            "la demande n'a pas changé"
+        );
 
         let agent_a = extraire(jeton_a).await.unwrap();
-        let statut = prendre_en_charge(agent_a, State(state.clone()), CheminApi(demande)).await.unwrap();
+        let statut = prendre_en_charge(agent_a, State(state.clone()), CheminApi(demande))
+            .await
+            .unwrap();
         assert_eq!(statut, StatusCode::NO_CONTENT);
         assert_eq!(statut_demande().await, "en_cours");
         let par: Option<Uuid> = sqlx::query_scalar(
@@ -422,16 +513,37 @@ mod tests {
     fn erreurs_de_transition() {
         use ErreurTransition as E;
         for (erreur, statut, code) in [
-            (E::DemandeInconnue, StatusCode::NOT_FOUND, "demande_inconnue"),
-            (E::TransitionInvalide { statut_actuel: "valide".into() }, StatusCode::CONFLICT, "transition_invalide"),
+            (
+                E::DemandeInconnue,
+                StatusCode::NOT_FOUND,
+                "demande_inconnue",
+            ),
+            (
+                E::TransitionInvalide {
+                    statut_actuel: "valide".into(),
+                },
+                StatusCode::CONFLICT,
+                "transition_invalide",
+            ),
             (E::MotifVide, StatusCode::UNPROCESSABLE_ENTITY, "motif_vide"),
-            (E::MotifTropLong, StatusCode::UNPROCESSABLE_ENTITY, "motif_trop_long"),
-            (E::Interne("détail secret".into()), StatusCode::INTERNAL_SERVER_ERROR, "erreur_interne"),
+            (
+                E::MotifTropLong,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "motif_trop_long",
+            ),
+            (
+                E::Interne("détail secret".into()),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "erreur_interne",
+            ),
         ] {
             let est_transition = matches!(erreur, E::TransitionInvalide { .. });
             let (s, Json(corps)) = mapper_erreur_transition(erreur);
             assert_eq!((s, corps.code), (statut, code));
-            assert_eq!(corps.statut_actuel.as_deref(), est_transition.then_some("valide"));
+            assert_eq!(
+                corps.statut_actuel.as_deref(),
+                est_transition.then_some("valide")
+            );
             assert!(!corps.erreur.contains("secret"));
         }
     }

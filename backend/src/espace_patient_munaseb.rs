@@ -44,7 +44,9 @@ async fn patient_du_compte(pool: &PgPool, compte_id: Uuid) -> Result<Uuid, Erreu
     .bind(compte_id)
     .fetch_optional(pool)
     .await?;
-    patient_id.ok_or_else(|| ErreurEspacePatient::Interne(format!("compte patient sans dossier patient : {compte_id}")))
+    patient_id.ok_or_else(|| {
+        ErreurEspacePatient::Interne(format!("compte patient sans dossier patient : {compte_id}"))
+    })
 }
 
 // ---------------------------------------------------------------------
@@ -132,7 +134,10 @@ pub async fn droits(pool: &PgPool, compte_id: Uuid) -> Result<DroitsPatient, Err
     // Aucun motif ni règle de suspension n'existe encore (à demander à la
     // MUNASEB, docs/points-ouverts.md) : rien d'autre que l'état.
     if statut != "actif" {
-        return Ok(DroitsPatient::vide(EtatDroits::Suspendu, Some(numero_carte)));
+        return Ok(DroitsPatient::vide(
+            EtatDroits::Suspendu,
+            Some(numero_carte),
+        ));
     }
 
     let en_cours: Option<(Uuid, NaiveDate, NaiveDate)> = sqlx::query_as(
@@ -172,12 +177,16 @@ pub async fn droits(pool: &PgPool, compte_id: Uuid) -> Result<DroitsPatient, Err
             ..DroitsPatient::vide(EtatDroits::EnCarence, Some(numero_carte))
         });
     }
-    let fin_derniere_periode: Option<NaiveDate> =
-        sqlx::query_scalar("SELECT max(date_fin) FROM periode_adhesion_munaseb WHERE contrat_id = $1")
-            .bind(contrat_id)
-            .fetch_one(pool)
-            .await?;
-    Ok(DroitsPatient { fin_derniere_periode, ..DroitsPatient::vide(EtatDroits::Expire, Some(numero_carte)) })
+    let fin_derniere_periode: Option<NaiveDate> = sqlx::query_scalar(
+        "SELECT max(date_fin) FROM periode_adhesion_munaseb WHERE contrat_id = $1",
+    )
+    .bind(contrat_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(DroitsPatient {
+        fin_derniere_periode,
+        ..DroitsPatient::vide(EtatDroits::Expire, Some(numero_carte))
+    })
 }
 
 // ---------------------------------------------------------------------
@@ -272,11 +281,12 @@ pub async fn detail_demande(
     demande_id: Uuid,
 ) -> Result<Option<DetailDemandePatient>, ErreurEspacePatient> {
     let patient_id = patient_du_compte(pool, compte_id).await?;
-    let Some(demande) = sqlx::query_as::<_, DemandePatient>(concat!(select_demande_patient!(), " AND d.id = $2"))
-        .bind(patient_id)
-        .bind(demande_id)
-        .fetch_optional(pool)
-        .await?
+    let Some(demande) =
+        sqlx::query_as::<_, DemandePatient>(concat!(select_demande_patient!(), " AND d.id = $2"))
+            .bind(patient_id)
+            .bind(demande_id)
+            .fetch_optional(pool)
+            .await?
     else {
         return Ok(None);
     };
@@ -298,14 +308,24 @@ pub async fn detail_demande(
     .fetch_all(pool)
     .await?;
     let plafond_atteint = matches!(demande.statut.as_str(), "valide" | "paye")
-        && demande.montant_rembourse_fcfa.is_some_and(|m| m < demande.montant_demande_fcfa);
-    Ok(Some(DetailDemandePatient { demande, motif_rejet, periode: Periode { debut, fin }, plafond_atteint, historique }))
+        && demande
+            .montant_rembourse_fcfa
+            .is_some_and(|m| m < demande.montant_demande_fcfa);
+    Ok(Some(DetailDemandePatient {
+        demande,
+        motif_rejet,
+        periode: Periode { debut, fin },
+        plafond_atteint,
+        historique,
+    }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::demande_remboursement_munaseb::{self as remboursement, Acte, AffectationAgent, TypeActeMunaseb};
+    use crate::demande_remboursement_munaseb::{
+        self as remboursement, Acte, AffectationAgent, TypeActeMunaseb,
+    };
     use crate::nip;
 
     // Base temporaire par test ; données fictives.
@@ -313,7 +333,10 @@ mod tests {
     /// Complète 15 chiffres par le chiffre de contrôle accepté (préfixe 9 :
     /// hors de la séquence réelle).
     fn nip_valide(payload: &str) -> String {
-        (0..=9).map(|d| format!("{payload}{d}")).find(|n| nip::valider(n)).unwrap()
+        (0..=9)
+            .map(|d| format!("{payload}{d}"))
+            .find(|n| nip::valider(n))
+            .unwrap()
     }
 
     /// Compte patient et dossier patient. Renvoie (compte, patient, NIP).
@@ -421,10 +444,19 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap();
-        AffectationAgent { affectation_id, structure_id }
+        AffectationAgent {
+            affectation_id,
+            structure_id,
+        }
     }
 
-    async fn demande(pool: &PgPool, nip: &str, partenaire_id: Uuid, reference: &str, montant: i32) -> Uuid {
+    async fn demande(
+        pool: &PgPool,
+        nip: &str,
+        partenaire_id: Uuid,
+        reference: &str,
+        montant: i32,
+    ) -> Uuid {
         remboursement::creer_depuis_acte(
             pool,
             &Acte {
@@ -445,7 +477,10 @@ mod tests {
     #[ignore]
     async fn cinq_etats_des_droits(pool: PgPool) {
         let (sans_contrat, _, _) = patient(&pool, "+22670020001", "900000000020001").await;
-        assert_eq!(droits(&pool, sans_contrat).await.unwrap(), DroitsPatient::vide(EtatDroits::AucunContrat, None));
+        assert_eq!(
+            droits(&pool, sans_contrat).await.unwrap(),
+            DroitsPatient::vide(EtatDroits::AucunContrat, None)
+        );
 
         // Couvert, avec un renouvellement déjà payé.
         let (couvert, p, _) = patient(&pool, "+22670020002", "900000000020002").await;
@@ -454,7 +489,10 @@ mod tests {
         periode(&pool, c, 301, 665).await;
         let d = droits(&pool, couvert).await.unwrap();
         assert_eq!(d.etat, EtatDroits::Couvert);
-        assert_eq!((d.plafond_fcfa, d.consomme_fcfa, d.solde_fcfa), (Some(100_000), Some(0), Some(100_000)));
+        assert_eq!(
+            (d.plafond_fcfa, d.consomme_fcfa, d.solde_fcfa),
+            (Some(100_000), Some(0), Some(100_000))
+        );
         assert!(d.periode_en_cours.is_some() && d.periode_suivante.is_some());
         // La carte de la période suivante (« …-1 ») n'est pas encore
         // valable : le patient voit celle de la période en cours.
@@ -509,48 +547,86 @@ mod tests {
 
         // 120 000 FCFA à 80 % = 96 000 demandés, validés et payés.
         let d1 = demande(&pool, &nip, pa, "REF-FICTIVE-1", 120_000).await;
-        remboursement::prendre_en_charge(&pool, d1, ag).await.unwrap();
+        remboursement::prendre_en_charge(&pool, d1, ag)
+            .await
+            .unwrap();
         remboursement::valider(&pool, d1, ag).await.unwrap();
         remboursement::marquer_payee(&pool, d1, ag).await.unwrap();
         // 10 000 à 80 % = 8 000 demandés ; solde 4 000 : plafond atteint.
         let d2 = demande(&pool, &nip, pa, "REF-FICTIVE-2", 10_000).await;
-        remboursement::prendre_en_charge(&pool, d2, ag).await.unwrap();
+        remboursement::prendre_en_charge(&pool, d2, ag)
+            .await
+            .unwrap();
         assert_eq!(remboursement::valider(&pool, d2, ag).await.unwrap(), 4_000);
         let d3 = demande(&pool, &nip, pa, "REF-FICTIVE-3", 5_000).await;
-        remboursement::rejeter(&pool, d3, ag, "Pièce manquante (fictif)").await.unwrap();
+        remboursement::rejeter(&pool, d3, ag, "Pièce manquante (fictif)")
+            .await
+            .unwrap();
 
         let vu_par_le_patient = droits(&pool, compte).await.unwrap();
-        let vu_par_l_agent = remboursement::detail_demande(&pool, d3).await.unwrap().unwrap();
+        let vu_par_l_agent = remboursement::detail_demande(&pool, d3)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(vu_par_le_patient.solde_fcfa, Some(0));
         assert_eq!(vu_par_le_patient.consomme_fcfa, Some(100_000));
-        assert_eq!(vu_par_le_patient.solde_fcfa, Some(vu_par_l_agent.solde_restant_periode_fcfa));
+        assert_eq!(
+            vu_par_le_patient.solde_fcfa,
+            Some(vu_par_l_agent.solde_restant_periode_fcfa)
+        );
 
-        let liste = lister_demandes(&pool, compte, None, None, 50).await.unwrap();
-        assert_eq!(liste.iter().map(|d| d.id).collect::<Vec<_>>(), [d3, d2, d1], "les plus récentes d'abord");
+        let liste = lister_demandes(&pool, compte, None, None, 50)
+            .await
+            .unwrap();
+        assert_eq!(
+            liste.iter().map(|d| d.id).collect::<Vec<_>>(),
+            [d3, d2, d1],
+            "les plus récentes d'abord"
+        );
         let json = serde_json::to_string(&liste).unwrap();
-        for interdit in ["Pièce manquante", "REF-FICTIVE", "KABRE", &nip, "CARTE-FICTIVE"] {
+        for interdit in [
+            "Pièce manquante",
+            "REF-FICTIVE",
+            "KABRE",
+            &nip,
+            "CARTE-FICTIVE",
+        ] {
             assert!(!json.contains(interdit), "{interdit} dans la liste");
         }
 
         let rejetee = detail_demande(&pool, compte, d3).await.unwrap().unwrap();
-        assert_eq!(rejetee.motif_rejet.as_deref(), Some("Pièce manquante (fictif)"));
+        assert_eq!(
+            rejetee.motif_rejet.as_deref(),
+            Some("Pièce manquante (fictif)")
+        );
         assert!(!rejetee.plafond_atteint);
         let plafonnee = detail_demande(&pool, compte, d2).await.unwrap().unwrap();
         assert!(plafonnee.plafond_atteint);
         assert_eq!(
-            plafonnee.historique.iter().map(|e| e.statut.as_str()).collect::<Vec<_>>(),
+            plafonnee
+                .historique
+                .iter()
+                .map(|e| e.statut.as_str())
+                .collect::<Vec<_>>(),
             ["en_attente", "en_cours", "valide"]
         );
         let json = serde_json::to_string(&plafonnee).unwrap();
         for interdit in ["KABRE", "Agent", "agent", "REF-FICTIVE", &nip] {
-            assert!(!json.contains(interdit), "{interdit} dans le détail : {json}");
+            assert!(
+                !json.contains(interdit),
+                "{interdit} dans le détail : {json}"
+            );
         }
 
         // Filtre et pagination par curseur.
-        let rejetees = lister_demandes(&pool, compte, Some(StatutDemande::Rejete), None, 50).await.unwrap();
+        let rejetees = lister_demandes(&pool, compte, Some(StatutDemande::Rejete), None, 50)
+            .await
+            .unwrap();
         assert_eq!(rejetees.len(), 1);
         let page1 = lister_demandes(&pool, compte, None, None, 2).await.unwrap();
-        let page2 = lister_demandes(&pool, compte, None, Some(page1[1].id), 2).await.unwrap();
+        let page2 = lister_demandes(&pool, compte, None, Some(page1[1].id), 2)
+            .await
+            .unwrap();
         assert_eq!(page2.iter().map(|d| d.id).collect::<Vec<_>>(), [d1]);
     }
 
@@ -568,7 +644,17 @@ mod tests {
 
         assert!(detail_demande(&pool, a, d).await.unwrap().is_some());
         assert!(detail_demande(&pool, b, d).await.unwrap().is_none());
-        assert!(detail_demande(&pool, a, Uuid::nil()).await.unwrap().is_none());
-        assert!(lister_demandes(&pool, b, None, None, 50).await.unwrap().is_empty());
+        assert!(
+            detail_demande(&pool, a, Uuid::nil())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            lister_demandes(&pool, b, None, None, 50)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }

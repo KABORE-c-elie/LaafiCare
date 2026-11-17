@@ -11,10 +11,12 @@ use sqlx::PgPool;
 use sqlx::types::Uuid;
 
 async fn compte(pool: &PgPool) -> Uuid {
-    let utilisateur_id: Uuid = sqlx::query_scalar("INSERT INTO utilisateur (telephone) VALUES ('+22670080001') RETURNING id")
-        .fetch_one(pool)
-        .await
-        .unwrap();
+    let utilisateur_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO utilisateur (telephone) VALUES ('+22670080001') RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
     sqlx::query_scalar(
         "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'professionnel', 'x') RETURNING id",
     )
@@ -42,11 +44,12 @@ async fn consommer(pool: &PgPool, compte_id: Uuid, iat: i64) -> bool {
 #[ignore]
 async fn colonne_vide_a_la_creation_et_valeur_positive(pool: PgPool) {
     let compte_id = compte(&pool).await;
-    let valeur: Option<i64> = sqlx::query_scalar("SELECT second_facteur_dernier_iat FROM compte WHERE id = $1")
-        .bind(compte_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let valeur: Option<i64> =
+        sqlx::query_scalar("SELECT second_facteur_dernier_iat FROM compte WHERE id = $1")
+            .bind(compte_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(valeur, None);
 
     for refusee in [0_i64, -1] {
@@ -68,7 +71,16 @@ async fn colonne_vide_a_la_creation_et_valeur_positive(pool: PgPool) {
 async fn la_consommation_ne_passe_qu_une_fois_par_iat(pool: PgPool) {
     let compte_id = compte(&pool).await;
     assert!(consommer(&pool, compte_id, 1_000).await, "premier jeton");
-    assert!(!consommer(&pool, compte_id, 1_000).await, "le même jeton une seconde fois");
-    assert!(!consommer(&pool, compte_id, 999).await, "un jeton plus ancien");
-    assert!(consommer(&pool, compte_id, 1_001).await, "un jeton plus récent");
+    assert!(
+        !consommer(&pool, compte_id, 1_000).await,
+        "le même jeton une seconde fois"
+    );
+    assert!(
+        !consommer(&pool, compte_id, 999).await,
+        "un jeton plus ancien"
+    );
+    assert!(
+        consommer(&pool, compte_id, 1_001).await,
+        "un jeton plus récent"
+    );
 }

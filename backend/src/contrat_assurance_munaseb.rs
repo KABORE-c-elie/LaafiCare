@@ -150,7 +150,9 @@ fn erreur_ecriture(erreur: sqlx::Error) -> Erreur {
             Some("contrat_assurance_munaseb_numero_carte_key" | "periode_numero_carte_unique") => {
                 return Erreur::NumeroCarteDejaUtilise;
             }
-            Some("paiement_reference_transaction_unique") => return Erreur::ReferenceTransactionDejaUtilisee,
+            Some("paiement_reference_transaction_unique") => {
+                return Erreur::ReferenceTransactionDejaUtilisee;
+            }
             _ => {}
         }
     }
@@ -238,9 +240,12 @@ pub async fn parametres_en_vigueur<'e, E>(executeur: E) -> Result<VersionParamet
 where
     E: sqlx::PgExecutor<'e>,
 {
-    sqlx::query_as(concat!(select_version!(), " ORDER BY pm.date_effet DESC, pm.id DESC LIMIT 1"))
-        .fetch_one(executeur)
-        .await
+    sqlx::query_as(concat!(
+        select_version!(),
+        " ORDER BY pm.date_effet DESC, pm.id DESC LIMIT 1"
+    ))
+    .fetch_one(executeur)
+    .await
 }
 
 /// Nouvelle version des paramètres, enregistrée avec l'affectation de son
@@ -284,7 +289,12 @@ pub async fn modifier_parametres(
     .bind(responsable.structure_id)
     .fetch_one(pool)
     .await?;
-    Ok(sqlx::query_as(concat!(select_version!(), " WHERE pm.id = $1")).bind(id).fetch_one(pool).await?)
+    Ok(
+        sqlx::query_as(concat!(select_version!(), " WHERE pm.id = $1"))
+            .bind(id)
+            .fetch_one(pool)
+            .await?,
+    )
 }
 
 /// Versions des paramètres, la plus récente d'abord, par pages (`avant` :
@@ -332,7 +342,10 @@ pub struct SoldePeriode {
 /// moins la somme des montants Validé et Payé (décisions actées, section
 /// 12). Chaque demande est rattachée à sa période dès sa création : aucun
 /// filtre de dates n'est nécessaire.
-pub async fn solde_periode<'e, E>(executeur: E, periode_id: Uuid) -> Result<SoldePeriode, sqlx::Error>
+pub async fn solde_periode<'e, E>(
+    executeur: E,
+    periode_id: Uuid,
+) -> Result<SoldePeriode, sqlx::Error>
 where
     E: sqlx::PgExecutor<'e>,
 {
@@ -407,22 +420,40 @@ pub fn calculer_periode(
 ) -> Result<(NaiveDate, NaiveDate), Erreur> {
     let hors_plage = || Erreur::Interne("date hors de la plage valide".into());
     let nouvelle_adhesion = || -> Result<(NaiveDate, NaiveDate), Erreur> {
-        let debut = date_paiement.checked_add_months(regles.carence).ok_or_else(hors_plage)?;
-        let fin = date_paiement.checked_add_months(DUREE).ok_or_else(hors_plage)?;
+        let debut = date_paiement
+            .checked_add_months(regles.carence)
+            .ok_or_else(hors_plage)?;
+        let fin = date_paiement
+            .checked_add_months(DUREE)
+            .ok_or_else(hors_plage)?;
         Ok((debut, fin))
     };
 
     match derniere {
         None => nouvelle_adhesion(),
-        Some((debut_derniere, _)) if debut_derniere > date_paiement => Err(Erreur::PeriodeFutureDejaPayee),
+        Some((debut_derniere, _)) if debut_derniere > date_paiement => {
+            Err(Erreur::PeriodeFutureDejaPayee)
+        }
         Some((_, fin_derniere)) if date_paiement <= fin_derniere => Ok((
-            fin_derniere.checked_add_days(Days::new(1)).ok_or_else(hors_plage)?,
-            fin_derniere.checked_add_months(DUREE).ok_or_else(hors_plage)?,
+            fin_derniere
+                .checked_add_days(Days::new(1))
+                .ok_or_else(hors_plage)?,
+            fin_derniere
+                .checked_add_months(DUREE)
+                .ok_or_else(hors_plage)?,
         )),
         Some((_, fin_derniere))
-            if date_paiement <= fin_derniere.checked_add_days(regles.delai_grace).ok_or_else(hors_plage)? =>
+            if date_paiement
+                <= fin_derniere
+                    .checked_add_days(regles.delai_grace)
+                    .ok_or_else(hors_plage)? =>
         {
-            Ok((date_paiement, fin_derniere.checked_add_months(DUREE).ok_or_else(hors_plage)?))
+            Ok((
+                date_paiement,
+                fin_derniere
+                    .checked_add_months(DUREE)
+                    .ok_or_else(hors_plage)?,
+            ))
         }
         Some(_) => nouvelle_adhesion(),
     }
@@ -489,16 +520,24 @@ fn texte(valeur: &str, champ: &str, max: usize) -> Result<String, Erreur> {
         return Err(Erreur::DonneesInvalides(format!("{champ} : obligatoire.")));
     }
     if valeur.chars().count() > max {
-        return Err(Erreur::DonneesInvalides(format!("{champ} : {max} caractères au plus.")));
+        return Err(Erreur::DonneesInvalides(format!(
+            "{champ} : {max} caractères au plus."
+        )));
     }
     if valeur.chars().any(char::is_control) {
-        return Err(Erreur::DonneesInvalides(format!("{champ} : caractère de contrôle refusé.")));
+        return Err(Erreur::DonneesInvalides(format!(
+            "{champ} : caractère de contrôle refusé."
+        )));
     }
     Ok(valeur.to_string())
 }
 
 /// Texte facultatif : absent ou vide après retrait des espaces = absent.
-fn texte_facultatif(valeur: Option<&str>, champ: &str, max: usize) -> Result<Option<String>, Erreur> {
+fn texte_facultatif(
+    valeur: Option<&str>,
+    champ: &str,
+    max: usize,
+) -> Result<Option<String>, Erreur> {
     match valeur.map(str::trim) {
         None | Some("") => Ok(None),
         Some(v) => texte(v, champ, max).map(Some),
@@ -513,7 +552,11 @@ struct PaiementControle {
 }
 
 fn controler_paiement(paiement: &NouveauPaiement) -> Result<PaiementControle, Erreur> {
-    let reference = texte_facultatif(paiement.reference_transaction.as_deref(), "paiement.reference_transaction", MAX_TEXTE_COURT)?;
+    let reference = texte_facultatif(
+        paiement.reference_transaction.as_deref(),
+        "paiement.reference_transaction",
+        MAX_TEXTE_COURT,
+    )?;
     match (paiement.mode, &reference) {
         (ModePaiement::MobileMoney, None) => Err(Erreur::DonneesInvalides(
             "paiement.reference_transaction : obligatoire pour le mobile money.".into(),
@@ -521,7 +564,11 @@ fn controler_paiement(paiement: &NouveauPaiement) -> Result<PaiementControle, Er
         (ModePaiement::Especes, Some(_)) => Err(Erreur::DonneesInvalides(
             "paiement.reference_transaction : seulement pour le mobile money.".into(),
         )),
-        _ => Ok(PaiementControle { mode: paiement.mode, reference_transaction: reference, date_declaree: paiement.date_declaree }),
+        _ => Ok(PaiementControle {
+            mode: paiement.mode,
+            reference_transaction: reference,
+            date_declaree: paiement.date_declaree,
+        }),
     }
 }
 
@@ -566,8 +613,14 @@ async fn enregistrer_periode(
     // un paiement en retard antidaté ferait disparaître la carence) ; date
     // du Burkina lue dans PostgreSQL (D9).
     let date_paiement = aujourdhui_au_burkina(&mut **tx).await?;
-    if periode.paiement.date_declaree.is_some_and(|d| d > date_paiement) {
-        return Err(Erreur::DonneesInvalides("paiement.date_declaree : ne peut pas être postérieure à aujourd'hui.".into()));
+    if periode
+        .paiement
+        .date_declaree
+        .is_some_and(|d| d > date_paiement)
+    {
+        return Err(Erreur::DonneesInvalides(
+            "paiement.date_declaree : ne peut pas être postérieure à aujourd'hui.".into(),
+        ));
     }
     let (debut, fin) = calculer_periode(derniere, date_paiement, parametres.regles())?;
 
@@ -661,7 +714,11 @@ async fn enregistrer_periode(
 /// opération ne verrouille une affectation puis un contrat (la
 /// désactivation verrouille structure → affectation → sessions) : aucun
 /// cycle n'est possible.
-pub async fn adherer(pool: &PgPool, agent: AffectationAgent, adhesion: &Adhesion) -> Result<Uuid, Erreur> {
+pub async fn adherer(
+    pool: &PgPool,
+    agent: AffectationAgent,
+    adhesion: &Adhesion,
+) -> Result<Uuid, Erreur> {
     // Contrôles sans base d'abord (même ordre que `creer_depuis_acte`).
     if !nip::valider(&adhesion.nip) {
         return Err(Erreur::NipInvalide);
@@ -669,8 +726,11 @@ pub async fn adherer(pool: &PgPool, agent: AffectationAgent, adhesion: &Adhesion
     let ufr = texte(&adhesion.ufr, "ufr", MAX_TEXTE_COURT)?;
     let universite = texte(&adhesion.universite, "universite", MAX_TEXTE_COURT)?;
     let num_matricule = texte(&adhesion.num_matricule, "num_matricule", MAX_MATRICULE)?;
-    let personne_a_prevenir =
-        texte_facultatif(adhesion.personne_a_prevenir.as_deref(), "personne_a_prevenir", MAX_PERSONNE_A_PREVENIR)?;
+    let personne_a_prevenir = texte_facultatif(
+        adhesion.personne_a_prevenir.as_deref(),
+        "personne_a_prevenir",
+        MAX_PERSONNE_A_PREVENIR,
+    )?;
     let periode = controler_periode(
         &adhesion.numero_carte,
         adhesion.niveau_etudes.as_deref(),
@@ -699,7 +759,9 @@ pub async fn adherer(pool: &PgPool, agent: AffectationAgent, adhesion: &Adhesion
     .await?;
     if echecs >= ECHECS_ADHESION_MAX {
         // Au moins 1 s : un échec pile à la limite de la fenêtre compte encore.
-        return Err(Erreur::TropDEchecs { reessayer_dans_secs: attente.unwrap_or(1).max(1) as u64 });
+        return Err(Erreur::TropDEchecs {
+            reessayer_dans_secs: attente.unwrap_or(1).max(1) as u64,
+        });
     }
 
     let patient_id: Option<Uuid> =
@@ -724,11 +786,12 @@ pub async fn adherer(pool: &PgPool, agent: AffectationAgent, adhesion: &Adhesion
         return Err(Erreur::PatientInconnu);
     };
 
-    let deja: bool =
-        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM contrat_assurance_munaseb WHERE patient_id = $1)")
-            .bind(patient_id)
-            .fetch_one(&mut *tx)
-            .await?;
+    let deja: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM contrat_assurance_munaseb WHERE patient_id = $1)",
+    )
+    .bind(patient_id)
+    .fetch_one(&mut *tx)
+    .await?;
     if deja {
         return Err(Erreur::ContratDejaExistant);
     }
@@ -888,8 +951,20 @@ pub struct DetailContrat {
 }
 
 /// Détail d'un contrat, `None` s'il n'existe pas.
-pub async fn detail_contrat(pool: &PgPool, contrat_id: Uuid) -> Result<Option<DetailContrat>, sqlx::Error> {
-    type LigneContrat = (Option<String>, Option<String>, String, String, String, Option<String>, String, DateTime<Utc>);
+pub async fn detail_contrat(
+    pool: &PgPool,
+    contrat_id: Uuid,
+) -> Result<Option<DetailContrat>, sqlx::Error> {
+    type LigneContrat = (
+        Option<String>,
+        Option<String>,
+        String,
+        String,
+        String,
+        Option<String>,
+        String,
+        DateTime<Utc>,
+    );
     let contrat: Option<LigneContrat> = sqlx::query_as(
         "SELECT u.nom, u.prenom, c.ufr, c.universite, c.num_matricule, c.personne_a_prevenir, c.statut, c.date_creation \
          FROM contrat_assurance_munaseb c \
@@ -900,8 +975,16 @@ pub async fn detail_contrat(pool: &PgPool, contrat_id: Uuid) -> Result<Option<De
     .bind(contrat_id)
     .fetch_optional(pool)
     .await?;
-    let Some((patient_nom, patient_prenom, ufr, universite, num_matricule, personne_a_prevenir, statut, date_creation)) =
-        contrat
+    let Some((
+        patient_nom,
+        patient_prenom,
+        ufr,
+        universite,
+        num_matricule,
+        personne_a_prevenir,
+        statut,
+        date_creation,
+    )) = contrat
     else {
         return Ok(None);
     };
@@ -972,7 +1055,10 @@ pub async fn detail_contrat(pool: &PgPool, contrat_id: Uuid) -> Result<Option<De
 /// Contrat qui porte ce numéro de carte (celle d'une période, ou la carte
 /// d'origine du contrat), `None` sinon. C'est la seule recherche de
 /// l'agent : le numéro est imprimé sur la carte que l'adhérent présente.
-pub async fn contrat_par_carte(pool: &PgPool, numero_carte: &str) -> Result<Option<Uuid>, sqlx::Error> {
+pub async fn contrat_par_carte(
+    pool: &PgPool,
+    numero_carte: &str,
+) -> Result<Option<Uuid>, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT id FROM contrat_assurance_munaseb WHERE numero_carte = $1 \
          UNION SELECT contrat_id FROM periode_adhesion_munaseb WHERE numero_carte = $1 \
@@ -1029,7 +1115,10 @@ pub async fn verifier_droits(pool: &PgPool, patient_id: Uuid) -> Result<DroitsCo
     };
 
     let solde = solde_periode(pool, periode_id).await?;
-    Ok(DroitsContrat { plafond_annuel_fcfa: solde.plafond_fcfa, plafond_restant_fcfa: solde.solde_fcfa })
+    Ok(DroitsContrat {
+        plafond_annuel_fcfa: solde.plafond_fcfa,
+        plafond_restant_fcfa: solde.solde_fcfa,
+    })
 }
 
 #[cfg(test)]
@@ -1042,21 +1131,33 @@ mod tests {
 
     /// Valeurs initiales de la migration 0028 (carence 1 mois, grâce 10 j).
     fn regles() -> ReglesPeriode {
-        ReglesPeriode { carence: Months::new(1), delai_grace: Days::new(10) }
+        ReglesPeriode {
+            carence: Months::new(1),
+            delai_grace: Days::new(10),
+        }
     }
 
     #[test]
     fn premiere_adhesion_carence_d_un_mois_fin_au_jour_anniversaire() {
         // Exemple du porteur (réponse 1) : adhésion le 09/04/2024, effet le
         // 09/05/2024, fin le 09/04/2025 compris.
-        assert_eq!(calculer_periode(None, d(2024, 4, 9), regles()).unwrap(), (d(2024, 5, 9), d(2025, 4, 9)));
+        assert_eq!(
+            calculer_periode(None, d(2024, 4, 9), regles()).unwrap(),
+            (d(2024, 5, 9), d(2025, 4, 9))
+        );
     }
 
     #[test]
     fn paiement_un_31_janvier_ramene_au_dernier_jour_de_fevrier() {
-        assert_eq!(calculer_periode(None, d(2026, 1, 31), regles()).unwrap(), (d(2026, 2, 28), d(2027, 1, 31)));
+        assert_eq!(
+            calculer_periode(None, d(2026, 1, 31), regles()).unwrap(),
+            (d(2026, 2, 28), d(2027, 1, 31))
+        );
         // Année bissextile : 29 février.
-        assert_eq!(calculer_periode(None, d(2028, 1, 31), regles()).unwrap(), (d(2028, 2, 29), d(2029, 1, 31)));
+        assert_eq!(
+            calculer_periode(None, d(2028, 1, 31), regles()).unwrap(),
+            (d(2028, 2, 29), d(2029, 1, 31))
+        );
     }
 
     #[test]
@@ -1065,7 +1166,10 @@ mod tests {
         let (debut, fin) = calculer_periode(None, d(2028, 2, 29), regles()).unwrap();
         assert_eq!((debut, fin), (d(2028, 3, 29), d(2029, 2, 28)));
         // Renouvellement dans les temps : le lendemain, sans jour perdu.
-        assert_eq!(calculer_periode(Some((debut, fin)), d(2029, 2, 1), regles()).unwrap(), (d(2029, 3, 1), d(2030, 2, 28)));
+        assert_eq!(
+            calculer_periode(Some((debut, fin)), d(2029, 2, 1), regles()).unwrap(),
+            (d(2029, 3, 1), d(2030, 2, 28))
+        );
     }
 
     #[test]
@@ -1073,9 +1177,15 @@ mod tests {
         let en_cours = Some((d(2024, 5, 9), d(2025, 4, 9)));
         let suivante = (d(2025, 4, 10), d(2026, 4, 9));
         // Payé le dernier jour de la période.
-        assert_eq!(calculer_periode(en_cours, d(2025, 4, 9), regles()).unwrap(), suivante);
+        assert_eq!(
+            calculer_periode(en_cours, d(2025, 4, 9), regles()).unwrap(),
+            suivante
+        );
         // Payé longtemps avant la fin : même période suivante.
-        assert_eq!(calculer_periode(en_cours, d(2024, 6, 1), regles()).unwrap(), suivante);
+        assert_eq!(
+            calculer_periode(en_cours, d(2024, 6, 1), regles()).unwrap(),
+            suivante
+        );
     }
 
     #[test]
@@ -1083,26 +1193,44 @@ mod tests {
         let expiree = Some((d(2024, 5, 9), d(2025, 4, 9)));
         // Payé le lendemain de la fin : couvert à partir du jour du
         // paiement, fin à la date anniversaire suivante.
-        assert_eq!(calculer_periode(expiree, d(2025, 4, 10), regles()).unwrap(), (d(2025, 4, 10), d(2026, 4, 9)));
+        assert_eq!(
+            calculer_periode(expiree, d(2025, 4, 10), regles()).unwrap(),
+            (d(2025, 4, 10), d(2026, 4, 9))
+        );
         // Payé le 10e jour après la fin : encore dans le délai ; les jours
         // du 10/04 au 18/04 ne sont pas couverts.
-        assert_eq!(calculer_periode(expiree, d(2025, 4, 19), regles()).unwrap(), (d(2025, 4, 19), d(2026, 4, 9)));
+        assert_eq!(
+            calculer_periode(expiree, d(2025, 4, 19), regles()).unwrap(),
+            (d(2025, 4, 19), d(2026, 4, 9))
+        );
     }
 
     #[test]
     fn renouvellement_au_dela_du_delai_de_grace_nouvelle_carence() {
         let expiree = Some((d(2024, 5, 9), d(2025, 4, 9)));
         // 11e jour après la fin : nouvelle adhésion, avec carence.
-        assert_eq!(calculer_periode(expiree, d(2025, 4, 20), regles()).unwrap(), (d(2025, 5, 20), d(2026, 4, 20)));
+        assert_eq!(
+            calculer_periode(expiree, d(2025, 4, 20), regles()).unwrap(),
+            (d(2025, 5, 20), d(2026, 4, 20))
+        );
     }
 
     #[test]
     fn delai_de_grace_nul_et_carence_nulle() {
-        let sans = ReglesPeriode { carence: Months::new(0), delai_grace: Days::new(0) };
-        assert_eq!(calculer_periode(None, d(2026, 3, 15), sans).unwrap(), (d(2026, 3, 15), d(2027, 3, 15)));
+        let sans = ReglesPeriode {
+            carence: Months::new(0),
+            delai_grace: Days::new(0),
+        };
+        assert_eq!(
+            calculer_periode(None, d(2026, 3, 15), sans).unwrap(),
+            (d(2026, 3, 15), d(2027, 3, 15))
+        );
         // Sans délai de grâce, le lendemain de la fin est déjà en retard.
         let expiree = Some((d(2026, 3, 15), d(2027, 3, 15)));
-        assert_eq!(calculer_periode(expiree, d(2027, 3, 16), sans).unwrap(), (d(2027, 3, 16), d(2028, 3, 16)));
+        assert_eq!(
+            calculer_periode(expiree, d(2027, 3, 16), sans).unwrap(),
+            (d(2027, 3, 16), d(2028, 3, 16))
+        );
     }
 
     #[test]
@@ -1127,33 +1255,77 @@ mod tests {
         };
         assert!(bons.controler().is_ok());
         for mauvais in [
-            Parametres { cotisation_fcfa: -1, ..bons },
-            Parametres { fiche_fcfa: -1, ..bons },
-            Parametres { delai_grace_jours: 61, ..bons },
-            Parametres { delai_grace_jours: -1, ..bons },
-            Parametres { carence_mois: 13, ..bons },
-            Parametres { carence_mois: -1, ..bons },
-            Parametres { plafond_periode_fcfa: 0, ..bons },
+            Parametres {
+                cotisation_fcfa: -1,
+                ..bons
+            },
+            Parametres {
+                fiche_fcfa: -1,
+                ..bons
+            },
+            Parametres {
+                delai_grace_jours: 61,
+                ..bons
+            },
+            Parametres {
+                delai_grace_jours: -1,
+                ..bons
+            },
+            Parametres {
+                carence_mois: 13,
+                ..bons
+            },
+            Parametres {
+                carence_mois: -1,
+                ..bons
+            },
+            Parametres {
+                plafond_periode_fcfa: 0,
+                ..bons
+            },
         ] {
-            assert!(matches!(mauvais.controler(), Err(ErreurContratAssuranceMunaseb::DonneesInvalides(_))));
+            assert!(matches!(
+                mauvais.controler(),
+                Err(ErreurContratAssuranceMunaseb::DonneesInvalides(_))
+            ));
         }
         // Valeurs limites permises.
-        assert!(Parametres { cotisation_fcfa: 0, fiche_fcfa: 0, delai_grace_jours: 60, carence_mois: 12, ..bons }
+        assert!(
+            Parametres {
+                cotisation_fcfa: 0,
+                fiche_fcfa: 0,
+                delai_grace_jours: 60,
+                carence_mois: 12,
+                ..bons
+            }
             .controler()
-            .is_ok());
+            .is_ok()
+        );
     }
 
     #[test]
     fn textes_saisis() {
-        assert_eq!(texte("  0552/2024 ", "numero_carte", 50).unwrap(), "0552/2024");
-        assert!(matches!(texte("   ", "ufr", 100), Err(ErreurContratAssuranceMunaseb::DonneesInvalides(m)) if m.starts_with("ufr")));
-        assert!(texte(&"é".repeat(50), "numero_carte", 50).is_ok(), "longueur en caractères, pas en octets");
+        assert_eq!(
+            texte("  0552/2024 ", "numero_carte", 50).unwrap(),
+            "0552/2024"
+        );
+        assert!(
+            matches!(texte("   ", "ufr", 100), Err(ErreurContratAssuranceMunaseb::DonneesInvalides(m)) if m.starts_with("ufr"))
+        );
+        assert!(
+            texte(&"é".repeat(50), "numero_carte", 50).is_ok(),
+            "longueur en caractères, pas en octets"
+        );
         assert!(texte(&"x".repeat(51), "numero_carte", 50).is_err());
         assert!(texte("ligne\nautre", "ufr", 100).is_err());
         assert_eq!(texte_facultatif(Some("  "), "antenne", 100).unwrap(), None);
         assert_eq!(texte_facultatif(None, "antenne", 100).unwrap(), None);
         // Le message ne reprend jamais la valeur saisie.
-        let Err(ErreurContratAssuranceMunaseb::DonneesInvalides(m)) = texte("secret\u{7}", "ufr", 100) else { panic!() };
+        let Err(ErreurContratAssuranceMunaseb::DonneesInvalides(m)) =
+            texte("secret\u{7}", "ufr", 100)
+        else {
+            panic!()
+        };
         assert!(!m.contains("secret"));
     }
 
@@ -1176,7 +1348,10 @@ mod tests {
     // ------------------------------------------------------------------
 
     fn nip_valide(payload: &str) -> String {
-        (0..=9).map(|c| format!("{payload}{c}")).find(|n| nip::valider(n)).unwrap()
+        (0..=9)
+            .map(|c| format!("{payload}{c}"))
+            .find(|n| nip::valider(n))
+            .unwrap()
     }
 
     /// Identité et dossier patient, né le 2000-01-01. Renvoie (patient, NIP).
@@ -1233,13 +1408,21 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap();
-        AffectationAgent { affectation_id, structure_id }
+        AffectationAgent {
+            affectation_id,
+            structure_id,
+        }
     }
 
     /// Affectation `responsable` dans la même structure qu'une affectation
     /// existante (la base n'admet qu'une MUNASEB validée), ou un second
     /// agent avec `role` = `agent_assurance_munaseb`.
-    async fn collegue(pool: &PgPool, telephone: &str, de: AffectationAgent, role: &str) -> AffectationAgent {
+    async fn collegue(
+        pool: &PgPool,
+        telephone: &str,
+        de: AffectationAgent,
+        role: &str,
+    ) -> AffectationAgent {
         let u: Uuid =
             sqlx::query_scalar("INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('ZONGO', 'Mariam', $1) RETURNING id")
                 .bind(telephone)
@@ -1261,11 +1444,18 @@ mod tests {
                 .fetch_one(pool)
                 .await
                 .unwrap();
-        AffectationAgent { affectation_id, structure_id: de.structure_id }
+        AffectationAgent {
+            affectation_id,
+            structure_id: de.structure_id,
+        }
     }
 
     fn especes() -> NouveauPaiement {
-        NouveauPaiement { mode: ModePaiement::Especes, reference_transaction: None, date_declaree: None }
+        NouveauPaiement {
+            mode: ModePaiement::Especes,
+            reference_transaction: None,
+            date_declaree: None,
+        }
     }
 
     fn mobile_money(reference: &str) -> NouveauPaiement {
@@ -1292,12 +1482,23 @@ mod tests {
     }
 
     fn renouvellement(carte: &str, paiement: NouveauPaiement) -> Renouvellement {
-        Renouvellement { numero_carte: carte.to_string(), niveau_etudes: None, antenne: Some("Bobo".into()), paiement }
+        Renouvellement {
+            numero_carte: carte.to_string(),
+            niveau_etudes: None,
+            antenne: Some("Bobo".into()),
+            paiement,
+        }
     }
 
     /// Contrat posé en SQL avec une période passée (dates que la route ne
     /// permet pas de créer), décalée en jours par rapport à aujourd'hui.
-    async fn contrat_avec_periode(pool: &PgPool, patient_id: Uuid, carte: &str, debut: i32, fin: i32) -> Uuid {
+    async fn contrat_avec_periode(
+        pool: &PgPool,
+        patient_id: Uuid,
+        carte: &str,
+        debut: i32,
+        fin: i32,
+    ) -> Uuid {
         let c: Uuid = sqlx::query_scalar(
             "INSERT INTO contrat_assurance_munaseb (patient_id, numero_carte, ufr, universite, num_matricule) \
              VALUES ($1, $2, 'UFR', 'Université', 'MAT') RETURNING id",
@@ -1343,20 +1544,37 @@ mod tests {
 
         // Refus : NIP mal formé, NIP inconnu, date de naissance différente.
         let mut mauvais = adhesion("1234", "0001/2026", especes());
-        assert!(matches!(adherer(&pool, ag, &mauvais).await, Err(Erreur::NipInvalide)));
+        assert!(matches!(
+            adherer(&pool, ag, &mauvais).await,
+            Err(Erreur::NipInvalide)
+        ));
         mauvais.nip = nip_valide("900000000049999");
-        assert!(matches!(adherer(&pool, ag, &mauvais).await, Err(Erreur::PatientInconnu)));
+        assert!(matches!(
+            adherer(&pool, ag, &mauvais).await,
+            Err(Erreur::PatientInconnu)
+        ));
         mauvais.nip = nip.clone();
         mauvais.date_naissance = d(2000, 1, 2);
-        assert!(matches!(adherer(&pool, ag, &mauvais).await, Err(Erreur::PatientInconnu)));
+        assert!(matches!(
+            adherer(&pool, ag, &mauvais).await,
+            Err(Erreur::PatientInconnu)
+        ));
         // Données : champ vide, référence pour des espèces, date future.
         let mut vide = adhesion(&nip, "0001/2026", especes());
         vide.universite = " ".into();
-        assert!(matches!(adherer(&pool, ag, &vide).await, Err(Erreur::DonneesInvalides(m)) if m.starts_with("universite")));
+        assert!(
+            matches!(adherer(&pool, ag, &vide).await, Err(Erreur::DonneesInvalides(m)) if m.starts_with("universite"))
+        );
         let mut future = adhesion(&nip, "0001/2026", mobile_money("OM-0001"));
         future.paiement.date_declaree = jour.succ_opt();
-        assert!(matches!(adherer(&pool, ag, &future).await, Err(Erreur::DonneesInvalides(m)) if m.contains("date_declaree")));
-        assert_eq!(compter(&pool, "contrat_assurance_munaseb").await, 0, "aucun refus n'écrit");
+        assert!(
+            matches!(adherer(&pool, ag, &future).await, Err(Erreur::DonneesInvalides(m)) if m.contains("date_declaree"))
+        );
+        assert_eq!(
+            compter(&pool, "contrat_assurance_munaseb").await,
+            0,
+            "aucun refus n'écrit"
+        );
 
         // Adhésion en espèces, avec une date déclarée d'aujourd'hui.
         let mut bonne = adhesion(&nip, " 0001/2026 ", especes());
@@ -1364,41 +1582,83 @@ mod tests {
         let contrat_id = adherer(&pool, ag, &bonne).await.unwrap();
         let detail = detail_contrat(&pool, contrat_id).await.unwrap().unwrap();
         assert_eq!(detail.etat, EtatDroits::EnCarence);
-        assert_eq!((detail.statut.as_str(), detail.ufr.as_str()), ("actif", "UFR fictive"));
+        assert_eq!(
+            (detail.statut.as_str(), detail.ufr.as_str()),
+            ("actif", "UFR fictive")
+        );
         assert_eq!(detail.personne_a_prevenir, None, "vide = absent");
         assert_eq!(detail.patient_nom.as_deref(), Some("OUEDRAOGO"));
-        let [p] = detail.periodes.as_slice() else { panic!("une période attendue") };
+        let [p] = detail.periodes.as_slice() else {
+            panic!("une période attendue")
+        };
         let attendu = calculer_periode(None, jour, regles()).unwrap();
-        assert_eq!((p.date_paiement, p.debut, p.fin), (jour, attendu.0, attendu.1));
+        assert_eq!(
+            (p.date_paiement, p.debut, p.fin),
+            (jour, attendu.0, attendu.1)
+        );
         assert_eq!(p.numero_carte.as_deref(), Some("0001/2026"));
         assert_eq!(p.niveau_etudes.as_deref(), Some("Licence 2"));
         assert!(!p.en_cours);
-        assert_eq!(p.solde, SoldePeriode { plafond_fcfa: 100_000, consomme_fcfa: 0, solde_fcfa: 100_000 });
+        assert_eq!(
+            p.solde,
+            SoldePeriode {
+                plafond_fcfa: 100_000,
+                consomme_fcfa: 0,
+                solde_fcfa: 100_000
+            }
+        );
         let paiement = p.paiement.as_ref().unwrap();
-        assert_eq!((paiement.mode.as_str(), paiement.montant_cotisation_fcfa, paiement.montant_fiche_fcfa), ("especes", 5000, 100));
-        assert_eq!((paiement.date_declaree, paiement.agent_prenom.as_deref()), (Some(jour), Some("Inoussa")));
+        assert_eq!(
+            (
+                paiement.mode.as_str(),
+                paiement.montant_cotisation_fcfa,
+                paiement.montant_fiche_fcfa
+            ),
+            ("especes", 5000, 100)
+        );
+        assert_eq!(
+            (paiement.date_declaree, paiement.agent_prenom.as_deref()),
+            (Some(jour), Some("Inoussa"))
+        );
         let json = serde_json::to_string(&detail).unwrap();
         for interdit in [nip.as_str(), "+22670400002", "nip", "telephone"] {
             assert!(!json.contains(interdit), "{interdit} dans {json}");
         }
 
         // Recherche par carte, espaces autour ignorés ; carte inconnue.
-        assert_eq!(contrat_par_carte(&pool, " 0001/2026").await.unwrap(), Some(contrat_id));
+        assert_eq!(
+            contrat_par_carte(&pool, " 0001/2026").await.unwrap(),
+            Some(contrat_id)
+        );
         assert_eq!(contrat_par_carte(&pool, "0002/2026").await.unwrap(), None);
         assert!(detail_contrat(&pool, Uuid::max()).await.unwrap().is_none());
 
         // Même patient : un seul contrat. Autre patient, même carte : refus.
-        assert!(matches!(adherer(&pool, ag, &adhesion(&nip, "0003/2026", especes())).await, Err(Erreur::ContratDejaExistant)));
+        assert!(matches!(
+            adherer(&pool, ag, &adhesion(&nip, "0003/2026", especes())).await,
+            Err(Erreur::ContratDejaExistant)
+        ));
         let (_, nip2) = patient(&pool, "+22670400003", "900000000040003").await;
         assert!(matches!(
             adherer(&pool, ag, &adhesion(&nip2, "0001/2026", especes())).await,
             Err(Erreur::NumeroCarteDejaUtilise)
         ));
         // Mobile money : référence unique.
-        adherer(&pool, ag, &adhesion(&nip2, "0004/2026", mobile_money("OM-REF-1"))).await.unwrap();
+        adherer(
+            &pool,
+            ag,
+            &adhesion(&nip2, "0004/2026", mobile_money("OM-REF-1")),
+        )
+        .await
+        .unwrap();
         let (_, nip3) = patient(&pool, "+22670400004", "900000000040004").await;
         assert!(matches!(
-            adherer(&pool, ag, &adhesion(&nip3, "0005/2026", mobile_money("OM-REF-1"))).await,
+            adherer(
+                &pool,
+                ag,
+                &adhesion(&nip3, "0005/2026", mobile_money("OM-REF-1"))
+            )
+            .await,
             Err(Erreur::ReferenceTransactionDejaUtilisee)
         ));
         assert_eq!(compter(&pool, "contrat_assurance_munaseb").await, 2);
@@ -1418,20 +1678,33 @@ mod tests {
         // Dans les temps : période en cours jusqu'à J+30.
         let (p, _) = patient(&pool, "+22670410002", "900000000041002").await;
         let c = contrat_avec_periode(&pool, p, "R-1/2026", -300, 30).await;
-        let id = renouveler(&pool, ag, c, &renouvellement("R-1/2027", especes())).await.unwrap();
-        let (debut, fin): (NaiveDate, NaiveDate) =
-            sqlx::query_as("SELECT date_debut, date_fin FROM periode_adhesion_munaseb WHERE id = $1")
-                .bind(id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!((debut, fin), (plus(31), plus(30).checked_add_months(DUREE).unwrap()));
+        let id = renouveler(&pool, ag, c, &renouvellement("R-1/2027", especes()))
+            .await
+            .unwrap();
+        let (debut, fin): (NaiveDate, NaiveDate) = sqlx::query_as(
+            "SELECT date_debut, date_fin FROM periode_adhesion_munaseb WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            (debut, fin),
+            (plus(31), plus(30).checked_add_months(DUREE).unwrap())
+        );
         let detail = detail_contrat(&pool, c).await.unwrap().unwrap();
         assert_eq!(detail.etat, EtatDroits::Couvert);
         assert_eq!(detail.periodes.len(), 2);
-        assert_eq!(detail.periodes[0].numero_carte.as_deref(), Some("R-1/2027"), "la plus récente d'abord");
+        assert_eq!(
+            detail.periodes[0].numero_carte.as_deref(),
+            Some("R-1/2027"),
+            "la plus récente d'abord"
+        );
         assert_eq!(detail.periodes[0].antenne.as_deref(), Some("Bobo"));
-        assert!(detail.periodes[1].en_cours && detail.periodes[1].paiement.is_none(), "période posée en SQL");
+        assert!(
+            detail.periodes[1].en_cours && detail.periodes[1].paiement.is_none(),
+            "période posée en SQL"
+        );
         // Seconde période d'avance : refusée.
         assert!(matches!(
             renouveler(&pool, ag, c, &renouvellement("R-1/2028", especes())).await,
@@ -1449,22 +1722,34 @@ mod tests {
         // date anniversaire suivante.
         let (p, _) = patient(&pool, "+22670410003", "900000000041003").await;
         let c = contrat_avec_periode(&pool, p, "R-2/2026", -360, -1).await;
-        renouveler(&pool, ag, c, &renouvellement("R-2/2027", especes())).await.unwrap();
+        renouveler(&pool, ag, c, &renouvellement("R-2/2027", especes()))
+            .await
+            .unwrap();
         let detail = detail_contrat(&pool, c).await.unwrap().unwrap();
         assert_eq!(detail.etat, EtatDroits::Couvert);
-        assert_eq!((detail.periodes[0].debut, detail.periodes[0].fin), (jour, plus(-1).checked_add_months(DUREE).unwrap()));
+        assert_eq!(
+            (detail.periodes[0].debut, detail.periodes[0].fin),
+            (jour, plus(-1).checked_add_months(DUREE).unwrap())
+        );
 
         // Au-delà du délai (fin il y a 11 jours) : nouvelle carence.
         let (p, _) = patient(&pool, "+22670410004", "900000000041004").await;
         let c = contrat_avec_periode(&pool, p, "R-3/2026", -370, -11).await;
-        renouveler(&pool, ag, c, &renouvellement("R-3/2027", especes())).await.unwrap();
+        renouveler(&pool, ag, c, &renouvellement("R-3/2027", especes()))
+            .await
+            .unwrap();
         let detail = detail_contrat(&pool, c).await.unwrap().unwrap();
         assert_eq!(detail.etat, EtatDroits::EnCarence);
-        assert_eq!((detail.periodes[0].debut, detail.periodes[0].fin), calculer_periode(None, jour, regles()).unwrap());
+        assert_eq!(
+            (detail.periodes[0].debut, detail.periodes[0].fin),
+            calculer_periode(None, jour, regles()).unwrap()
+        );
 
         // Pendant la carence d'une première adhésion : refusé.
         let (_, nip) = patient(&pool, "+22670410005", "900000000041005").await;
-        let c = adherer(&pool, ag, &adhesion(&nip, "R-5/2026", especes())).await.unwrap();
+        let c = adherer(&pool, ag, &adhesion(&nip, "R-5/2026", especes()))
+            .await
+            .unwrap();
         assert!(matches!(
             renouveler(&pool, ag, c, &renouvellement("R-5/2027", especes())).await,
             Err(Erreur::PeriodeFutureDejaPayee)
@@ -1482,9 +1767,18 @@ mod tests {
             renouveler(&pool, ag, c, &renouvellement("R-6/2027", especes())).await,
             Err(Erreur::ContratSuspendu)
         ));
-        assert_eq!(detail_contrat(&pool, c).await.unwrap().unwrap().etat, EtatDroits::Suspendu);
+        assert_eq!(
+            detail_contrat(&pool, c).await.unwrap().unwrap().etat,
+            EtatDroits::Suspendu
+        );
         assert!(matches!(
-            renouveler(&pool, ag, Uuid::max(), &renouvellement("R-7/2027", especes())).await,
+            renouveler(
+                &pool,
+                ag,
+                Uuid::max(),
+                &renouvellement("R-7/2027", especes())
+            )
+            .await,
             Err(Erreur::AucunContrat)
         ));
     }
@@ -1499,12 +1793,28 @@ mod tests {
         let (p, _) = patient(&pool, "+22670420002", "900000000042002").await;
         let c = contrat_avec_periode(&pool, p, "S-1/2026", -300, 30).await;
         let (p1, p2) = (pool.clone(), pool.clone());
-        let t1 = tokio::spawn(async move { renouveler(&p1, ag, c, &renouvellement("S-1/2027", especes())).await });
-        let t2 = tokio::spawn(async move { renouveler(&p2, ag, c, &renouvellement("S-2/2027", especes())).await });
+        let t1 = tokio::spawn(async move {
+            renouveler(&p1, ag, c, &renouvellement("S-1/2027", especes())).await
+        });
+        let t2 = tokio::spawn(async move {
+            renouveler(&p2, ag, c, &renouvellement("S-2/2027", especes())).await
+        });
         let resultats = [t1.await.unwrap(), t2.await.unwrap()];
         assert_eq!(resultats.iter().filter(|r| r.is_ok()).count(), 1);
-        assert!(resultats.iter().any(|r| matches!(r, Err(Erreur::PeriodeFutureDejaPayee))));
-        assert_eq!(detail_contrat(&pool, c).await.unwrap().unwrap().periodes.len(), 2);
+        assert!(
+            resultats
+                .iter()
+                .any(|r| matches!(r, Err(Erreur::PeriodeFutureDejaPayee)))
+        );
+        assert_eq!(
+            detail_contrat(&pool, c)
+                .await
+                .unwrap()
+                .unwrap()
+                .periodes
+                .len(),
+            2
+        );
     }
 
     /// Paramètres : valeurs initiales, refus hors bornes, requête identique
@@ -1530,13 +1840,27 @@ mod tests {
 
         // Période créée avant la modification.
         let (_, nip_avant) = patient(&pool, "+22670430002", "900000000043002").await;
-        let avant = adherer(&pool, ag, &adhesion(&nip_avant, "P-1/2026", especes())).await.unwrap();
+        let avant = adherer(&pool, ag, &adhesion(&nip_avant, "P-1/2026", especes()))
+            .await
+            .unwrap();
 
         assert!(matches!(
-            modifier_parametres(&pool, resp, Parametres { carence_mois: 13, ..valeurs }).await,
+            modifier_parametres(
+                &pool,
+                resp,
+                Parametres {
+                    carence_mois: 13,
+                    ..valeurs
+                }
+            )
+            .await,
             Err(Erreur::DonneesInvalides(_))
         ));
-        assert_eq!(modifier_parametres(&pool, resp, valeurs).await.unwrap().id, initiaux.id, "rien ne change");
+        assert_eq!(
+            modifier_parametres(&pool, resp, valeurs).await.unwrap().id,
+            initiaux.id,
+            "rien ne change"
+        );
         assert_eq!(compter(&pool, "parametre_munaseb").await, 1);
 
         // Garantie de la base : une version écrite au nom d'un agent est
@@ -1556,28 +1880,64 @@ mod tests {
             Some("parametre_munaseb_auteur_responsable")
         );
 
-        let nouveaux = Parametres { cotisation_fcfa: 6000, carence_mois: 0, plafond_periode_fcfa: 120_000, ..valeurs };
+        let nouveaux = Parametres {
+            cotisation_fcfa: 6000,
+            carence_mois: 0,
+            plafond_periode_fcfa: 120_000,
+            ..valeurs
+        };
         let version = modifier_parametres(&pool, resp, nouveaux).await.unwrap();
-        assert_eq!((version.valeurs, version.auteur_prenom.as_deref()), (nouveaux, Some("Mariam")));
+        assert_eq!(
+            (version.valeurs, version.auteur_prenom.as_deref()),
+            (nouveaux, Some("Mariam"))
+        );
         assert_eq!(parametres_en_vigueur(&pool).await.unwrap().id, version.id);
 
         let tout = historique_parametres(&pool, None, 10).await.unwrap();
-        assert_eq!(tout.iter().map(|v| v.id).collect::<Vec<_>>(), [version.id, initiaux.id], "la plus récente d'abord");
-        let page = historique_parametres(&pool, Some(version.id), 10).await.unwrap();
+        assert_eq!(
+            tout.iter().map(|v| v.id).collect::<Vec<_>>(),
+            [version.id, initiaux.id],
+            "la plus récente d'abord"
+        );
+        let page = historique_parametres(&pool, Some(version.id), 10)
+            .await
+            .unwrap();
         assert_eq!(page.iter().map(|v| v.id).collect::<Vec<_>>(), [initiaux.id]);
 
         // Période suivante : nouveau plafond, sans carence, nouvelle
         // cotisation. La période d'avant garde les siens.
         let (_, nip_apres) = patient(&pool, "+22670430003", "900000000043003").await;
-        let apres = adherer(&pool, ag, &adhesion(&nip_apres, "P-2/2026", especes())).await.unwrap();
+        let apres = adherer(&pool, ag, &adhesion(&nip_apres, "P-2/2026", especes()))
+            .await
+            .unwrap();
         let jour = aujourdhui_au_burkina(&pool).await.unwrap();
         let d_apres = detail_contrat(&pool, apres).await.unwrap().unwrap();
         assert_eq!(d_apres.etat, EtatDroits::Couvert, "carence nulle");
-        assert_eq!((d_apres.periodes[0].debut, d_apres.periodes[0].solde.plafond_fcfa), (jour, 120_000));
-        assert_eq!(d_apres.periodes[0].paiement.as_ref().unwrap().montant_cotisation_fcfa, 6000);
+        assert_eq!(
+            (
+                d_apres.periodes[0].debut,
+                d_apres.periodes[0].solde.plafond_fcfa
+            ),
+            (jour, 120_000)
+        );
+        assert_eq!(
+            d_apres.periodes[0]
+                .paiement
+                .as_ref()
+                .unwrap()
+                .montant_cotisation_fcfa,
+            6000
+        );
         let d_avant = detail_contrat(&pool, avant).await.unwrap().unwrap();
         assert_eq!(d_avant.periodes[0].solde.plafond_fcfa, 100_000);
-        assert_eq!(d_avant.periodes[0].paiement.as_ref().unwrap().montant_cotisation_fcfa, 5000);
+        assert_eq!(
+            d_avant.periodes[0]
+                .paiement
+                .as_ref()
+                .unwrap()
+                .montant_cotisation_fcfa,
+            5000
+        );
 
         // Jamais modifiées ni supprimées, même par le propriétaire.
         for requete in [
@@ -1589,7 +1949,10 @@ mod tests {
             "TRUNCATE paiement_cotisation_munaseb",
         ] {
             let erreur = sqlx::query(requete).execute(&pool).await.unwrap_err();
-            assert!(erreur.to_string().contains("jamais modifiees"), "{requete} : {erreur}");
+            assert!(
+                erreur.to_string().contains("jamais modifiees"),
+                "{requete} : {erreur}"
+            );
         }
     }
 
@@ -1615,35 +1978,58 @@ mod tests {
         let echecs_de = |affectation: Uuid| {
             let pool = pool.clone();
             async move {
-                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM echec_adhesion_munaseb WHERE agent_affectation_id = $1")
-                    .bind(affectation)
-                    .fetch_one(&pool)
-                    .await
-                    .unwrap()
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT count(*) FROM echec_adhesion_munaseb WHERE agent_affectation_id = $1",
+                )
+                .bind(affectation)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
             }
         };
 
         // Un NIP mal formé ne compte pas.
-        assert!(matches!(adherer(&pool, ag, &adhesion("123", "L-1/2026", especes())).await, Err(Erreur::NipInvalide)));
+        assert!(matches!(
+            adherer(&pool, ag, &adhesion("123", "L-1/2026", especes())).await,
+            Err(Erreur::NipInvalide)
+        ));
         assert_eq!(echecs_de(ag.affectation_id).await, 0);
 
         for _ in 0..ECHECS_ADHESION_MAX {
-            assert!(matches!(adherer(&pool, ag, &mauvaise_date()).await, Err(Erreur::PatientInconnu)));
+            assert!(matches!(
+                adherer(&pool, ag, &mauvaise_date()).await,
+                Err(Erreur::PatientInconnu)
+            ));
         }
-        assert_eq!(echecs_de(ag.affectation_id).await, ECHECS_ADHESION_MAX, "chaque échec tracé");
+        assert_eq!(
+            echecs_de(ag.affectation_id).await,
+            ECHECS_ADHESION_MAX,
+            "chaque échec tracé"
+        );
 
         // Limite atteinte : refusé même avec le bon couple, rien n'est écrit.
         match adherer(&pool, ag, &adhesion(&nip, "L-1/2026", especes())).await {
-            Err(Erreur::TropDEchecs { reessayer_dans_secs }) => {
-                assert!((1..=15 * 60).contains(&reessayer_dans_secs), "{reessayer_dans_secs}")
+            Err(Erreur::TropDEchecs {
+                reessayer_dans_secs,
+            }) => {
+                assert!(
+                    (1..=15 * 60).contains(&reessayer_dans_secs),
+                    "{reessayer_dans_secs}"
+                )
             }
             autre => panic!("TropDEchecs attendu, obtenu {autre:?}"),
         }
         assert_eq!(compter(&pool, "contrat_assurance_munaseb").await, 0);
-        assert_eq!(echecs_de(ag.affectation_id).await, ECHECS_ADHESION_MAX, "le refus n'ajoute pas d'échec");
+        assert_eq!(
+            echecs_de(ag.affectation_id).await,
+            ECHECS_ADHESION_MAX,
+            "le refus n'ajoute pas d'échec"
+        );
 
         // Un autre agent de la même MUNASEB n'est pas touché.
-        adherer(&pool, autre, &adhesion(&nip, "L-1/2026", especes())).await.unwrap();
+        adherer(&pool, autre, &adhesion(&nip, "L-1/2026", especes()))
+            .await
+            .unwrap();
         assert_eq!(echecs_de(autre.affectation_id).await, 0);
 
         // Un échec de plus de 15 minutes ne compte plus : un agent dont 4
@@ -1659,8 +2045,14 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        assert!(matches!(adherer(&pool, ag2, &mauvaise_date()).await, Err(Erreur::PatientInconnu)));
-        assert!(matches!(adherer(&pool, ag2, &mauvaise_date()).await, Err(Erreur::TropDEchecs { .. })));
+        assert!(matches!(
+            adherer(&pool, ag2, &mauvaise_date()).await,
+            Err(Erreur::PatientInconnu)
+        ));
+        assert!(matches!(
+            adherer(&pool, ag2, &mauvaise_date()).await,
+            Err(Erreur::TropDEchecs { .. })
+        ));
 
         // La trace ne garde que qui et quand ; jamais modifiée ni effacée.
         let colonnes: Vec<String> = sqlx::query_scalar(
@@ -1669,10 +2061,26 @@ mod tests {
         .fetch_all(&pool)
         .await
         .unwrap();
-        assert_eq!(colonnes, ["id", "agent_affectation_id", "agent_structure_id", "agent_role", "date_echec"]);
-        for requete in ["UPDATE echec_adhesion_munaseb SET date_echec = now()", "DELETE FROM echec_adhesion_munaseb", "TRUNCATE echec_adhesion_munaseb"] {
+        assert_eq!(
+            colonnes,
+            [
+                "id",
+                "agent_affectation_id",
+                "agent_structure_id",
+                "agent_role",
+                "date_echec"
+            ]
+        );
+        for requete in [
+            "UPDATE echec_adhesion_munaseb SET date_echec = now()",
+            "DELETE FROM echec_adhesion_munaseb",
+            "TRUNCATE echec_adhesion_munaseb",
+        ] {
             let erreur = sqlx::query(requete).execute(&pool).await.unwrap_err();
-            assert!(erreur.to_string().contains("jamais modifiees"), "{requete} : {erreur}");
+            assert!(
+                erreur.to_string().contains("jamais modifiees"),
+                "{requete} : {erreur}"
+            );
         }
     }
 
@@ -1702,8 +2110,14 @@ mod tests {
                 autre => panic!("{autre:?}"),
             }
         }
-        assert_eq!((inconnus, limites), (ECHECS_ADHESION_MAX, 10 - ECHECS_ADHESION_MAX));
-        let traces: i64 = sqlx::query_scalar("SELECT count(*) FROM echec_adhesion_munaseb").fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            (inconnus, limites),
+            (ECHECS_ADHESION_MAX, 10 - ECHECS_ADHESION_MAX)
+        );
+        let traces: i64 = sqlx::query_scalar("SELECT count(*) FROM echec_adhesion_munaseb")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(traces, ECHECS_ADHESION_MAX);
     }
 
@@ -1730,17 +2144,29 @@ mod tests {
                 .await
             }
         };
-        assert!(inserer_periode(None, -100).await.is_err(), "numéro obligatoire");
-        assert!(inserer_periode(Some(" G-2 "), -100).await.is_err(), "espaces autour");
-        assert!(inserer_periode(Some("G-1/2026"), -100).await.is_err(), "déjà pris");
+        assert!(
+            inserer_periode(None, -100).await.is_err(),
+            "numéro obligatoire"
+        );
+        assert!(
+            inserer_periode(Some(" G-2 "), -100).await.is_err(),
+            "espaces autour"
+        );
+        assert!(
+            inserer_periode(Some("G-1/2026"), -100).await.is_err(),
+            "déjà pris"
+        );
         inserer_periode(Some("G-2/2026"), -100).await.unwrap();
 
-        let periode: Uuid =
-            sqlx::query_scalar("SELECT id FROM periode_adhesion_munaseb WHERE numero_carte = 'G-2/2026'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        let inserer_paiement = |mode: &'static str, reference: Option<&'static str>, decalage: i32| {
+        let periode: Uuid = sqlx::query_scalar(
+            "SELECT id FROM periode_adhesion_munaseb WHERE numero_carte = 'G-2/2026'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let inserer_paiement = |mode: &'static str,
+                                reference: Option<&'static str>,
+                                decalage: i32| {
             let pool = pool.clone();
             async move {
                 sqlx::query(
@@ -1759,10 +2185,22 @@ mod tests {
                 .await
             }
         };
-        assert!(inserer_paiement("mobile_money", None, 0).await.is_err(), "référence exigée");
-        assert!(inserer_paiement("especes", Some("OM-1"), 0).await.is_err(), "référence refusée");
-        assert!(inserer_paiement("especes", None, 2).await.is_err(), "date future");
+        assert!(
+            inserer_paiement("mobile_money", None, 0).await.is_err(),
+            "référence exigée"
+        );
+        assert!(
+            inserer_paiement("especes", Some("OM-1"), 0).await.is_err(),
+            "référence refusée"
+        );
+        assert!(
+            inserer_paiement("especes", None, 2).await.is_err(),
+            "date future"
+        );
         inserer_paiement("especes", None, -1).await.unwrap();
-        assert!(inserer_paiement("especes", None, -1).await.is_err(), "un paiement par période");
+        assert!(
+            inserer_paiement("especes", None, -1).await.is_err(),
+            "un paiement par période"
+        );
     }
 }

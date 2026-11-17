@@ -3,10 +3,10 @@
 //! déconnexion partout. Même principe que les autres fichiers de routes :
 //! désérialiser, appeler `session.rs`, traduire le résultat.
 
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
@@ -29,7 +29,11 @@ struct CorpsPaire<'a> {
 /// tout de suite (`into_response`), pendant que la paire existe encore :
 /// le jeton de renouvellement n'est lu en clair qu'ici (`en_clair()`), puis
 /// effacé de la mémoire avec la paire (`session.rs`).
-pub(crate) fn reponse_paire(statut: StatusCode, paire: &PaireJetons, etape: Option<&'static str>) -> Response {
+pub(crate) fn reponse_paire(
+    statut: StatusCode,
+    paire: &PaireJetons,
+    etape: Option<&'static str>,
+) -> Response {
     let corps = CorpsPaire {
         etape,
         jeton_acces: &paire.jeton_acces,
@@ -57,13 +61,19 @@ pub async fn renouveler(
         .and_then(|active| active.en_paire(&state.jwt));
     match resultat {
         Ok(paire) => reponse_paire(StatusCode::OK, &paire, None),
-        Err(ErreurSession::JetonInvalide | ErreurSession::RejeuDetecte | ErreurSession::EmailNonVerifie) => reponse_erreur(
+        Err(
+            ErreurSession::JetonInvalide
+            | ErreurSession::RejeuDetecte
+            | ErreurSession::EmailNonVerifie,
+        ) => reponse_erreur(
             StatusCode::UNAUTHORIZED,
             "jeton_invalide",
             "jeton de renouvellement invalide ou expiré",
         )
         .into_response(),
-        Err(ErreurSession::Interne(detail)) => reponse_erreur_interne("renouvellement de session", &detail).into_response(),
+        Err(ErreurSession::Interne(detail)) => {
+            reponse_erreur_interne("renouvellement de session", &detail).into_response()
+        }
     }
 }
 
@@ -86,15 +96,26 @@ pub async fn deconnexion(
 /// verrouillé avant les sessions (règle S2). Ouverte à tous les comptes
 /// depuis l'étape 3.9 (D8) : patient, professionnel avec ou sans
 /// affectation, administrateur (`CompteConnecte`).
-pub async fn deconnexion_partout(compte: CompteConnecte, State(state): State<AppState>) -> Response {
+pub async fn deconnexion_partout(
+    compte: CompteConnecte,
+    State(state): State<AppState>,
+) -> Response {
     let resultat = async {
         let mut tx = state.db.begin().await?;
-        session::fermer_toutes(&mut tx, compte.compte_id, MotifRevocation::DeconnexionPartout, true).await?;
+        session::fermer_toutes(
+            &mut tx,
+            compte.compte_id,
+            MotifRevocation::DeconnexionPartout,
+            true,
+        )
+        .await?;
         tx.commit().await
     }
     .await;
     match resultat {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(erreur) => reponse_erreur_interne("déconnexion partout", &erreur.to_string()).into_response(),
+        Err(erreur) => {
+            reponse_erreur_interne("déconnexion partout", &erreur.to_string()).into_response()
+        }
     }
 }

@@ -83,7 +83,11 @@ async fn desactiver(
     .map(|_| ())
 }
 
-async fn inserer_profil(pool: &PgPool, compte_id: Uuid, numero_cnib: &str) -> Result<String, sqlx::Error> {
+async fn inserer_profil(
+    pool: &PgPool,
+    compte_id: Uuid,
+    numero_cnib: &str,
+) -> Result<String, sqlx::Error> {
     sqlx::query_scalar(
         "INSERT INTO profil_administrateur (compte_id, numero_cnib) VALUES ($1, $2) RETURNING numero_cnib_normalise",
     )
@@ -120,13 +124,62 @@ async fn un_totp_mal_forme_est_refuse(pool: PgPool) {
     // (taille du secret chiffré, taille du nonce, statut, date d'activation,
     // dernier pas, contrainte attendue)
     for (secret, nonce, statut, date_activation, dernier_pas, attendue) in [
-        (35, 12, "en_attente", false, None, "second_facteur_totp_secret_chiffre_check"),
-        (37, 12, "en_attente", false, None, "second_facteur_totp_secret_chiffre_check"),
-        (36, 11, "en_attente", false, None, "second_facteur_totp_nonce_check"),
-        (36, 16, "en_attente", false, None, "second_facteur_totp_nonce_check"),
-        (36, 12, "actif", false, None, "second_facteur_totp_activation_datee"),
-        (36, 12, "en_attente", true, None, "second_facteur_totp_activation_datee"),
-        (36, 12, "en_attente", false, Some(1_i64), "second_facteur_totp_pas_si_actif"),
+        (
+            35,
+            12,
+            "en_attente",
+            false,
+            None,
+            "second_facteur_totp_secret_chiffre_check",
+        ),
+        (
+            37,
+            12,
+            "en_attente",
+            false,
+            None,
+            "second_facteur_totp_secret_chiffre_check",
+        ),
+        (
+            36,
+            11,
+            "en_attente",
+            false,
+            None,
+            "second_facteur_totp_nonce_check",
+        ),
+        (
+            36,
+            16,
+            "en_attente",
+            false,
+            None,
+            "second_facteur_totp_nonce_check",
+        ),
+        (
+            36,
+            12,
+            "actif",
+            false,
+            None,
+            "second_facteur_totp_activation_datee",
+        ),
+        (
+            36,
+            12,
+            "en_attente",
+            true,
+            None,
+            "second_facteur_totp_activation_datee",
+        ),
+        (
+            36,
+            12,
+            "en_attente",
+            false,
+            Some(1_i64),
+            "second_facteur_totp_pas_si_actif",
+        ),
     ] {
         let erreur = sqlx::query(
             "INSERT INTO second_facteur_totp (compte_id, secret_chiffre, nonce, version_cle, statut, date_activation, dernier_pas) \
@@ -142,7 +195,11 @@ async fn un_totp_mal_forme_est_refuse(pool: PgPool) {
         .execute(&pool)
         .await
         .unwrap_err();
-        assert_eq!(contrainte(erreur), attendue, "secret {secret}, nonce {nonce}, {statut}");
+        assert_eq!(
+            contrainte(erreur),
+            attendue,
+            "secret {secret}, nonce {nonce}, {statut}"
+        );
     }
 }
 
@@ -152,11 +209,13 @@ async fn supprimer_un_totp_supprime_ses_codes_de_secours(pool: PgPool) {
     let compte = creer_compte(&pool, "+22670200004", "professionnel").await;
     let totp = inserer_totp(&pool, compte, "actif").await.unwrap();
     for _ in 0..2 {
-        sqlx::query("INSERT INTO code_secours (second_facteur_id, hash) VALUES ($1, 'hachage-de-test')")
-            .bind(totp)
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO code_secours (second_facteur_id, hash) VALUES ($1, 'hachage-de-test')",
+        )
+        .bind(totp)
+        .execute(&pool)
+        .await
+        .unwrap();
     }
 
     // Y1 : le TOTP désactivé ou remplacé est supprimé, ses codes avec lui.
@@ -180,16 +239,26 @@ async fn une_desactivation_exige_motif_cnib_et_administrateur(pool: PgPool) {
     let professionnel = creer_compte(&pool, "+22670200007", "professionnel").await;
 
     for motif in ["", "   "] {
-        let erreur = desactiver(&pool, patient, administrateur, motif, true).await.unwrap_err();
-        assert_eq!(contrainte(erreur), "desactivation_totp_motif_check", "motif {motif:?}");
+        let erreur = desactiver(&pool, patient, administrateur, motif, true)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            contrainte(erreur),
+            "desactivation_totp_motif_check",
+            "motif {motif:?}"
+        );
     }
 
     // Y2 : l'attestation de vérification de la CNIB est obligatoire.
-    let erreur = desactiver(&pool, patient, administrateur, "Téléphone perdu", false).await.unwrap_err();
+    let erreur = desactiver(&pool, patient, administrateur, "Téléphone perdu", false)
+        .await
+        .unwrap_err();
     assert_eq!(contrainte(erreur), "desactivation_totp_cnib_verifiee_check");
 
     // Seul un compte administrateur LaafiCare peut désactiver.
-    let erreur = desactiver(&pool, patient, professionnel, "Téléphone perdu", true).await.unwrap_err();
+    let erreur = desactiver(&pool, patient, professionnel, "Téléphone perdu", true)
+        .await
+        .unwrap_err();
     assert_eq!(contrainte(erreur), "desactivation_totp_administrateur");
 
     // Déclarer un autre type de compte ne contourne pas la règle.
@@ -202,9 +271,14 @@ async fn une_desactivation_exige_motif_cnib_et_administrateur(pool: PgPool) {
     .execute(&pool)
     .await
     .unwrap_err();
-    assert_eq!(contrainte(erreur), "desactivation_totp_administrateur_type_compte_check");
+    assert_eq!(
+        contrainte(erreur),
+        "desactivation_totp_administrateur_type_compte_check"
+    );
 
-    desactiver(&pool, patient, administrateur, "Téléphone perdu", true).await.unwrap();
+    desactiver(&pool, patient, administrateur, "Téléphone perdu", true)
+        .await
+        .unwrap();
 }
 
 #[sqlx::test]
@@ -228,7 +302,9 @@ async fn un_administrateur_ne_desactive_aucun_de_ses_propres_comptes(pool: PgPoo
     // Un autre membre de l'équipe le peut.
     let collegue = creer_compte(&pool, "+22670200009", "administrateur_laaficare").await;
     for compte in [son_administrateur, son_patient, son_professionnel] {
-        desactiver(&pool, compte, collegue, "Téléphone perdu", true).await.unwrap();
+        desactiver(&pool, compte, collegue, "Téléphone perdu", true)
+            .await
+            .unwrap();
     }
 }
 
@@ -237,15 +313,24 @@ async fn un_administrateur_ne_desactive_aucun_de_ses_propres_comptes(pool: PgPoo
 async fn une_desactivation_n_est_jamais_modifiee_ni_supprimee(pool: PgPool) {
     let patient = creer_compte(&pool, "+22670200010", "patient").await;
     let administrateur = creer_compte(&pool, "+22670200011", "administrateur_laaficare").await;
-    desactiver(&pool, patient, administrateur, "Téléphone perdu", true).await.unwrap();
+    desactiver(&pool, patient, administrateur, "Téléphone perdu", true)
+        .await
+        .unwrap();
 
     for requete in [
         "UPDATE desactivation_totp SET motif = 'autre motif'",
         "DELETE FROM desactivation_totp",
         "TRUNCATE desactivation_totp",
     ] {
-        let erreur = sqlx::query(requete).execute(&pool).await.unwrap_err().to_string();
-        assert!(erreur.contains("jamais modifiées ni supprimées"), "{requete} : {erreur}");
+        let erreur = sqlx::query(requete)
+            .execute(&pool)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            erreur.contains("jamais modifiées ni supprimées"),
+            "{requete} : {erreur}"
+        );
     }
 }
 
@@ -254,7 +339,9 @@ async fn une_desactivation_n_est_jamais_modifiee_ni_supprimee(pool: PgPool) {
 async fn un_profil_exige_un_compte_administrateur(pool: PgPool) {
     let patient = creer_compte(&pool, "+22670200012", "patient").await;
 
-    let erreur = inserer_profil(&pool, patient, "B12345678").await.unwrap_err();
+    let erreur = inserer_profil(&pool, patient, "B12345678")
+        .await
+        .unwrap_err();
     assert_eq!(contrainte(erreur), "profil_administrateur_compte");
 
     // Déclarer le type « patient » ne contourne pas la règle.
@@ -263,7 +350,10 @@ async fn un_profil_exige_un_compte_administrateur(pool: PgPool) {
         .execute(&pool)
         .await
         .unwrap_err();
-    assert_eq!(contrainte(erreur), "profil_administrateur_compte_type_check");
+    assert_eq!(
+        contrainte(erreur),
+        "profil_administrateur_compte_type_check"
+    );
 }
 
 /// Format de la CNIB actuelle, fourni par le porteur : B suivi de 8
@@ -280,23 +370,48 @@ async fn numero_de_cnib_normalise_au_format_et_unique(pool: PgPool) {
         ("b 1234 5678", "B12345678"),
         ("B12345678", "B12345678"),
         ("\u{a0}b1234\u{2009}5678\u{3000}", "B12345678"), // insécable, fine, idéographique
-        ("b\t1234\u{2028}5678", "B12345678"),              // tabulation, séparateur de ligne
+        ("b\t1234\u{2028}5678", "B12345678"),             // tabulation, séparateur de ligne
     ] {
-        assert_eq!(inserer_profil(&pool, administrateur, saisie).await.unwrap(), attendu, "saisie : {saisie:?}");
-        sqlx::query("DELETE FROM profil_administrateur").execute(&pool).await.unwrap();
+        assert_eq!(
+            inserer_profil(&pool, administrateur, saisie).await.unwrap(),
+            attendu,
+            "saisie : {saisie:?}"
+        );
+        sqlx::query("DELETE FROM profil_administrateur")
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     // Refusés : 7 chiffres, autre lettre, 9 chiffres, vide, espaces seules,
     // chiffres pleine largeur (seuls 0 à 9 ASCII sont des chiffres ici).
-    for saisie in ["B1234567", "A12345678", "B123456789", "", "   ", "\u{3000}", "B\u{ff11}2345678"] {
-        let erreur = inserer_profil(&pool, administrateur, saisie).await.unwrap_err();
-        assert_eq!(contrainte(erreur), "profil_administrateur_cnib_format", "saisie : {saisie:?}");
+    for saisie in [
+        "B1234567",
+        "A12345678",
+        "B123456789",
+        "",
+        "   ",
+        "\u{3000}",
+        "B\u{ff11}2345678",
+    ] {
+        let erreur = inserer_profil(&pool, administrateur, saisie)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            contrainte(erreur),
+            "profil_administrateur_cnib_format",
+            "saisie : {saisie:?}"
+        );
     }
 
     // K3 : deux administrateurs ne peuvent pas avoir le même numéro normalisé.
-    inserer_profil(&pool, administrateur, "b 1234 5678").await.unwrap();
+    inserer_profil(&pool, administrateur, "b 1234 5678")
+        .await
+        .unwrap();
     let collegue = creer_compte(&pool, "+22670200014", "administrateur_laaficare").await;
-    let erreur = inserer_profil(&pool, collegue, "B12345678").await.unwrap_err();
+    let erreur = inserer_profil(&pool, collegue, "B12345678")
+        .await
+        .unwrap_err();
     assert_eq!(contrainte(erreur), "profil_administrateur_cnib_unique");
 
     // Le numéro normalisé ne s'écrit jamais directement (colonne générée).

@@ -13,9 +13,9 @@
 //! Base temporaire par test, jamais la base de développement. Données
 //! fictives. Lancement : `cargo test --test migration_0021 -- --include-ignored`.
 
+use sqlx::PgPool;
 use sqlx::migrate::Migrator;
 use sqlx::types::Uuid;
-use sqlx::PgPool;
 
 static MIGRATIONS: Migrator = sqlx::migrate!();
 
@@ -93,7 +93,11 @@ async fn demande_a_l_ancienne(pool: &PgPool) -> (Uuid, Uuid) {
 /// Affectation d'agent MUNASEB dans une structure MUNASEB, pour une
 /// nouvelle transition.
 async fn affectation(pool: &PgPool, role: &str) -> (Uuid, Uuid) {
-    let identite = valeur(pool, "INSERT INTO utilisateur (telephone) VALUES ('+22670160004') RETURNING id").await;
+    let identite = valeur(
+        pool,
+        "INSERT INTO utilisateur (telephone) VALUES ('+22670160004') RETURNING id",
+    )
+    .await;
     let compte: Uuid = sqlx::query_scalar(
         "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'professionnel', 'x') RETURNING id",
     )
@@ -149,8 +153,15 @@ async fn transition(
 #[sqlx::test(migrations = false)]
 #[ignore]
 async fn anciennes_lignes_gardees_nouvelles_par_affectation(pool: PgPool) {
-    let jusqu_a_0020: Vec<_> = MIGRATIONS.iter().filter(|m| m.version <= 20).cloned().collect();
-    Migrator::with_migrations(jusqu_a_0020).run(&pool).await.unwrap();
+    let jusqu_a_0020: Vec<_> = MIGRATIONS
+        .iter()
+        .filter(|m| m.version <= 20)
+        .cloned()
+        .collect();
+    Migrator::with_migrations(jusqu_a_0020)
+        .run(&pool)
+        .await
+        .unwrap();
     let (demande, ancien_agent) = demande_a_l_ancienne(&pool).await;
 
     MIGRATIONS.run(&pool).await.unwrap();
@@ -168,21 +179,36 @@ async fn anciennes_lignes_gardees_nouvelles_par_affectation(pool: PgPool) {
 
     // Une nouvelle transition à l'ancienne, sans affectation : refusée.
     assert_eq!(
-        contrainte(transition(&pool, demande, Some(ancien_agent), None, None, None).await.unwrap_err()),
+        contrainte(
+            transition(&pool, demande, Some(ancien_agent), None, None, None)
+                .await
+                .unwrap_err()
+        ),
         "transition_par_affectation"
     );
     // Affectation incomplète : refusée (MATCH FULL).
     let (affectation_id, structure_id) = affectation(&pool, "agent_assurance_munaseb").await;
     assert_eq!(
-        contrainte(transition(&pool, demande, None, Some(affectation_id), None, None).await.unwrap_err()),
+        contrainte(
+            transition(&pool, demande, None, Some(affectation_id), None, None)
+                .await
+                .unwrap_err()
+        ),
         "historique_agent_affectation"
     );
     // Un autre rôle : refusé.
     assert_eq!(
         contrainte(
-            transition(&pool, demande, None, Some(affectation_id), Some(structure_id), Some("pharmacien"))
-                .await
-                .unwrap_err()
+            transition(
+                &pool,
+                demande,
+                None,
+                Some(affectation_id),
+                Some(structure_id),
+                Some("pharmacien")
+            )
+            .await
+            .unwrap_err()
         ),
         "historique_agent_role_munaseb"
     );
@@ -199,7 +225,14 @@ async fn anciennes_lignes_gardees_nouvelles_par_affectation(pool: PgPool) {
     .unwrap_err();
     assert_eq!(contrainte(erreur), "agent_si_transition");
     // Transition complète : acceptée.
-    transition(&pool, demande, None, Some(affectation_id), Some(structure_id), Some("agent_assurance_munaseb"))
-        .await
-        .unwrap();
+    transition(
+        &pool,
+        demande,
+        None,
+        Some(affectation_id),
+        Some(structure_id),
+        Some("agent_assurance_munaseb"),
+    )
+    .await
+    .unwrap();
 }

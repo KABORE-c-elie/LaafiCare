@@ -5,21 +5,28 @@
 //! Les erreurs de connexion et du second temps reprennent celles des
 //! professionnels (mêmes codes, mêmes messages).
 
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
-use crate::erreur_api::{CheminApi, ErreurApi, JsonApi, RequeteApi, reponse_erreur, reponse_erreur_interne};
-use crate::extracteur_jwt::{AdministrateurAuthentifie, IntermediaireAdministrateur, ReenrolementAdministrateur};
+use crate::erreur_api::{
+    CheminApi, ErreurApi, JsonApi, RequeteApi, reponse_erreur, reponse_erreur_interne,
+};
+use crate::extracteur_jwt::{
+    AdministrateurAuthentifie, IntermediaireAdministrateur, ReenrolementAdministrateur,
+};
 use crate::routes_professionnel::{
-    ConnexionRequete, SecondFacteurRequete, mapper_erreur, reponse_second_facteur, terminer_second_facteur,
+    ConnexionRequete, SecondFacteurRequete, mapper_erreur, reponse_second_facteur,
+    terminer_second_facteur,
 };
 use laaficare_backend::auth_administrateur::{self, ConnexionAdministrateur, ErreurReenrolement};
 use laaficare_backend::auth_professionnel::JetonIntermediaire;
-use laaficare_backend::decision_structure::{self, ErreurDecision, ResumeStructure, StatutStructure};
+use laaficare_backend::decision_structure::{
+    self, ErreurDecision, ResumeStructure, StatutStructure,
+};
 
 #[derive(Serialize)]
 struct CorpsReenrolement<'a> {
@@ -30,7 +37,10 @@ struct CorpsReenrolement<'a> {
 /// Réponse « réenrôlement » : le jeton n'est lu en clair qu'ici, au moment
 /// de sérialiser, puis effacé de la mémoire avec `JetonIntermediaire`.
 fn reponse_reenrolement(jeton: &JetonIntermediaire) -> Response {
-    let corps = CorpsReenrolement { etape: "reenrolement", jeton_reenrolement: jeton.en_clair() };
+    let corps = CorpsReenrolement {
+        etape: "reenrolement",
+        jeton_reenrolement: jeton.en_clair(),
+    };
     (StatusCode::OK, Json(corps)).into_response()
 }
 
@@ -39,12 +49,24 @@ fn reponse_reenrolement(jeton: &JetonIntermediaire) -> Response {
 /// (pas de TOTP, fenêtre ouverte par l'équipe) ; jamais de session directe
 /// (Y4). 401 `identifiants_invalides`, y compris pour un administrateur sans
 /// TOTP ni fenêtre ; 403 `email_non_verifie`.
-pub async fn se_connecter(State(state): State<AppState>, JsonApi(corps): JsonApi<ConnexionRequete>) -> Response {
-    match auth_administrateur::se_connecter(&state.db, &state.jwt, &corps.email, &corps.mot_de_passe).await {
-        Ok(ConnexionAdministrateur::SecondFacteur { jeton_intermediaire }) => {
-            reponse_second_facteur(&jeton_intermediaire)
+pub async fn se_connecter(
+    State(state): State<AppState>,
+    JsonApi(corps): JsonApi<ConnexionRequete>,
+) -> Response {
+    match auth_administrateur::se_connecter(
+        &state.db,
+        &state.jwt,
+        &corps.email,
+        &corps.mot_de_passe,
+    )
+    .await
+    {
+        Ok(ConnexionAdministrateur::SecondFacteur {
+            jeton_intermediaire,
+        }) => reponse_second_facteur(&jeton_intermediaire),
+        Ok(ConnexionAdministrateur::Reenrolement { jeton_reenrolement }) => {
+            reponse_reenrolement(&jeton_reenrolement)
         }
-        Ok(ConnexionAdministrateur::Reenrolement { jeton_reenrolement }) => reponse_reenrolement(&jeton_reenrolement),
         Err(erreur) => mapper_erreur(erreur, "connexion administrateur").into_response(),
     }
 }
@@ -57,8 +79,14 @@ pub async fn second_facteur(
     State(state): State<AppState>,
     JsonApi(corps): JsonApi<SecondFacteurRequete>,
 ) -> Response {
-    terminer_second_facteur(&state, intermediaire.compte_id, intermediaire.iat, corps, "second facteur administrateur")
-        .await
+    terminer_second_facteur(
+        &state,
+        intermediaire.compte_id,
+        intermediaire.iat,
+        corps,
+        "second facteur administrateur",
+    )
+    .await
 }
 
 /// Pas de `Debug` : un mot de passe est un secret.
@@ -88,13 +116,21 @@ fn reponse_erreur_reenrolement(erreur: ErreurReenrolement) -> Response {
     match erreur {
         // A7 : l'email n'est pas resaisi ici, d'où un message propre ; même
         // code que la connexion.
-        ErreurReenrolement::MotDePasseIncorrect => {
-            reponse_erreur(StatusCode::UNAUTHORIZED, "identifiants_invalides", erreur.to_string()).into_response()
+        ErreurReenrolement::MotDePasseIncorrect => reponse_erreur(
+            StatusCode::UNAUTHORIZED,
+            "identifiants_invalides",
+            erreur.to_string(),
+        )
+        .into_response(),
+        ErreurReenrolement::CodeInvalide => reponse_erreur(
+            StatusCode::UNAUTHORIZED,
+            "code_invalide",
+            erreur.to_string(),
+        )
+        .into_response(),
+        ErreurReenrolement::Interne(etape) => {
+            reponse_erreur_interne("réenrôlement administrateur", etape).into_response()
         }
-        ErreurReenrolement::CodeInvalide => {
-            reponse_erreur(StatusCode::UNAUTHORIZED, "code_invalide", erreur.to_string()).into_response()
-        }
-        ErreurReenrolement::Interne(etape) => reponse_erreur_interne("réenrôlement administrateur", etape).into_response(),
     }
 }
 
@@ -107,11 +143,19 @@ pub async fn commencer_reenrolement(
     State(state): State<AppState>,
     JsonApi(corps): JsonApi<CommencerRequete>,
 ) -> Response {
-    match auth_administrateur::commencer_reenrolement(&state.db, &state.cle_totp, reenrolement.compte_id, &corps.mot_de_passe)
-        .await
+    match auth_administrateur::commencer_reenrolement(
+        &state.db,
+        &state.cle_totp,
+        reenrolement.compte_id,
+        &corps.mot_de_passe,
+    )
+    .await
     {
         Ok(activation) => {
-            let corps = CorpsActivation { url_otpauth: &activation.url_otpauth, cle_base32: &activation.cle_base32 };
+            let corps = CorpsActivation {
+                url_otpauth: &activation.url_otpauth,
+                cle_base32: &activation.cle_base32,
+            };
             (StatusCode::OK, Json(corps)).into_response()
         }
         Err(erreur) => reponse_erreur_reenrolement(erreur),
@@ -138,7 +182,13 @@ pub async fn confirmer_reenrolement(
     )
     .await
     {
-        Ok(codes) => (StatusCode::OK, Json(CorpsCodesSecours { codes_secours: &codes })).into_response(),
+        Ok(codes) => (
+            StatusCode::OK,
+            Json(CorpsCodesSecours {
+                codes_secours: &codes,
+            }),
+        )
+            .into_response(),
         Err(erreur) => reponse_erreur_reenrolement(erreur),
     }
 }
@@ -181,10 +231,23 @@ pub async fn lister_structures(
     }
     match decision_structure::lister(&state.db, filtre.statut, filtre.apres, limite).await {
         Ok(structures) => {
-            let suivant = if structures.len() as i64 == limite { structures.last().map(|s| s.id) } else { None };
-            (StatusCode::OK, Json(ListeStructures { structures, suivant })).into_response()
+            let suivant = if structures.len() as i64 == limite {
+                structures.last().map(|s| s.id)
+            } else {
+                None
+            };
+            (
+                StatusCode::OK,
+                Json(ListeStructures {
+                    structures,
+                    suivant,
+                }),
+            )
+                .into_response()
         }
-        Err(_) => reponse_erreur_interne("liste des structures", "erreur de la base").into_response(),
+        Err(_) => {
+            reponse_erreur_interne("liste des structures", "erreur de la base").into_response()
+        }
     }
 }
 
@@ -196,9 +259,15 @@ pub async fn detail_structure(
 ) -> Response {
     match decision_structure::detail(&state.db, structure_id).await {
         Ok(Some(detail)) => (StatusCode::OK, Json(detail)).into_response(),
-        Ok(None) => reponse_erreur(StatusCode::NOT_FOUND, "structure_inconnue", ErreurDecision::StructureInconnue.to_string())
-            .into_response(),
-        Err(_) => reponse_erreur_interne("détail d'une structure", "erreur de la base").into_response(),
+        Ok(None) => reponse_erreur(
+            StatusCode::NOT_FOUND,
+            "structure_inconnue",
+            ErreurDecision::StructureInconnue.to_string(),
+        )
+        .into_response(),
+        Err(_) => {
+            reponse_erreur_interne("détail d'une structure", "erreur de la base").into_response()
+        }
     }
 }
 
@@ -206,19 +275,27 @@ fn reponse_erreur_decision(erreur: ErreurDecision) -> Response {
     let (statut, code) = match &erreur {
         ErreurDecision::StructureInconnue => (StatusCode::NOT_FOUND, "structure_inconnue"),
         // A : droit refusé à cet administrateur pour cette structure.
-        ErreurDecision::PropreStructure => (StatusCode::FORBIDDEN, "decision_sur_sa_propre_structure"),
+        ErreurDecision::PropreStructure => {
+            (StatusCode::FORBIDDEN, "decision_sur_sa_propre_structure")
+        }
         ErreurDecision::TransitionInvalide { statut_actuel } => {
             let mut corps = ErreurApi::simple("transition_invalide", erreur.to_string());
             corps.statut_actuel = Some(statut_actuel.clone());
             return (StatusCode::CONFLICT, Json(corps)).into_response();
         }
-        ErreurDecision::EmailResponsableNonVerifie => (StatusCode::CONFLICT, "email_responsable_non_verifie"),
+        ErreurDecision::EmailResponsableNonVerifie => {
+            (StatusCode::CONFLICT, "email_responsable_non_verifie")
+        }
         ErreurDecision::LicenceInvalide => (StatusCode::UNPROCESSABLE_ENTITY, "licence_invalide"),
         ErreurDecision::MunasebDejaValidee => (StatusCode::CONFLICT, "munaseb_deja_validee"),
-        ErreurDecision::AutorisationDejaValidee => (StatusCode::CONFLICT, "autorisation_deja_validee"),
+        ErreurDecision::AutorisationDejaValidee => {
+            (StatusCode::CONFLICT, "autorisation_deja_validee")
+        }
         ErreurDecision::MotifVide => (StatusCode::UNPROCESSABLE_ENTITY, "motif_vide"),
         ErreurDecision::MotifTropLong => (StatusCode::UNPROCESSABLE_ENTITY, "motif_trop_long"),
-        ErreurDecision::Interne(etape) => return reponse_erreur_interne("décision sur une structure", etape).into_response(),
+        ErreurDecision::Interne(etape) => {
+            return reponse_erreur_interne("décision sur une structure", etape).into_response();
+        }
     };
     reponse_erreur(statut, code, erreur.to_string()).into_response()
 }
@@ -320,8 +397,14 @@ pub async fn refuser_structure(
     CheminApi(structure_id): CheminApi<sqlx::types::Uuid>,
     JsonApi(corps): JsonApi<RefuserRequete>,
 ) -> Response {
-    match decision_structure::refuser(&state.db, state.email.as_ref(), administrateur.compte_id, structure_id, &corps.motif)
-        .await
+    match decision_structure::refuser(
+        &state.db,
+        state.email.as_ref(),
+        administrateur.compte_id,
+        structure_id,
+        &corps.motif,
+    )
+    .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(erreur) => reponse_erreur_decision(erreur),
@@ -335,18 +418,52 @@ mod tests {
     #[test]
     fn codes_des_decisions() {
         for (erreur, statut, code) in [
-            (ErreurDecision::StructureInconnue, StatusCode::NOT_FOUND, "structure_inconnue"),
-            (ErreurDecision::PropreStructure, StatusCode::FORBIDDEN, "decision_sur_sa_propre_structure"),
-            (ErreurDecision::EmailResponsableNonVerifie, StatusCode::CONFLICT, "email_responsable_non_verifie"),
-            (ErreurDecision::LicenceInvalide, StatusCode::UNPROCESSABLE_ENTITY, "licence_invalide"),
-            (ErreurDecision::MunasebDejaValidee, StatusCode::CONFLICT, "munaseb_deja_validee"),
-            (ErreurDecision::AutorisationDejaValidee, StatusCode::CONFLICT, "autorisation_deja_validee"),
-            (ErreurDecision::MotifVide, StatusCode::UNPROCESSABLE_ENTITY, "motif_vide"),
-            (ErreurDecision::MotifTropLong, StatusCode::UNPROCESSABLE_ENTITY, "motif_trop_long"),
+            (
+                ErreurDecision::StructureInconnue,
+                StatusCode::NOT_FOUND,
+                "structure_inconnue",
+            ),
+            (
+                ErreurDecision::PropreStructure,
+                StatusCode::FORBIDDEN,
+                "decision_sur_sa_propre_structure",
+            ),
+            (
+                ErreurDecision::EmailResponsableNonVerifie,
+                StatusCode::CONFLICT,
+                "email_responsable_non_verifie",
+            ),
+            (
+                ErreurDecision::LicenceInvalide,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "licence_invalide",
+            ),
+            (
+                ErreurDecision::MunasebDejaValidee,
+                StatusCode::CONFLICT,
+                "munaseb_deja_validee",
+            ),
+            (
+                ErreurDecision::AutorisationDejaValidee,
+                StatusCode::CONFLICT,
+                "autorisation_deja_validee",
+            ),
+            (
+                ErreurDecision::MotifVide,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "motif_vide",
+            ),
+            (
+                ErreurDecision::MotifTropLong,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "motif_trop_long",
+            ),
         ] {
             assert_eq!(reponse_erreur_decision(erreur).status(), statut, "{code}");
         }
-        let reponse = reponse_erreur_decision(ErreurDecision::TransitionInvalide { statut_actuel: "validee".into() });
+        let reponse = reponse_erreur_decision(ErreurDecision::TransitionInvalide {
+            statut_actuel: "validee".into(),
+        });
         assert_eq!(reponse.status(), StatusCode::CONFLICT);
     }
 
@@ -499,7 +616,11 @@ mod tests {
                     .fetch_one(&db)
                     .await
                     .unwrap();
-                sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1").bind(id).execute(&db).await.unwrap();
+                sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1")
+                    .bind(id)
+                    .execute(&db)
+                    .await
+                    .unwrap();
                 id
             }
         };
@@ -518,7 +639,11 @@ mod tests {
         };
 
         // Responsable et sa structure en attente.
-        let pro = compte(identite("+22670190001", "resp.route@example.org").await, "professionnel").await;
+        let pro = compte(
+            identite("+22670190001", "resp.route@example.org").await,
+            "professionnel",
+        )
+        .await;
         let structure_id: Uuid = sqlx::query_scalar(
             "INSERT INTO structure (type_structure, nom, telephone, telephone_urgence, region, email, commune, province, \
                                     latitude, longitude, createur_compte_id, statut) \
@@ -538,11 +663,24 @@ mod tests {
 
         // Administrateur avec session ; TOTP actif posé en SQL (le contenu
         // n'est jamais déchiffré ici).
-        let adm = compte(identite("+22670190002", "adm.route@example.org").await, "administrateur_laaficare").await;
-        let paire = session::ouvrir(&state.db, adm, None).await.unwrap().en_paire(&state.jwt).unwrap();
+        let adm = compte(
+            identite("+22670190002", "adm.route@example.org").await,
+            "administrateur_laaficare",
+        )
+        .await;
+        let paire = session::ouvrir(&state.db, adm, None)
+            .await
+            .unwrap()
+            .en_paire(&state.jwt)
+            .unwrap();
         let en_tete = format!("Bearer {}", paire.jeton_acces);
         let extraire = || async {
-            let mut parts = Request::builder().header(AUTHORIZATION, en_tete.as_str()).body(()).unwrap().into_parts().0;
+            let mut parts = Request::builder()
+                .header(AUTHORIZATION, en_tete.as_str())
+                .body(())
+                .unwrap()
+                .into_parts()
+                .0;
             AdministrateurAuthentifie::from_request_parts(&mut parts, &state).await
         };
         assert!(extraire().await.is_err(), "sans TOTP actif : refusé (Y4)");
@@ -556,14 +694,31 @@ mod tests {
         .unwrap();
 
         let lire = |reponse: Response| async move {
-            serde_json::from_slice::<serde_json::Value>(&to_bytes(reponse.into_body(), usize::MAX).await.unwrap()).unwrap()
+            serde_json::from_slice::<serde_json::Value>(
+                &to_bytes(reponse.into_body(), usize::MAX).await.unwrap(),
+            )
+            .unwrap()
         };
-        let filtre = FiltreStructures { statut: Some(StatutStructure::EnAttente), limite: None, apres: None };
-        let reponse = lister_structures(extraire().await.unwrap(), State(state.clone()), RequeteApi(filtre)).await;
+        let filtre = FiltreStructures {
+            statut: Some(StatutStructure::EnAttente),
+            limite: None,
+            apres: None,
+        };
+        let reponse = lister_structures(
+            extraire().await.unwrap(),
+            State(state.clone()),
+            RequeteApi(filtre),
+        )
+        .await;
         assert_eq!(reponse.status(), StatusCode::OK);
         assert_eq!(lire(reponse).await["structures"][0]["type"], "munaseb");
 
-        let reponse = detail_structure(extraire().await.unwrap(), State(state.clone()), CheminApi(structure_id)).await;
+        let reponse = detail_structure(
+            extraire().await.unwrap(),
+            State(state.clone()),
+            CheminApi(structure_id),
+        )
+        .await;
         assert_eq!(reponse.status(), StatusCode::OK);
         assert_eq!(lire(reponse).await["responsable_email_verifie"], true);
 
@@ -572,7 +727,9 @@ mod tests {
                 extraire().await.unwrap(),
                 State(state.clone()),
                 CheminApi(structure_id),
-                JsonApi(ValiderRequete { licence_expire_le: None }),
+                JsonApi(ValiderRequete {
+                    licence_expire_le: None,
+                }),
             )
             .await
         };
@@ -580,14 +737,27 @@ mod tests {
         let reponse = valider().await;
         assert_eq!(reponse.status(), StatusCode::CONFLICT);
         let json = lire(reponse).await;
-        assert_eq!((json["code"].as_str(), json["statut_actuel"].as_str()), (Some("transition_invalide"), Some("validee")));
+        assert_eq!(
+            (json["code"].as_str(), json["statut_actuel"].as_str()),
+            (Some("transition_invalide"), Some("validee"))
+        );
     }
 
     #[tokio::test]
     async fn erreurs_du_reenrolement() {
         for (erreur, statut, code, message) in [
-            (ErreurReenrolement::MotDePasseIncorrect, StatusCode::UNAUTHORIZED, "identifiants_invalides", "Mot de passe incorrect."),
-            (ErreurReenrolement::CodeInvalide, StatusCode::UNAUTHORIZED, "code_invalide", "Code incorrect."),
+            (
+                ErreurReenrolement::MotDePasseIncorrect,
+                StatusCode::UNAUTHORIZED,
+                "identifiants_invalides",
+                "Mot de passe incorrect.",
+            ),
+            (
+                ErreurReenrolement::CodeInvalide,
+                StatusCode::UNAUTHORIZED,
+                "code_invalide",
+                "Code incorrect.",
+            ),
             (
                 ErreurReenrolement::Interne("début du réenrôlement"),
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -597,9 +767,19 @@ mod tests {
         ] {
             let reponse = reponse_erreur_reenrolement(erreur);
             assert_eq!(reponse.status(), statut, "{code}");
-            let json: serde_json::Value =
-                serde_json::from_slice(&axum::body::to_bytes(reponse.into_body(), usize::MAX).await.unwrap()).unwrap();
-            assert_eq!((json["code"].as_str().unwrap(), json["erreur"].as_str().unwrap()), (code, message));
+            let json: serde_json::Value = serde_json::from_slice(
+                &axum::body::to_bytes(reponse.into_body(), usize::MAX)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                (
+                    json["code"].as_str().unwrap(),
+                    json["erreur"].as_str().unwrap()
+                ),
+                (code, message)
+            );
         }
     }
 
@@ -632,12 +812,13 @@ mod tests {
             contact_securite: Arc::from("securite@example.org"),
             taches_reinitialisation: Arc::new(Default::default()),
         };
-        let utilisateur_id: Uuid =
-            sqlx::query_scalar("INSERT INTO utilisateur (telephone, email) VALUES ('+22670120001', $1) RETURNING id")
-                .bind(EMAIL)
-                .fetch_one(&state.db)
-                .await
-                .unwrap();
+        let utilisateur_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO utilisateur (telephone, email) VALUES ('+22670120001', $1) RETURNING id",
+        )
+        .bind(EMAIL)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
         sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1")
             .bind(utilisateur_id)
             .execute(&state.db)
@@ -656,11 +837,22 @@ mod tests {
         .unwrap();
 
         let json_de = |reponse: Response| async move {
-            serde_json::from_slice::<serde_json::Value>(&to_bytes(reponse.into_body(), usize::MAX).await.unwrap()).unwrap()
+            serde_json::from_slice::<serde_json::Value>(
+                &to_bytes(reponse.into_body(), usize::MAX).await.unwrap(),
+            )
+            .unwrap()
         };
-        let connexion = || ConnexionRequete { email: EMAIL.into(), mot_de_passe: MOT_DE_PASSE.into() };
+        let connexion = || ConnexionRequete {
+            email: EMAIL.into(),
+            mot_de_passe: MOT_DE_PASSE.into(),
+        };
         let parts_avec = |jeton: &str| {
-            Request::builder().header(AUTHORIZATION, format!("Bearer {jeton}")).body(()).unwrap().into_parts().0
+            Request::builder()
+                .header(AUTHORIZATION, format!("Bearer {jeton}"))
+                .body(())
+                .unwrap()
+                .into_parts()
+                .0
         };
 
         // Connexion : réenrôlement.
@@ -670,14 +862,20 @@ mod tests {
         assert_eq!(json["etape"], "reenrolement");
         let jeton_reenrolement = json["jeton_reenrolement"].as_str().unwrap().to_owned();
         let extraire = || async {
-            ReenrolementAdministrateur::from_request_parts(&mut parts_avec(&jeton_reenrolement), &state).await
+            ReenrolementAdministrateur::from_request_parts(
+                &mut parts_avec(&jeton_reenrolement),
+                &state,
+            )
+            .await
         };
 
         // Commencer : mot de passe faux (401), puis correct (200).
         let reponse = commencer_reenrolement(
             extraire().await.unwrap(),
             State(state.clone()),
-            JsonApi(CommencerRequete { mot_de_passe: "Mauvais#2026".into() }),
+            JsonApi(CommencerRequete {
+                mot_de_passe: "Mauvais#2026".into(),
+            }),
         )
         .await;
         assert_eq!(reponse.status(), StatusCode::UNAUTHORIZED);
@@ -685,14 +883,23 @@ mod tests {
         let reponse = commencer_reenrolement(
             extraire().await.unwrap(),
             State(state.clone()),
-            JsonApi(CommencerRequete { mot_de_passe: MOT_DE_PASSE.into() }),
+            JsonApi(CommencerRequete {
+                mot_de_passe: MOT_DE_PASSE.into(),
+            }),
         )
         .await;
         assert_eq!(reponse.status(), StatusCode::OK);
         let json = json_de(reponse).await;
-        assert!(json["url_otpauth"].as_str().unwrap().starts_with("otpauth://totp/"));
+        assert!(
+            json["url_otpauth"]
+                .as_str()
+                .unwrap()
+                .starts_with("otpauth://totp/")
+        );
         let generateur = totp_rs::Builder::new()
-            .with_secret(totp_rs::Secret::try_from_base32(json["cle_base32"].as_str().unwrap()).unwrap())
+            .with_secret(
+                totp_rs::Secret::try_from_base32(json["cle_base32"].as_str().unwrap()).unwrap(),
+            )
             .build()
             .unwrap();
         let maintenant = jsonwebtoken::get_current_timestamp();
@@ -701,25 +908,49 @@ mod tests {
         let reponse = confirmer_reenrolement(
             extraire().await.unwrap(),
             State(state.clone()),
-            JsonApi(ConfirmerRequete { code: generateur.generate(maintenant).to_string() }),
+            JsonApi(ConfirmerRequete {
+                code: generateur.generate(maintenant).to_string(),
+            }),
         )
         .await;
         assert_eq!(reponse.status(), StatusCode::OK);
-        assert_eq!(json_de(reponse).await["codes_secours"].as_array().unwrap().len(), 10);
-        let refus = extraire().await.map_err(IntoResponse::into_response).unwrap_err();
+        assert_eq!(
+            json_de(reponse).await["codes_secours"]
+                .as_array()
+                .unwrap()
+                .len(),
+            10
+        );
+        let refus = extraire()
+            .await
+            .map_err(IntoResponse::into_response)
+            .unwrap_err();
         assert_eq!(refus.status(), StatusCode::UNAUTHORIZED);
 
         // Reconnexion : second facteur, puis session administrateur.
         let json = json_de(se_connecter(State(state.clone()), JsonApi(connexion())).await).await;
         assert_eq!(json["etape"], "second_facteur");
         let jeton_intermediaire = json["jeton_intermediaire"].as_str().unwrap().to_owned();
-        let intermediaire =
-            IntermediaireAdministrateur::from_request_parts(&mut parts_avec(&jeton_intermediaire), &state).await.unwrap();
-        let corps = SecondFacteurRequete { code: Some(generateur.generate(maintenant + 30).to_string()), code_secours: None };
+        let intermediaire = IntermediaireAdministrateur::from_request_parts(
+            &mut parts_avec(&jeton_intermediaire),
+            &state,
+        )
+        .await
+        .unwrap();
+        let corps = SecondFacteurRequete {
+            code: Some(generateur.generate(maintenant + 30).to_string()),
+            code_secours: None,
+        };
         let reponse = second_facteur(intermediaire, State(state.clone()), JsonApi(corps)).await;
         assert_eq!(reponse.status(), StatusCode::OK);
         let json = json_de(reponse).await;
         assert_eq!(json["etape"], "complete");
-        state.jwt.verifier(json["jeton_acces"].as_str().unwrap(), SorteJeton::Administrateur).unwrap();
+        state
+            .jwt
+            .verifier(
+                json["jeton_acces"].as_str().unwrap(),
+                SorteJeton::Administrateur,
+            )
+            .unwrap();
     }
 }

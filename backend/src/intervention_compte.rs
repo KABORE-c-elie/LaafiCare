@@ -114,7 +114,8 @@ async fn tracer(
 /// fonction que pour un vrai mot de passe, donc la même forme en base).
 fn empreinte_inutilisable() -> Result<String, ErreurIntervention> {
     let (_, valeur) = session::octets_aleatoires_hexadecimaux();
-    mot_de_passe::hacher(&valeur).map_err(|_| ErreurIntervention::Interne("empreinte du mot de passe"))
+    mot_de_passe::hacher(&valeur)
+        .map_err(|_| ErreurIntervention::Interne("empreinte du mot de passe"))
 }
 
 /// Statut actuel du compte (`actif` ou `desactive`), pour l'affichage.
@@ -151,7 +152,10 @@ pub struct AffectationVisee {
     pub role: String,
 }
 
-pub async fn affectations_actives(pool: &PgPool, compte_id: Uuid) -> Result<Vec<AffectationVisee>, ErreurIntervention> {
+pub async fn affectations_actives(
+    pool: &PgPool,
+    compte_id: Uuid,
+) -> Result<Vec<AffectationVisee>, ErreurIntervention> {
     sqlx::query_as(
         "SELECT a.id AS affectation_id, s.nom AS structure_nom, a.role \
          FROM affectation a JOIN structure s ON s.id = a.structure_id \
@@ -227,7 +231,16 @@ pub async fn retirer_affectation(
     .execute(&mut *tx)
     .await
     .map_err(|e| interne("clôture de l'affectation", &e))?;
-    tracer(&mut tx, compte_id, Some(affectation_id), "retrait_affectation", operateur, motif, false).await?;
+    tracer(
+        &mut tx,
+        compte_id,
+        Some(affectation_id),
+        "retrait_affectation",
+        operateur,
+        motif,
+        false,
+    )
+    .await?;
     // 3. Les sessions ouvertes sur cette affectation.
     sqlx::query(
         "UPDATE session SET revoquee_le = now(), motif_revocation = $2 WHERE affectation_id = $1 AND revoquee_le IS NULL",
@@ -237,9 +250,18 @@ pub async fn retirer_affectation(
     .execute(&mut *tx)
     .await
     .map_err(|e| interne("fermeture des sessions", &e))?;
-    tx.commit().await.map_err(|e| interne("validation de la transaction", &e))?;
+    tx.commit()
+        .await
+        .map_err(|e| interne("validation de la transaction", &e))?;
 
-    Ok(alerte_securite::prevenir(pool, email_sender, contact_securite, compte_id, Evenement::AccesRetire).await)
+    Ok(alerte_securite::prevenir(
+        pool,
+        email_sender,
+        contact_securite,
+        compte_id,
+        Evenement::AccesRetire,
+    )
+    .await)
 }
 
 // ---------------------------------------------------------------------
@@ -287,7 +309,16 @@ pub async fn bloquer(
     .execute(&mut *tx)
     .await
     .map_err(|e| interne("annulation du code SMS", &e))?;
-    tracer(&mut tx, cible.compte_id, None, "blocage_compte", operateur, motif, false).await?;
+    tracer(
+        &mut tx,
+        cible.compte_id,
+        None,
+        "blocage_compte",
+        operateur,
+        motif,
+        false,
+    )
+    .await?;
     // 2. Les liens par email en attente (vérification et réinitialisation).
     sqlx::query(
         "UPDATE jeton_email SET annule_le = now() WHERE compte_id = $1 AND utilise_le IS NULL AND annule_le IS NULL",
@@ -297,12 +328,26 @@ pub async fn bloquer(
     .await
     .map_err(|e| interne("annulation des liens", &e))?;
     // 3. Toutes les sessions, `version_jeton` augmentée.
-    session::fermer_toutes(&mut tx, cible.compte_id, MotifRevocation::DesactivationCompte, true)
+    session::fermer_toutes(
+        &mut tx,
+        cible.compte_id,
+        MotifRevocation::DesactivationCompte,
+        true,
+    )
+    .await
+    .map_err(|e| interne("fermeture des sessions", &e))?;
+    tx.commit()
         .await
-        .map_err(|e| interne("fermeture des sessions", &e))?;
-    tx.commit().await.map_err(|e| interne("validation de la transaction", &e))?;
+        .map_err(|e| interne("validation de la transaction", &e))?;
 
-    Ok(alerte_securite::prevenir(pool, email_sender, contact_securite, cible.compte_id, Evenement::CompteBloque).await)
+    Ok(alerte_securite::prevenir(
+        pool,
+        email_sender,
+        contact_securite,
+        cible.compte_id,
+        Evenement::CompteBloque,
+    )
+    .await)
 }
 
 /// Réactive un compte bloqué (IC3, action 3), CNIB vérifiée. Renvoie vrai si
@@ -341,15 +386,38 @@ pub async fn reactiver(
     .execute(&mut *tx)
     .await
     .map_err(|e| interne("réactivation du compte", &e))?;
-    tracer(&mut tx, cible.compte_id, None, "reactivation_compte", operateur, motif, true).await?;
+    tracer(
+        &mut tx,
+        cible.compte_id,
+        None,
+        "reactivation_compte",
+        operateur,
+        motif,
+        true,
+    )
+    .await?;
     // Aucune session ne peut être ouverte sur un compte bloqué ; la version
     // augmente quand même, par précaution.
-    session::fermer_toutes(&mut tx, cible.compte_id, MotifRevocation::DesactivationCompte, true)
+    session::fermer_toutes(
+        &mut tx,
+        cible.compte_id,
+        MotifRevocation::DesactivationCompte,
+        true,
+    )
+    .await
+    .map_err(|e| interne("fermeture des sessions", &e))?;
+    tx.commit()
         .await
-        .map_err(|e| interne("fermeture des sessions", &e))?;
-    tx.commit().await.map_err(|e| interne("validation de la transaction", &e))?;
+        .map_err(|e| interne("validation de la transaction", &e))?;
 
-    Ok(alerte_securite::prevenir(pool, email_sender, contact_securite, cible.compte_id, Evenement::CompteReactive).await)
+    Ok(alerte_securite::prevenir(
+        pool,
+        email_sender,
+        contact_securite,
+        cible.compte_id,
+        Evenement::CompteReactive,
+    )
+    .await)
 }
 
 #[cfg(test)]
@@ -424,21 +492,31 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap();
-        CompteCible { compte_id, type_compte: TypeCompte::Patient, nom: None, prenom: None }
+        CompteCible {
+            compte_id,
+            type_compte: TypeCompte::Patient,
+            nom: None,
+            prenom: None,
+        }
     }
 
     /// Antidate les envois de code déjà faits : sinon le délai de 60 s entre
     /// deux codes (O1) refuserait la demande suivante du test.
     async fn passer_le_delai_otp(pool: &PgPool) {
-        sqlx::query("UPDATE envoi_otp SET envoye_le = envoye_le - interval '2 minutes'").execute(pool).await.unwrap();
+        sqlx::query("UPDATE envoi_otp SET envoye_le = envoye_le - interval '2 minutes'")
+            .execute(pool)
+            .await
+            .unwrap();
     }
 
     async fn sessions_ouvertes(pool: &PgPool, compte_id: Uuid) -> i64 {
-        sqlx::query_scalar("SELECT count(*) FROM session WHERE compte_id = $1 AND revoquee_le IS NULL")
-            .bind(compte_id)
-            .fetch_one(pool)
-            .await
-            .unwrap()
+        sqlx::query_scalar(
+            "SELECT count(*) FROM session WHERE compte_id = $1 AND revoquee_le IS NULL",
+        )
+        .bind(compte_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
     }
 
     /// IC3 : blocage d'un patient (statut, sessions, version du jeton, code
@@ -452,18 +530,34 @@ mod tests {
         let jwt = JwtService::new(&"a".repeat(32));
         let op = operateur(&pool, "+22670050001").await;
         let cible = patient(&pool, "+22670050002").await;
-        auth_patient::se_connecter(&pool, &jwt, "+22670050002", PATIENT).await.unwrap();
+        auth_patient::se_connecter(&pool, &jwt, "+22670050002", PATIENT)
+            .await
+            .unwrap();
         assert_eq!(sessions_ouvertes(&pool, cible.compte_id).await, 2);
         // Un code SMS en cours au moment du blocage.
         passer_le_delai_otp(&pool).await;
-        auth_patient::demander_otp(&pool, "+22670050002").await.unwrap();
-        let version_avant: i32 = sqlx::query_scalar("SELECT version_jeton FROM compte WHERE id = $1")
-            .bind(cible.compte_id)
-            .fetch_one(&pool)
+        auth_patient::demander_otp(&pool, "+22670050002")
             .await
             .unwrap();
+        let version_avant: i32 =
+            sqlx::query_scalar("SELECT version_jeton FROM compte WHERE id = $1")
+                .bind(cible.compte_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
 
-        assert!(bloquer(&pool, &emails, CONTACT, op, &cible, "  Mot de passe volé (fictif)  ").await.unwrap());
+        assert!(
+            bloquer(
+                &pool,
+                &emails,
+                CONTACT,
+                op,
+                &cible,
+                "  Mot de passe volé (fictif)  "
+            )
+            .await
+            .unwrap()
+        );
         let (statut, version, code): (String, i32, Option<String>) = sqlx::query_as(
             "SELECT c.statut, c.version_jeton, u.otp_code_hash FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
              WHERE c.id = $1",
@@ -472,13 +566,18 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!((statut.as_str(), version > version_avant, code), ("desactive", true, None));
+        assert_eq!(
+            (statut.as_str(), version > version_avant, code),
+            ("desactive", true, None)
+        );
         assert_eq!(sessions_ouvertes(&pool, cible.compte_id).await, 0);
-        let motifs: Vec<String> = sqlx::query_scalar("SELECT DISTINCT motif_revocation FROM session WHERE compte_id = $1")
-            .bind(cible.compte_id)
-            .fetch_all(&pool)
-            .await
-            .unwrap();
+        let motifs: Vec<String> = sqlx::query_scalar(
+            "SELECT DISTINCT motif_revocation FROM session WHERE compte_id = $1",
+        )
+        .bind(cible.compte_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
         assert_eq!(motifs, ["desactivation_compte"]);
         assert!(matches!(
             auth_patient::se_connecter(&pool, &jwt, "+22670050002", PATIENT).await,
@@ -486,38 +585,88 @@ mod tests {
         ));
         // Plus aucun code SMS pour ce compte.
         passer_le_delai_otp(&pool).await;
-        assert!(matches!(auth_patient::demander_otp(&pool, "+22670050002").await, Err(ErreurAuthPatient::CompteBloque)));
-        let code: Option<String> =
-            sqlx::query_scalar("SELECT otp_code_hash FROM utilisateur WHERE telephone = '+22670050002'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        assert!(matches!(
+            auth_patient::demander_otp(&pool, "+22670050002").await,
+            Err(ErreurAuthPatient::CompteBloque)
+        ));
+        let code: Option<String> = sqlx::query_scalar(
+            "SELECT otp_code_hash FROM utilisateur WHERE telephone = '+22670050002'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert!(code.is_none());
         let (sujet_corps, nb) = {
             let recus = emails.0.lock().unwrap();
             (recus.last().unwrap().1.clone(), recus.len())
         };
         assert_eq!(nb, 1);
-        assert!(sujet_corps.contains("bloqué") && sujet_corps.contains(CONTACT) && !sujet_corps.contains("volé"));
-        assert!(matches!(bloquer(&pool, &emails, CONTACT, op, &cible, "encore").await, Err(ErreurIntervention::DejaBloque)));
+        assert!(
+            sujet_corps.contains("bloqué")
+                && sujet_corps.contains(CONTACT)
+                && !sujet_corps.contains("volé")
+        );
+        assert!(matches!(
+            bloquer(&pool, &emails, CONTACT, op, &cible, "encore").await,
+            Err(ErreurIntervention::DejaBloque)
+        ));
 
         // Réactivation : CNIB obligatoire ; ancien mot de passe toujours
         // inutilisable ; réinitialisation par SMS, puis connexion.
         assert!(matches!(
-            reactiver(&pool, &emails, CONTACT, op, &cible, "Identité vérifiée (fictif)", false).await,
+            reactiver(
+                &pool,
+                &emails,
+                CONTACT,
+                op,
+                &cible,
+                "Identité vérifiée (fictif)",
+                false
+            )
+            .await,
             Err(ErreurIntervention::CnibNonVerifiee)
         ));
-        assert!(reactiver(&pool, &emails, CONTACT, op, &cible, "Identité vérifiée (fictif)", true).await.unwrap());
-        assert!(emails.0.lock().unwrap().last().unwrap().1.contains("Mot de passe oublié"));
+        assert!(
+            reactiver(
+                &pool,
+                &emails,
+                CONTACT,
+                op,
+                &cible,
+                "Identité vérifiée (fictif)",
+                true
+            )
+            .await
+            .unwrap()
+        );
+        assert!(
+            emails
+                .0
+                .lock()
+                .unwrap()
+                .last()
+                .unwrap()
+                .1
+                .contains("Mot de passe oublié")
+        );
         assert!(matches!(
             auth_patient::se_connecter(&pool, &jwt, "+22670050002", PATIENT).await,
             Err(ErreurAuthPatient::IdentifiantsInvalides)
         ));
         passer_le_delai_otp(&pool).await;
-        let (code, _) = auth_patient::demander_otp(&pool, "+22670050002").await.unwrap();
-        auth_patient::reinitialiser_mot_de_passe(&pool, "+22670050002", &code, "Nouveau#2026").await.unwrap();
-        auth_patient::se_connecter(&pool, &jwt, "+22670050002", "Nouveau#2026").await.unwrap();
-        assert!(matches!(reactiver(&pool, &emails, CONTACT, op, &cible, "x", true).await, Err(ErreurIntervention::PasBloque)));
+        let (code, _) = auth_patient::demander_otp(&pool, "+22670050002")
+            .await
+            .unwrap();
+        auth_patient::reinitialiser_mot_de_passe(&pool, "+22670050002", &code, "Nouveau#2026")
+            .await
+            .unwrap();
+        auth_patient::se_connecter(&pool, &jwt, "+22670050002", "Nouveau#2026")
+            .await
+            .unwrap();
+        assert!(matches!(
+            reactiver(&pool, &emails, CONTACT, op, &cible, "x", true).await,
+            Err(ErreurIntervention::PasBloque)
+        ));
 
         // Traces : blocage puis réactivation, CNIB seulement à la seconde ;
         // jamais modifiables.
@@ -531,12 +680,30 @@ mod tests {
         assert_eq!(
             traces,
             [
-                ("blocage_compte".into(), false, "Mot de passe volé (fictif)".into()),
-                ("reactivation_compte".into(), true, "Identité vérifiée (fictif)".into())
+                (
+                    "blocage_compte".into(),
+                    false,
+                    "Mot de passe volé (fictif)".into()
+                ),
+                (
+                    "reactivation_compte".into(),
+                    true,
+                    "Identité vérifiée (fictif)".into()
+                )
             ]
         );
-        assert!(sqlx::query("UPDATE intervention_compte SET motif = 'autre'").execute(&pool).await.is_err());
-        assert!(sqlx::query("DELETE FROM intervention_compte").execute(&pool).await.is_err());
+        assert!(
+            sqlx::query("UPDATE intervention_compte SET motif = 'autre'")
+                .execute(&pool)
+                .await
+                .is_err()
+        );
+        assert!(
+            sqlx::query("DELETE FROM intervention_compte")
+                .execute(&pool)
+                .await
+                .is_err()
+        );
     }
 
     /// IC3 : blocage d'un professionnel ; ses liens par email en attente
@@ -553,7 +720,11 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1").bind(u).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1")
+            .bind(u)
+            .execute(&pool)
+            .await
+            .unwrap();
         let compte_id: Uuid = sqlx::query_scalar(
             "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'professionnel', 'x') RETURNING id",
         )
@@ -562,11 +733,30 @@ mod tests {
         .await
         .unwrap();
         let mut conn = pool.acquire().await.unwrap();
-        assert!(jeton_email::emettre_reinitialisation(&mut conn, compte_id).await.unwrap().is_some());
+        assert!(
+            jeton_email::emettre_reinitialisation(&mut conn, compte_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
         drop(conn);
-        let cible = CompteCible { compte_id, type_compte: TypeCompte::Professionnel, nom: None, prenom: None };
+        let cible = CompteCible {
+            compte_id,
+            type_compte: TypeCompte::Professionnel,
+            nom: None,
+            prenom: None,
+        };
 
-        bloquer(&pool, &emails, CONTACT, op, &cible, "Compte compromis (fictif)").await.unwrap();
+        bloquer(
+            &pool,
+            &emails,
+            CONTACT,
+            op,
+            &cible,
+            "Compte compromis (fictif)",
+        )
+        .await
+        .unwrap();
         let en_attente: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM jeton_email WHERE compte_id = $1 AND utilise_le IS NULL AND annule_le IS NULL",
         )
@@ -591,7 +781,11 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1").bind(u).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1")
+            .bind(u)
+            .execute(&pool)
+            .await
+            .unwrap();
         let compte_id: Uuid = sqlx::query_scalar(
             "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'professionnel', 'x') RETURNING id",
         )
@@ -617,24 +811,49 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        session::ouvrir(&pool, compte_id, Some(affectation_id)).await.unwrap();
-
-        assert!(matches!(
-            retirer_affectation(&pool, &emails, CONTACT, op, compte_id, affectation_id, "Compte compromis (fictif)", false)
-                .await,
-            Err(ErreurIntervention::DernierResponsable)
-        ));
-        assert_eq!(affectations_actives(&pool, compte_id).await.unwrap().len(), 1, "rien n'a changé");
-        assert!(
-            retirer_affectation(&pool, &emails, CONTACT, op, compte_id, affectation_id, "Compte compromis (fictif)", true)
-                .await
-                .unwrap()
-        );
-        let par: Option<Uuid> = sqlx::query_scalar("SELECT desactivee_par_compte_id FROM affectation WHERE id = $1")
-            .bind(affectation_id)
-            .fetch_one(&pool)
+        session::ouvrir(&pool, compte_id, Some(affectation_id))
             .await
             .unwrap();
+
+        assert!(matches!(
+            retirer_affectation(
+                &pool,
+                &emails,
+                CONTACT,
+                op,
+                compte_id,
+                affectation_id,
+                "Compte compromis (fictif)",
+                false
+            )
+            .await,
+            Err(ErreurIntervention::DernierResponsable)
+        ));
+        assert_eq!(
+            affectations_actives(&pool, compte_id).await.unwrap().len(),
+            1,
+            "rien n'a changé"
+        );
+        assert!(
+            retirer_affectation(
+                &pool,
+                &emails,
+                CONTACT,
+                op,
+                compte_id,
+                affectation_id,
+                "Compte compromis (fictif)",
+                true
+            )
+            .await
+            .unwrap()
+        );
+        let par: Option<Uuid> =
+            sqlx::query_scalar("SELECT desactivee_par_compte_id FROM affectation WHERE id = $1")
+                .bind(affectation_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(par, Some(op.compte_id()));
         assert_eq!(sessions_ouvertes(&pool, compte_id).await, 0);
         let trace: Option<Uuid> = sqlx::query_scalar(
@@ -647,7 +866,17 @@ mod tests {
         assert_eq!(trace, Some(affectation_id));
         // Déjà close.
         assert!(matches!(
-            retirer_affectation(&pool, &emails, CONTACT, op, compte_id, affectation_id, "encore", true).await,
+            retirer_affectation(
+                &pool,
+                &emails,
+                CONTACT,
+                op,
+                compte_id,
+                affectation_id,
+                "encore",
+                true
+            )
+            .await,
             Err(ErreurIntervention::AffectationInconnue)
         ));
     }
@@ -677,8 +906,14 @@ mod tests {
         assert!(emails.0.lock().unwrap().is_empty());
 
         let autre = operateur(&pool, "+22670050032").await;
-        assert!(matches!(bloquer(&pool, &emails, CONTACT, autre, &cible, "   ").await, Err(ErreurIntervention::MotifVide)));
+        assert!(matches!(
+            bloquer(&pool, &emails, CONTACT, autre, &cible, "   ").await,
+            Err(ErreurIntervention::MotifVide)
+        ));
         let long = "x".repeat(MOTIF_LONGUEUR_MAX + 1);
-        assert!(matches!(bloquer(&pool, &emails, CONTACT, autre, &cible, &long).await, Err(ErreurIntervention::MotifTropLong)));
+        assert!(matches!(
+            bloquer(&pool, &emails, CONTACT, autre, &cible, &long).await,
+            Err(ErreurIntervention::MotifTropLong)
+        ));
     }
 }

@@ -91,7 +91,10 @@ pub(crate) struct TentativeComptee {
 ///
 /// `totp_actif` est lu dans la même requête (sous-requête du `RETURNING`) :
 /// aucun écart possible entre le comptage et la lecture de l'état du TOTP.
-pub(crate) async fn compter_tentative(pool: &PgPool, compte_id: Uuid) -> Result<Option<TentativeComptee>, sqlx::Error> {
+pub(crate) async fn compter_tentative(
+    pool: &PgPool,
+    compte_id: Uuid,
+) -> Result<Option<TentativeComptee>, sqlx::Error> {
     let ligne: Option<(String, String, bool)> = sqlx::query_as(
         "UPDATE compte SET \
            tentatives_echouees = CASE WHEN tentatives_echouees + 1 >= $2 THEN 0 ELSE tentatives_echouees + 1 END, \
@@ -107,11 +110,13 @@ pub(crate) async fn compter_tentative(pool: &PgPool, compte_id: Uuid) -> Result<
     .fetch_optional(pool)
     .await?;
 
-    Ok(ligne.map(|(mot_de_passe_hash, statut, totp_actif)| TentativeComptee {
-        mot_de_passe_hash,
-        statut,
-        totp_actif,
-    }))
+    Ok(
+        ligne.map(|(mot_de_passe_hash, statut, totp_actif)| TentativeComptee {
+            mot_de_passe_hash,
+            statut,
+            totp_actif,
+        }),
+    )
 }
 
 /// Authentification complète : compteur remis à zéro et verrouillage levé
@@ -227,7 +232,10 @@ mod tests {
             assert!(refuse(verifier(&pool, Some(compte), MAUVAIS).await));
         }
         assert_eq!(etat(&pool, compte).await, (4, false));
-        assert_eq!(verifier(&pool, Some(compte), BON).await.unwrap(), Verification::Complete(compte));
+        assert_eq!(
+            verifier(&pool, Some(compte), BON).await.unwrap(),
+            Verification::Complete(compte)
+        );
         assert_eq!(etat(&pool, compte).await, (0, false));
 
         // --- 5 échecs : verrouillé, le bon mot de passe est refusé ---
@@ -235,22 +243,33 @@ mod tests {
             assert!(refuse(verifier(&pool, Some(compte), MAUVAIS).await));
         }
         assert_eq!(etat(&pool, compte).await, (0, true));
-        assert!(refuse(verifier(&pool, Some(compte), BON).await), "refusé pendant le verrouillage");
+        assert!(
+            refuse(verifier(&pool, Some(compte), BON).await),
+            "refusé pendant le verrouillage"
+        );
 
         // --- verrouillage expiré : de nouveau accepté ---
-        sqlx::query("UPDATE compte SET verrouille_jusqua = now() - interval '1 minute' WHERE id = $1")
-            .bind(compte)
-            .execute(&pool)
-            .await
-            .unwrap();
-        assert_eq!(verifier(&pool, Some(compte), BON).await.unwrap(), Verification::Complete(compte));
+        sqlx::query(
+            "UPDATE compte SET verrouille_jusqua = now() - interval '1 minute' WHERE id = $1",
+        )
+        .bind(compte)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            verifier(&pool, Some(compte), BON).await.unwrap(),
+            Verification::Complete(compte)
+        );
 
         // --- 5ᵉ tentative correcte : elle réussit et lève le verrouillage
         // qu'elle venait de poser ---
         for _ in 0..4 {
             assert!(refuse(verifier(&pool, Some(compte), MAUVAIS).await));
         }
-        assert_eq!(verifier(&pool, Some(compte), BON).await.unwrap(), Verification::Complete(compte));
+        assert_eq!(
+            verifier(&pool, Some(compte), BON).await.unwrap(),
+            Verification::Complete(compte)
+        );
         assert_eq!(etat(&pool, compte).await, (0, false));
 
         // --- compte désactivé : refusé, même avec le bon mot de passe ---
@@ -327,7 +346,10 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        assert_eq!(verifier(&pool, Some(compte), BON).await.unwrap(), Verification::Complete(compte));
+        assert_eq!(
+            verifier(&pool, Some(compte), BON).await.unwrap(),
+            Verification::Complete(compte)
+        );
         assert_eq!(etat(&pool, compte).await, (0, false));
     }
 
@@ -348,6 +370,9 @@ mod tests {
             );
         }
         assert_eq!(etat(&pool, compte).await, (0, true));
-        assert!(refuse(verifier(&pool, Some(compte), BON).await), "6ᵉ refusé : compte verrouillé");
+        assert!(
+            refuse(verifier(&pool, Some(compte), BON).await),
+            "6ᵉ refusé : compte verrouillé"
+        );
     }
 }

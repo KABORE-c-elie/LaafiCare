@@ -39,13 +39,17 @@ pub enum ErreurOutil {
     DejaAdministrateur,
     #[error("Numéro de téléphone invalide.")]
     TelephoneInvalide,
-    #[error("Aucun compte patient actif pour ce numéro : la personne doit d'abord s'inscrire dans l'application patient.")]
+    #[error(
+        "Aucun compte patient actif pour ce numéro : la personne doit d'abord s'inscrire dans l'application patient."
+    )]
     PasDeComptePatient,
     #[error("Email vide.")]
     EmailVide,
     #[error("Adresse email invalide.")]
     EmailInvalide,
-    #[error("Cette identité a déjà un autre email : l'outil ne le change pas (outil « changer l'email », à concevoir).")]
+    #[error(
+        "Cette identité a déjà un autre email : l'outil ne le change pas (outil « changer l'email », à concevoir)."
+    )]
     EmailDifferent,
     #[error("Cet email est déjà utilisé par une autre personne.")]
     EmailDejaUtilise,
@@ -61,7 +65,9 @@ pub enum ErreurOutil {
     AuthentificationRefusee,
     #[error("Code de vérification incorrect, expiré ou déjà utilisé.")]
     JetonInvalide,
-    #[error("Reprise impossible : l'administrateur doit n'avoir jamais eu de second facteur actif.")]
+    #[error(
+        "Reprise impossible : l'administrateur doit n'avoir jamais eu de second facteur actif."
+    )]
     RepriseImpossible,
     #[error("Compte introuvable.")]
     CompteIntrouvable,
@@ -151,7 +157,10 @@ impl Operateur {
 // Email de vérification et fenêtre de réenrôlement
 // ---------------------------------------------------------------------
 
-fn envoyer_verification(email_sender: &dyn EmailSender, emise: &VerificationEmise) -> Result<(), ErreurOutil> {
+fn envoyer_verification(
+    email_sender: &dyn EmailSender,
+    emise: &VerificationEmise,
+) -> Result<(), ErreurOutil> {
     let corps = format!(
         "Voici votre code de vérification LaafiCare. Collez-le dans l'outil qui vous l'a demandé.\n\
          Il est valable {} heures et ne sert qu'une fois.\n\n{}\n\n\
@@ -160,13 +169,21 @@ fn envoyer_verification(email_sender: &dyn EmailSender, emise: &VerificationEmis
         emise.jeton.en_clair()
     );
     email_sender
-        .envoyer(&emise.email, "LaafiCare : vérification de votre adresse email", &corps)
+        .envoyer(
+            &emise.email,
+            "LaafiCare : vérification de votre adresse email",
+            &corps,
+        )
         .map_err(|_| ErreurOutil::EnvoiEmail)
 }
 
 /// Vérifie l'email du compte avec le jeton collé (R0). Seul un jeton de ce
 /// compte est accepté.
-pub async fn verifier_email(pool: &PgPool, compte_id: Uuid, jeton: &str) -> Result<(), ErreurOutil> {
+pub async fn verifier_email(
+    pool: &PgPool,
+    compte_id: Uuid,
+    jeton: &str,
+) -> Result<(), ErreurOutil> {
     match jeton_email::verifier_email(pool, jeton.trim(), Some(compte_id)).await {
         Ok(Some(_)) => Ok(()),
         Ok(None) => Err(ErreurOutil::JetonInvalide),
@@ -178,7 +195,10 @@ pub async fn verifier_email(pool: &PgPool, compte_id: Uuid, jeton: &str) -> Resu
 /// compte administrateur actif, à l'email vérifié et sans TOTP actif.
 /// Horloge de PostgreSQL. `false` si le compte ne remplit pas ces
 /// conditions.
-async fn ouvrir_fenetre_dans(conn: &mut PgConnection, compte_id: Uuid) -> Result<bool, sqlx::Error> {
+async fn ouvrir_fenetre_dans(
+    conn: &mut PgConnection,
+    compte_id: Uuid,
+) -> Result<bool, sqlx::Error> {
     let ouverte: Option<Uuid> = sqlx::query_scalar(
         "UPDATE compte c SET reenrolement_autorise_jusqu_au = now() + make_interval(mins => $2) \
          FROM utilisateur u \
@@ -197,7 +217,10 @@ async fn ouvrir_fenetre_dans(conn: &mut PgConnection, compte_id: Uuid) -> Result
 /// Ouvre la fenêtre, une fois l'email vérifié. Refus si les conditions ne
 /// sont pas remplies (email pas encore vérifié, TOTP déjà actif).
 pub async fn ouvrir_fenetre(pool: &PgPool, compte_id: Uuid) -> Result<(), ErreurOutil> {
-    let mut conn = pool.acquire().await.map_err(|e| interne_sqlx("connexion", &e))?;
+    let mut conn = pool
+        .acquire()
+        .await
+        .map_err(|e| interne_sqlx("connexion", &e))?;
     match ouvrir_fenetre_dans(&mut conn, compte_id).await {
         Ok(true) => Ok(()),
         Ok(false) => Err(ErreurOutil::RepriseImpossible),
@@ -220,12 +243,17 @@ pub async fn authentifier_operateur(
     mot_de_passe: &str,
     code: &str,
 ) -> Result<Operateur, ErreurOutil> {
-    let compte = auth_professionnel::verifier_identifiants(pool, "administrateur_laaficare", email, mot_de_passe)
-        .await
-        .map_err(|erreur| match erreur {
-            ErreurAuthProfessionnel::Interne(etape) => ErreurOutil::Interne(etape),
-            _ => ErreurOutil::AuthentificationRefusee,
-        })?;
+    let compte = auth_professionnel::verifier_identifiants(
+        pool,
+        "administrateur_laaficare",
+        email,
+        mot_de_passe,
+    )
+    .await
+    .map_err(|erreur| match erreur {
+        ErreurAuthProfessionnel::Interne(etape) => ErreurOutil::Interne(etape),
+        _ => ErreurOutil::AuthentificationRefusee,
+    })?;
     if !compte.second_facteur {
         return Err(ErreurOutil::AuthentificationRefusee);
     }
@@ -234,11 +262,16 @@ pub async fn authentifier_operateur(
         .map_err(|erreur| match erreur {
             ErreurTotp::Refuse => ErreurOutil::AuthentificationRefusee,
             ErreurTotp::Interne(_) => {
-                tracing::error!(etape = "code de l'opérateur", "outil administrateur : erreur interne");
+                tracing::error!(
+                    etape = "code de l'opérateur",
+                    "outil administrateur : erreur interne"
+                );
                 ErreurOutil::Interne("code de l'opérateur")
             }
         })?;
-    Ok(Operateur { compte_id: compte.compte_id })
+    Ok(Operateur {
+        compte_id: compte.compte_id,
+    })
 }
 
 // ---------------------------------------------------------------------
@@ -262,10 +295,12 @@ pub async fn creer_premier_administrateur(
     email_sender: &dyn EmailSender,
     saisie: &NouvelAdministrateur<'_>,
 ) -> Result<AdministrateurEnCours, ErreurOutil> {
-    let existe: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM compte WHERE type_compte = 'administrateur_laaficare')")
-        .fetch_one(pool)
-        .await
-        .map_err(|e| interne_sqlx("recherche d'un administrateur", &e))?;
+    let existe: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM compte WHERE type_compte = 'administrateur_laaficare')",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|e| interne_sqlx("recherche d'un administrateur", &e))?;
     if existe {
         return Err(ErreurOutil::AdministrateurExisteDeja);
     }
@@ -290,7 +325,8 @@ async fn creer(
     cree_par: Option<Uuid>,
 ) -> Result<AdministrateurEnCours, ErreurOutil> {
     // Contrôles sans base d'abord.
-    let telephone = telephone::normaliser(saisie.telephone).map_err(|_| ErreurOutil::TelephoneInvalide)?;
+    let telephone =
+        telephone::normaliser(saisie.telephone).map_err(|_| ErreurOutil::TelephoneInvalide)?;
     let email = saisie.email.trim();
     if email.is_empty() {
         return Err(ErreurOutil::EmailVide);
@@ -326,9 +362,13 @@ async fn creer(
     }
     // Haché avant la transaction : Argon2id ne doit pas garder de verrous
     // ouverts.
-    let hash = mot_de_passe::hacher(saisie.mot_de_passe).map_err(|_| ErreurOutil::Interne("hachage du mot de passe"))?;
+    let hash = mot_de_passe::hacher(saisie.mot_de_passe)
+        .map_err(|_| ErreurOutil::Interne("hachage du mot de passe"))?;
 
-    let mut tx = pool.begin().await.map_err(|e| interne_sqlx("transaction", &e))?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| interne_sqlx("transaction", &e))?;
 
     // Email : enregistré s'il manque, gardé s'il est le même (majuscules
     // près, J6), refusé s'il est différent (changer l'email d'une personne
@@ -376,27 +416,35 @@ async fn creer(
             })?;
     }
 
-    sqlx::query("INSERT INTO creation_administrateur (compte_id, cree_par_compte_id) VALUES ($1, $2)")
-        .bind(compte_id)
-        .bind(cree_par)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| match contrainte(&e) {
-            // Un autre outil a créé le premier administrateur entre-temps.
-            Some("creation_administrateur_un_seul_premier") => ErreurOutil::AdministrateurExisteDeja,
-            _ => interne_sqlx("trace de la création", &e),
-        })?;
+    sqlx::query(
+        "INSERT INTO creation_administrateur (compte_id, cree_par_compte_id) VALUES ($1, $2)",
+    )
+    .bind(compte_id)
+    .bind(cree_par)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| match contrainte(&e) {
+        // Un autre outil a créé le premier administrateur entre-temps.
+        Some("creation_administrateur_un_seul_premier") => ErreurOutil::AdministrateurExisteDeja,
+        _ => interne_sqlx("trace de la création", &e),
+    })?;
 
     let emise = jeton_email::emettre_verification(&mut tx, compte_id)
         .await
         .map_err(|e| interne_sqlx("émission du jeton d'email", &e))?
         .ok_or(ErreurOutil::Interne("compte sans email"))?;
-    tx.commit().await.map_err(|e| interne_sqlx("validation de la transaction", &e))?;
+    tx.commit()
+        .await
+        .map_err(|e| interne_sqlx("validation de la transaction", &e))?;
 
     // Après le commit : un échec d'envoi laisse le compte créé, et la reprise
     // renvoie un nouveau jeton.
     envoyer_verification(email_sender, &emise)?;
-    Ok(AdministrateurEnCours { compte_id, email: emise.email.clone(), verification_envoyee: true })
+    Ok(AdministrateurEnCours {
+        compte_id,
+        email: emise.email.clone(),
+        verification_envoyee: true,
+    })
 }
 
 // ---------------------------------------------------------------------
@@ -407,7 +455,10 @@ async fn creer(
 /// vérifié, et s'il n'a **jamais eu de TOTP actif** (aucun TOTP actif, et
 /// aucune désactivation tracée : un TOTP désactivé l'a forcément été après
 /// avoir été actif).
-async fn administrateur_par_email(pool: &PgPool, email: &str) -> Result<Option<(Uuid, bool, bool)>, ErreurOutil> {
+async fn administrateur_par_email(
+    pool: &PgPool,
+    email: &str,
+) -> Result<Option<(Uuid, bool, bool)>, ErreurOutil> {
     sqlx::query_as(
         "SELECT c.id, u.email_verifie_le IS NOT NULL, \
                 NOT EXISTS (SELECT 1 FROM second_facteur_totp t WHERE t.compte_id = c.id AND t.statut = 'actif') \
@@ -430,13 +481,18 @@ async fn reprendre(
     email_verifie: bool,
     repris_par: Option<Uuid>,
 ) -> Result<AdministrateurEnCours, ErreurOutil> {
-    let mut tx = pool.begin().await.map_err(|e| interne_sqlx("transaction", &e))?;
-    sqlx::query("INSERT INTO reprise_administrateur (compte_id, repris_par_compte_id) VALUES ($1, $2)")
-        .bind(compte_id)
-        .bind(repris_par)
-        .execute(&mut *tx)
+    let mut tx = pool
+        .begin()
         .await
-        .map_err(|e| interne_sqlx("trace de la reprise", &e))?;
+        .map_err(|e| interne_sqlx("transaction", &e))?;
+    sqlx::query(
+        "INSERT INTO reprise_administrateur (compte_id, repris_par_compte_id) VALUES ($1, $2)",
+    )
+    .bind(compte_id)
+    .bind(repris_par)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| interne_sqlx("trace de la reprise", &e))?;
     let emise = if email_verifie {
         None
     } else {
@@ -452,12 +508,18 @@ async fn reprendre(
         .fetch_one(&mut *tx)
         .await
         .map_err(|e| interne_sqlx("lecture de l'email", &e))?;
-    tx.commit().await.map_err(|e| interne_sqlx("validation de la transaction", &e))?;
+    tx.commit()
+        .await
+        .map_err(|e| interne_sqlx("validation de la transaction", &e))?;
 
     if let Some(emise) = &emise {
         envoyer_verification(email_sender, emise)?;
     }
-    Ok(AdministrateurEnCours { compte_id, email, verification_envoyee: emise.is_some() })
+    Ok(AdministrateurEnCours {
+        compte_id,
+        email,
+        verification_envoyee: emise.is_some(),
+    })
 }
 
 /// Reprise du premier administrateur par lui-même (B6), quand il est le seul
@@ -483,8 +545,12 @@ pub async fn reprendre_premier_administrateur(
     // Un mot de passe faux ou un email inconnu donnent le même refus.
     let verification = verrouillage::verifier(pool, cible.map(|(id, _, _)| id), mot_de_passe).await;
     match verification {
-        Err(ErreurConnexion::Interne(_)) => return Err(ErreurOutil::Interne("vérification du mot de passe")),
-        Err(ErreurConnexion::IdentifiantsInvalides) => return Err(ErreurOutil::AuthentificationRefusee),
+        Err(ErreurConnexion::Interne(_)) => {
+            return Err(ErreurOutil::Interne("vérification du mot de passe"));
+        }
+        Err(ErreurConnexion::IdentifiantsInvalides) => {
+            return Err(ErreurOutil::AuthentificationRefusee);
+        }
         Ok(_) => {}
     }
     let Some((compte_id, email_verifie, jamais_totp)) = cible else {
@@ -505,13 +571,22 @@ pub async fn reprendre_administrateur(
     operateur: Operateur,
     email: &str,
 ) -> Result<AdministrateurEnCours, ErreurOutil> {
-    let Some((compte_id, email_verifie, jamais_totp)) = administrateur_par_email(pool, email).await? else {
+    let Some((compte_id, email_verifie, jamais_totp)) =
+        administrateur_par_email(pool, email).await?
+    else {
         return Err(ErreurOutil::CompteIntrouvable);
     };
     if !jamais_totp || compte_id == operateur.compte_id {
         return Err(ErreurOutil::RepriseImpossible);
     }
-    reprendre(pool, email_sender, compte_id, email_verifie, Some(operateur.compte_id)).await
+    reprendre(
+        pool,
+        email_sender,
+        compte_id,
+        email_verifie,
+        Some(operateur.compte_id),
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------
@@ -545,7 +620,11 @@ pub struct CompteCible {
 }
 
 /// Par le téléphone pour un patient, par l'email sinon (section 14).
-pub async fn trouver_compte(pool: &PgPool, type_compte: TypeCompte, identifiant: &str) -> Result<CompteCible, ErreurOutil> {
+pub async fn trouver_compte(
+    pool: &PgPool,
+    type_compte: TypeCompte,
+    identifiant: &str,
+) -> Result<CompteCible, ErreurOutil> {
     let trouve: Option<(Uuid, Option<String>, Option<String>)> = if type_compte == TypeCompte::Patient {
         let telephone = telephone::normaliser(identifiant).map_err(|_| ErreurOutil::TelephoneInvalide)?;
         sqlx::query_as(
@@ -567,7 +646,12 @@ pub async fn trouver_compte(pool: &PgPool, type_compte: TypeCompte, identifiant:
     }
     .map_err(|e| interne_sqlx("recherche du compte", &e))?;
     let (compte_id, nom, prenom) = trouve.ok_or(ErreurOutil::CompteIntrouvable)?;
-    Ok(CompteCible { compte_id, type_compte, nom, prenom })
+    Ok(CompteCible {
+        compte_id,
+        type_compte,
+        nom,
+        prenom,
+    })
 }
 
 /// Résultat d'une désactivation.
@@ -612,7 +696,10 @@ pub async fn desactiver_totp(
         return Err(ErreurOutil::CnibNonVerifiee);
     }
 
-    let mut tx = pool.begin().await.map_err(|e| interne_sqlx("transaction", &e))?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| interne_sqlx("transaction", &e))?;
     sqlx::query("SELECT id FROM compte WHERE id = $1 FOR UPDATE")
         .bind(cible.compte_id)
         .fetch_one(&mut *tx)
@@ -653,9 +740,14 @@ pub async fn desactiver_totp(
         _ => interne_sqlx("trace de la désactivation", &e),
     })?;
 
-    session::fermer_toutes(&mut tx, cible.compte_id, MotifRevocation::DesactivationTotp, true)
-        .await
-        .map_err(|e| interne_sqlx("fermeture des sessions", &e))?;
+    session::fermer_toutes(
+        &mut tx,
+        cible.compte_id,
+        MotifRevocation::DesactivationTotp,
+        true,
+    )
+    .await
+    .map_err(|e| interne_sqlx("fermeture des sessions", &e))?;
 
     let fenetre_ouverte = if cible.type_compte == TypeCompte::Administrateur {
         ouvrir_fenetre_dans(&mut tx, cible.compte_id)
@@ -665,15 +757,25 @@ pub async fn desactiver_totp(
         false
     };
 
-    tx.commit().await.map_err(|e| interne_sqlx("validation de la transaction", &e))?;
+    tx.commit()
+        .await
+        .map_err(|e| interne_sqlx("validation de la transaction", &e))?;
 
     // Après la validation en base (B8 a ; D4 du 2026-10-21) : texte commun,
     // daté de la trace, avec le contact de l'équipe (NIST SP 800-63B rév. 4
     // §4.6) ; ni motif, ni nom de l'opérateur.
-    let personne_prevenue =
-        alerte_securite::prevenir(pool, email_sender, contact_securite, cible.compte_id, Evenement::SecondFacteurDesactive)
-            .await;
-    Ok(Desactivation { fenetre_ouverte, personne_prevenue })
+    let personne_prevenue = alerte_securite::prevenir(
+        pool,
+        email_sender,
+        contact_securite,
+        cible.compte_id,
+        Evenement::SecondFacteurDesactive,
+    )
+    .await;
+    Ok(Desactivation {
+        fenetre_ouverte,
+        personne_prevenue,
+    })
 }
 
 #[cfg(test)]
@@ -696,8 +798,16 @@ mod tests {
     struct EmailsEnvoyes(Mutex<Vec<(String, String)>>);
 
     impl EmailSender for EmailsEnvoyes {
-        fn envoyer(&self, destinataire: &str, _sujet: &str, corps: &str) -> Result<(), ErreurEmail> {
-            self.0.lock().unwrap().push((destinataire.to_owned(), corps.to_owned()));
+        fn envoyer(
+            &self,
+            destinataire: &str,
+            _sujet: &str,
+            corps: &str,
+        ) -> Result<(), ErreurEmail> {
+            self.0
+                .lock()
+                .unwrap()
+                .push((destinataire.to_owned(), corps.to_owned()));
             Ok(())
         }
         fn simule(&self) -> bool {
@@ -748,7 +858,12 @@ mod tests {
     }
 
     fn saisie<'a>(telephone: &'a str, email: &'a str, cnib: &'a str) -> NouvelAdministrateur<'a> {
-        NouvelAdministrateur { telephone, email, cnib_chiffres: cnib, mot_de_passe: ADMIN }
+        NouvelAdministrateur {
+            telephone,
+            email,
+            cnib_chiffres: cnib,
+            mot_de_passe: ADMIN,
+        }
     }
 
     /// Création complète par l'outil : email vérifié par le jeton envoyé,
@@ -762,10 +877,16 @@ mod tests {
     ) -> Uuid {
         patient(pool, telephone).await;
         let en_cours = match operateur {
-            None => creer_premier_administrateur(pool, emails, &saisie(telephone, email, "")).await.unwrap(),
-            Some(op) => creer_administrateur(pool, emails, op, &saisie(telephone, email, "")).await.unwrap(),
+            None => creer_premier_administrateur(pool, emails, &saisie(telephone, email, ""))
+                .await
+                .unwrap(),
+            Some(op) => creer_administrateur(pool, emails, op, &saisie(telephone, email, ""))
+                .await
+                .unwrap(),
         };
-        verifier_email(pool, en_cours.compte_id, &emails.dernier_jeton()).await.unwrap();
+        verifier_email(pool, en_cours.compte_id, &emails.dernier_jeton())
+            .await
+            .unwrap();
         ouvrir_fenetre(pool, en_cours.compte_id).await.unwrap();
         en_cours.compte_id
     }
@@ -773,7 +894,10 @@ mod tests {
     /// Le TOTP activé comme le fera l'administrateur par les routes de la
     /// 3.6.4 ; renvoie un code valable au pas suivant.
     async fn activer_totp(pool: &PgPool, compte_id: Uuid) -> String {
-        let activation = auth_administrateur::commencer_reenrolement(pool, &cle(), compte_id, ADMIN).await.unwrap();
+        let activation =
+            auth_administrateur::commencer_reenrolement(pool, &cle(), compte_id, ADMIN)
+                .await
+                .unwrap();
         let generateur = totp_rs::Builder::new()
             .with_secret(totp_rs::Secret::try_from_base32(&activation.cle_base32).unwrap())
             .build()
@@ -796,19 +920,37 @@ mod tests {
     /// Premier administrateur prêt, avec TOTP actif, authentifié comme
     /// opérateur.
     async fn operateur(pool: &PgPool, emails: &EmailsEnvoyes) -> Operateur {
-        let compte_id = administrateur_pret(pool, emails, "+22670140001", "operateur@example.org", None).await;
+        let compte_id =
+            administrateur_pret(pool, emails, "+22670140001", "operateur@example.org", None).await;
         let code = activer_totp(pool, compte_id).await;
-        authentifier_operateur(pool, &cle(), "operateur@example.org", ADMIN, &code).await.unwrap()
+        authentifier_operateur(pool, &cle(), "operateur@example.org", ADMIN, &code)
+            .await
+            .unwrap()
     }
 
     #[test]
     fn cnib_facultative_et_au_format() {
         assert_eq!(numero_cnib("").unwrap(), None);
         assert_eq!(numero_cnib("  ").unwrap(), None);
-        assert_eq!(numero_cnib("12345678").unwrap().as_deref(), Some("B12345678"));
-        assert_eq!(numero_cnib(" 12345678 ").unwrap().as_deref(), Some("B12345678"));
-        for faux in ["1234567", "123456789", "1234567a", "B1234567", "１２３４５６７８"] {
-            assert!(matches!(numero_cnib(faux), Err(ErreurOutil::CnibInvalide)), "{faux}");
+        assert_eq!(
+            numero_cnib("12345678").unwrap().as_deref(),
+            Some("B12345678")
+        );
+        assert_eq!(
+            numero_cnib(" 12345678 ").unwrap().as_deref(),
+            Some("B12345678")
+        );
+        for faux in [
+            "1234567",
+            "123456789",
+            "1234567a",
+            "B1234567",
+            "１２３４５６７８",
+        ] {
+            assert!(
+                matches!(numero_cnib(faux), Err(ErreurOutil::CnibInvalide)),
+                "{faux}"
+            );
         }
     }
 
@@ -819,20 +961,28 @@ mod tests {
     async fn premier_administrateur_de_bout_en_bout(pool: PgPool) {
         let emails = EmailsEnvoyes::default();
         patient(&pool, "+22670140002").await;
-        let en_cours =
-            creer_premier_administrateur(&pool, &emails, &saisie("70 14 00 02", "premier@example.org", "12345678"))
-                .await
-                .unwrap();
+        let en_cours = creer_premier_administrateur(
+            &pool,
+            &emails,
+            &saisie("70 14 00 02", "premier@example.org", "12345678"),
+        )
+        .await
+        .unwrap();
         assert!(en_cours.verification_envoyee);
         assert_eq!(emails.0.lock().unwrap()[0].0, "premier@example.org");
 
         // Avant la vérification de l'email, pas de fenêtre possible.
-        assert!(matches!(ouvrir_fenetre(&pool, en_cours.compte_id).await, Err(ErreurOutil::RepriseImpossible)));
+        assert!(matches!(
+            ouvrir_fenetre(&pool, en_cours.compte_id).await,
+            Err(ErreurOutil::RepriseImpossible)
+        ));
         assert!(matches!(
             verifier_email(&pool, en_cours.compte_id, &"0".repeat(64)).await,
             Err(ErreurOutil::JetonInvalide)
         ));
-        verifier_email(&pool, en_cours.compte_id, &emails.dernier_jeton()).await.unwrap();
+        verifier_email(&pool, en_cours.compte_id, &emails.dernier_jeton())
+            .await
+            .unwrap();
         ouvrir_fenetre(&pool, en_cours.compte_id).await.unwrap();
 
         let jwt = JwtService::new(&"a".repeat(32));
@@ -859,7 +1009,12 @@ mod tests {
         administrateur_pret(&pool, &emails, "+22670140003", "seul@example.org", None).await;
         patient(&pool, "+22670140004").await;
         assert!(matches!(
-            creer_premier_administrateur(&pool, &emails, &saisie("+22670140004", "deuxieme@example.org", "")).await,
+            creer_premier_administrateur(
+                &pool,
+                &emails,
+                &saisie("+22670140004", "deuxieme@example.org", "")
+            )
+            .await,
             Err(ErreurOutil::AdministrateurExisteDeja)
         ));
     }
@@ -872,10 +1027,19 @@ mod tests {
         patient(&pool, "+22670140005").await;
         patient(&pool, "+22670140006").await;
         let mut taches = tokio::task::JoinSet::new();
-        for (telephone, email) in [("+22670140005", "simul.a@example.org"), ("+22670140006", "simul.b@example.org")] {
+        for (telephone, email) in [
+            ("+22670140005", "simul.a@example.org"),
+            ("+22670140006", "simul.b@example.org"),
+        ] {
             let pool = pool.clone();
             taches.spawn(async move {
-                creer_premier_administrateur(&pool, &EmailsEnvoyes::default(), &saisie(telephone, email, "")).await.is_ok()
+                creer_premier_administrateur(
+                    &pool,
+                    &EmailsEnvoyes::default(),
+                    &saisie(telephone, email, ""),
+                )
+                .await
+                .is_ok()
             });
         }
         let mut reussites = 0;
@@ -883,11 +1047,12 @@ mod tests {
             reussites += usize::from(resultat.unwrap());
         }
         assert_eq!(reussites, 1);
-        let administrateurs: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM compte WHERE type_compte = 'administrateur_laaficare'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let administrateurs: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM compte WHERE type_compte = 'administrateur_laaficare'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(administrateurs, 1);
     }
 
@@ -897,18 +1062,29 @@ mod tests {
         let emails = EmailsEnvoyes::default();
         // Pas de compte patient.
         assert!(matches!(
-            creer_premier_administrateur(&pool, &emails, &saisie("+22670140007", "a@example.org", "")).await,
+            creer_premier_administrateur(
+                &pool,
+                &emails,
+                &saisie("+22670140007", "a@example.org", "")
+            )
+            .await,
             Err(ErreurOutil::PasDeComptePatient)
         ));
         let compte_patient = patient(&pool, "+22670140007").await;
         // Mot de passe identique à celui du compte patient.
-        let identique = NouvelAdministrateur { mot_de_passe: PATIENT, ..saisie("+22670140007", "a@example.org", "") };
+        let identique = NouvelAdministrateur {
+            mot_de_passe: PATIENT,
+            ..saisie("+22670140007", "a@example.org", "")
+        };
         assert!(matches!(
             creer_premier_administrateur(&pool, &emails, &identique).await,
             Err(ErreurOutil::MotDePasseIdentiquePatient)
         ));
         // Mot de passe non conforme, email vide, CNIB mal formée, téléphone faux.
-        let faible = NouvelAdministrateur { mot_de_passe: "court", ..saisie("+22670140007", "a@example.org", "") };
+        let faible = NouvelAdministrateur {
+            mot_de_passe: "court",
+            ..saisie("+22670140007", "a@example.org", "")
+        };
         assert!(matches!(
             creer_premier_administrateur(&pool, &emails, &faible).await,
             Err(ErreurOutil::MotDePasseNonConforme(_))
@@ -920,12 +1096,18 @@ mod tests {
         // Contrôle commun des adresses : accent, ou nom et adresse.
         for email in ["élodie@example.org", "Awa <a@example.org>"] {
             assert!(matches!(
-                creer_premier_administrateur(&pool, &emails, &saisie("+22670140007", email, "")).await,
+                creer_premier_administrateur(&pool, &emails, &saisie("+22670140007", email, ""))
+                    .await,
                 Err(ErreurOutil::EmailInvalide)
             ));
         }
         assert!(matches!(
-            creer_premier_administrateur(&pool, &emails, &saisie("+22670140007", "a@example.org", "123")).await,
+            creer_premier_administrateur(
+                &pool,
+                &emails,
+                &saisie("+22670140007", "a@example.org", "123")
+            )
+            .await,
             Err(ErreurOutil::CnibInvalide)
         ));
         assert!(matches!(
@@ -938,7 +1120,12 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(
-            creer_premier_administrateur(&pool, &emails, &saisie("+22670140007", "PRIS@example.org", "")).await,
+            creer_premier_administrateur(
+                &pool,
+                &emails,
+                &saisie("+22670140007", "PRIS@example.org", "")
+            )
+            .await,
             Err(ErreurOutil::EmailDejaUtilise)
         ));
         // Identité qui a déjà un autre email.
@@ -948,15 +1135,21 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(
-            creer_premier_administrateur(&pool, &emails, &saisie("+22670140007", "a@example.org", "")).await,
+            creer_premier_administrateur(
+                &pool,
+                &emails,
+                &saisie("+22670140007", "a@example.org", "")
+            )
+            .await,
             Err(ErreurOutil::EmailDifferent)
         ));
         // Rien n'a été créé, aucun email envoyé.
-        let administrateurs: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM compte WHERE type_compte = 'administrateur_laaficare'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let administrateurs: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM compte WHERE type_compte = 'administrateur_laaficare'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!((administrateurs, emails.nombre()), (0, 0));
     }
 
@@ -973,10 +1166,23 @@ mod tests {
         assert_eq!(profils, 0);
 
         patient(&pool, "+22670140009").await;
-        creer_administrateur(&pool, &emails, op, &saisie("+22670140009", "cnib.a@example.org", "11112222")).await.unwrap();
+        creer_administrateur(
+            &pool,
+            &emails,
+            op,
+            &saisie("+22670140009", "cnib.a@example.org", "11112222"),
+        )
+        .await
+        .unwrap();
         patient(&pool, "+22670140010").await;
         assert!(matches!(
-            creer_administrateur(&pool, &emails, op, &saisie("+22670140010", "cnib.b@example.org", "11112222")).await,
+            creer_administrateur(
+                &pool,
+                &emails,
+                op,
+                &saisie("+22670140010", "cnib.b@example.org", "11112222")
+            )
+            .await,
             Err(ErreurOutil::CnibDejaUtilisee)
         ));
     }
@@ -988,16 +1194,30 @@ mod tests {
     async fn administrateur_suivant_trace_avec_son_createur(pool: PgPool) {
         let emails = EmailsEnvoyes::default();
         let op = operateur(&pool, &emails).await;
-        let compte_id = administrateur_pret(&pool, &emails, "+22670140011", "suivant@example.org", Some(op)).await;
-        let cree_par: Option<Uuid> =
-            sqlx::query_scalar("SELECT cree_par_compte_id FROM creation_administrateur WHERE compte_id = $1")
-                .bind(compte_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let compte_id = administrateur_pret(
+            &pool,
+            &emails,
+            "+22670140011",
+            "suivant@example.org",
+            Some(op),
+        )
+        .await;
+        let cree_par: Option<Uuid> = sqlx::query_scalar(
+            "SELECT cree_par_compte_id FROM creation_administrateur WHERE compte_id = $1",
+        )
+        .bind(compte_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(cree_par, Some(op.compte_id()));
         assert!(matches!(
-            creer_administrateur(&pool, &emails, op, &saisie("+22670140011", "suivant@example.org", "")).await,
+            creer_administrateur(
+                &pool,
+                &emails,
+                op,
+                &saisie("+22670140011", "suivant@example.org", "")
+            )
+            .await,
             Err(ErreurOutil::DejaAdministrateur)
         ));
     }
@@ -1008,7 +1228,14 @@ mod tests {
     #[ignore]
     async fn operateur_refuse_sans_bon_code_ou_sans_totp(pool: PgPool) {
         let emails = EmailsEnvoyes::default();
-        let compte_id = administrateur_pret(&pool, &emails, "+22670140012", "sans.totp@example.org", None).await;
+        let compte_id = administrateur_pret(
+            &pool,
+            &emails,
+            "+22670140012",
+            "sans.totp@example.org",
+            None,
+        )
+        .await;
         assert!(matches!(
             authentifier_operateur(&pool, &cle(), "sans.totp@example.org", ADMIN, "123456").await,
             Err(ErreurOutil::AuthentificationRefusee)
@@ -1017,11 +1244,14 @@ mod tests {
         let faux = if code == "000000" { "000001" } else { "000000" };
         for (mot_de_passe, code) in [(ADMIN, faux), ("Mauvais#2026", code.as_str())] {
             assert!(matches!(
-                authentifier_operateur(&pool, &cle(), "sans.totp@example.org", mot_de_passe, code).await,
+                authentifier_operateur(&pool, &cle(), "sans.totp@example.org", mot_de_passe, code)
+                    .await,
                 Err(ErreurOutil::AuthentificationRefusee)
             ));
         }
-        authentifier_operateur(&pool, &cle(), "sans.totp@example.org", ADMIN, &code).await.unwrap();
+        authentifier_operateur(&pool, &cle(), "sans.totp@example.org", ADMIN, &code)
+            .await
+            .unwrap();
     }
 
     /// Reprise du premier par lui-même : seul administrateur, jamais de
@@ -1032,31 +1262,48 @@ mod tests {
     async fn reprise_du_premier_administrateur(pool: PgPool) {
         let emails = EmailsEnvoyes::default();
         patient(&pool, "+22670140013").await;
-        let en_cours =
-            creer_premier_administrateur(&pool, &emails, &saisie("+22670140013", "reprise@example.org", "")).await.unwrap();
+        let en_cours = creer_premier_administrateur(
+            &pool,
+            &emails,
+            &saisie("+22670140013", "reprise@example.org", ""),
+        )
+        .await
+        .unwrap();
         let ancien = emails.dernier_jeton();
 
         assert!(matches!(
-            reprendre_premier_administrateur(&pool, &emails, "reprise@example.org", "Mauvais#2026").await,
+            reprendre_premier_administrateur(&pool, &emails, "reprise@example.org", "Mauvais#2026")
+                .await,
             Err(ErreurOutil::AuthentificationRefusee)
         ));
-        let reprise = reprendre_premier_administrateur(&pool, &emails, "reprise@example.org", ADMIN).await.unwrap();
+        let reprise =
+            reprendre_premier_administrateur(&pool, &emails, "reprise@example.org", ADMIN)
+                .await
+                .unwrap();
         assert_eq!(reprise.compte_id, en_cours.compte_id);
         assert!(reprise.verification_envoyee);
-        assert!(matches!(verifier_email(&pool, reprise.compte_id, &ancien).await, Err(ErreurOutil::JetonInvalide)));
-        verifier_email(&pool, reprise.compte_id, &emails.dernier_jeton()).await.unwrap();
+        assert!(matches!(
+            verifier_email(&pool, reprise.compte_id, &ancien).await,
+            Err(ErreurOutil::JetonInvalide)
+        ));
+        verifier_email(&pool, reprise.compte_id, &emails.dernier_jeton())
+            .await
+            .unwrap();
 
         // Email vérifié : une nouvelle reprise n'envoie plus de jeton.
-        let encore = reprendre_premier_administrateur(&pool, &emails, "reprise@example.org", ADMIN).await.unwrap();
+        let encore = reprendre_premier_administrateur(&pool, &emails, "reprise@example.org", ADMIN)
+            .await
+            .unwrap();
         assert!(!encore.verification_envoyee);
         ouvrir_fenetre(&pool, encore.compte_id).await.unwrap();
 
-        let traces: Vec<Option<Uuid>> =
-            sqlx::query_scalar("SELECT repris_par_compte_id FROM reprise_administrateur WHERE compte_id = $1")
-                .bind(en_cours.compte_id)
-                .fetch_all(&pool)
-                .await
-                .unwrap();
+        let traces: Vec<Option<Uuid>> = sqlx::query_scalar(
+            "SELECT repris_par_compte_id FROM reprise_administrateur WHERE compte_id = $1",
+        )
+        .bind(en_cours.compte_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
         assert_eq!(traces, [None, None]);
 
         activer_totp(&pool, en_cours.compte_id).await;
@@ -1075,22 +1322,39 @@ mod tests {
         let emails = EmailsEnvoyes::default();
         let createur = operateur(&pool, &emails).await;
         // Second administrateur, avec TOTP : il reprendra le troisième.
-        let second = administrateur_pret(&pool, &emails, "+22670140014", "second@example.org", Some(createur)).await;
+        let second = administrateur_pret(
+            &pool,
+            &emails,
+            "+22670140014",
+            "second@example.org",
+            Some(createur),
+        )
+        .await;
         let code = activer_totp(&pool, second).await;
-        let repreneur = authentifier_operateur(&pool, &cle(), "second@example.org", ADMIN, &code).await.unwrap();
-
-        patient(&pool, "+22670140015").await;
-        let troisieme = creer_administrateur(&pool, &emails, createur, &saisie("+22670140015", "troisieme@example.org", ""))
+        let repreneur = authentifier_operateur(&pool, &cle(), "second@example.org", ADMIN, &code)
             .await
             .unwrap();
-        let reprise = reprendre_administrateur(&pool, &emails, repreneur, "troisieme@example.org").await.unwrap();
+
+        patient(&pool, "+22670140015").await;
+        let troisieme = creer_administrateur(
+            &pool,
+            &emails,
+            createur,
+            &saisie("+22670140015", "troisieme@example.org", ""),
+        )
+        .await
+        .unwrap();
+        let reprise = reprendre_administrateur(&pool, &emails, repreneur, "troisieme@example.org")
+            .await
+            .unwrap();
         assert!(reprise.verification_envoyee);
-        let repris_par: Option<Uuid> =
-            sqlx::query_scalar("SELECT repris_par_compte_id FROM reprise_administrateur WHERE compte_id = $1")
-                .bind(troisieme.compte_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let repris_par: Option<Uuid> = sqlx::query_scalar(
+            "SELECT repris_par_compte_id FROM reprise_administrateur WHERE compte_id = $1",
+        )
+        .bind(troisieme.compte_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(repris_par, Some(repreneur.compte_id()));
 
         // Un administrateur qui a un TOTP actif ne se reprend pas.
@@ -1101,7 +1365,11 @@ mod tests {
     }
 
     async fn compter(pool: &PgPool, requete: &'static str, compte_id: Uuid) -> i64 {
-        sqlx::query_scalar(requete).bind(compte_id).fetch_one(pool).await.unwrap()
+        sqlx::query_scalar(requete)
+            .bind(compte_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
     }
 
     /// Désactivation d'un administrateur : TOTP et codes de secours
@@ -1112,16 +1380,33 @@ mod tests {
     async fn desactivation_d_un_administrateur(pool: PgPool) {
         let emails = EmailsEnvoyes::default();
         let op = operateur(&pool, &emails).await;
-        let cible_id = administrateur_pret(&pool, &emails, "+22670140016", "cible@example.org", Some(op)).await;
+        let cible_id = administrateur_pret(
+            &pool,
+            &emails,
+            "+22670140016",
+            "cible@example.org",
+            Some(op),
+        )
+        .await;
         activer_totp(&pool, cible_id).await;
         session::ouvrir(&pool, cible_id, None).await.unwrap();
         assert_eq!(compter(&pool, "SELECT count(*) FROM code_secours cs JOIN second_facteur_totp t ON t.id = cs.second_facteur_id WHERE t.compte_id = $1", cible_id).await, 10);
-        let version_avant = compter(&pool, "SELECT version_jeton::bigint FROM compte WHERE id = $1", cible_id).await;
+        let version_avant = compter(
+            &pool,
+            "SELECT version_jeton::bigint FROM compte WHERE id = $1",
+            cible_id,
+        )
+        .await;
         let emails_avant = emails.nombre();
 
-        let cible = trouver_compte(&pool, TypeCompte::Administrateur, " CIBLE@example.org ").await.unwrap();
+        let cible = trouver_compte(&pool, TypeCompte::Administrateur, " CIBLE@example.org ")
+            .await
+            .unwrap();
         assert_eq!(cible.compte_id, cible_id);
-        let resultat = desactiver_totp(&pool, &emails, CONTACT, op, &cible, "Téléphone perdu", true).await.unwrap();
+        let resultat =
+            desactiver_totp(&pool, &emails, CONTACT, op, &cible, "Téléphone perdu", true)
+                .await
+                .unwrap();
         assert!(resultat.fenetre_ouverte && resultat.personne_prevenue);
         assert_eq!(emails.nombre(), emails_avant + 1);
         // D4 : alerte commune, datée de la trace, avec le contact ; ni motif
@@ -1136,19 +1421,52 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert!(corps.contains(&format!("le {quand} (heure du Burkina Faso)")), "{corps}");
+        assert!(
+            corps.contains(&format!("le {quand} (heure du Burkina Faso)")),
+            "{corps}"
+        );
         assert!(corps.contains(CONTACT), "{corps}");
-        assert!(!corps.contains("Téléphone perdu") && !corps.contains("operateur@example.org"), "{corps}");
+        assert!(
+            !corps.contains("Téléphone perdu") && !corps.contains("operateur@example.org"),
+            "{corps}"
+        );
 
-        assert_eq!(compter(&pool, "SELECT count(*) FROM second_facteur_totp WHERE compte_id = $1", cible_id).await, 0);
-        let codes_restants: i64 = sqlx::query_scalar("SELECT count(*) FROM code_secours").fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            compter(
+                &pool,
+                "SELECT count(*) FROM second_facteur_totp WHERE compte_id = $1",
+                cible_id
+            )
+            .await,
+            0
+        );
+        let codes_restants: i64 = sqlx::query_scalar("SELECT count(*) FROM code_secours")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(codes_restants, 10, "seuls ceux de l'opérateur restent");
         assert_eq!(
             compter(&pool, "SELECT count(*) FROM session WHERE compte_id = $1 AND motif_revocation = 'desactivation_totp'", cible_id).await,
             1
         );
-        assert_eq!(compter(&pool, "SELECT version_jeton::bigint FROM compte WHERE id = $1", cible_id).await, version_avant + 1);
-        assert_eq!(compter(&pool, "SELECT count(*) FROM desactivation_totp WHERE compte_id = $1", cible_id).await, 1);
+        assert_eq!(
+            compter(
+                &pool,
+                "SELECT version_jeton::bigint FROM compte WHERE id = $1",
+                cible_id
+            )
+            .await,
+            version_avant + 1
+        );
+        assert_eq!(
+            compter(
+                &pool,
+                "SELECT count(*) FROM desactivation_totp WHERE compte_id = $1",
+                cible_id
+            )
+            .await,
+            1
+        );
         assert_eq!(
             compter(&pool, "SELECT count(*) FROM compte WHERE id = $1 AND reenrolement_autorise_jusqu_au > now()", cible_id).await,
             1
@@ -1168,28 +1486,55 @@ mod tests {
         let emails = EmailsEnvoyes::default();
         let op = operateur(&pool, &emails).await;
         let patient_id = patient(&pool, "+22670140017").await;
-        let activation = totp::commencer_activation(&pool, cle().octets(), patient_id, PATIENT).await.unwrap();
+        let activation = totp::commencer_activation(&pool, cle().octets(), patient_id, PATIENT)
+            .await
+            .unwrap();
         let generateur = totp_rs::Builder::new()
             .with_secret(totp_rs::Secret::try_from_base32(&activation.cle_base32).unwrap())
             .build()
             .unwrap();
-        totp::confirmer_activation(&pool, cle().octets(), patient_id, &generateur.generate(maintenant()).to_string(), totp::Autorisation::Libre)
+        totp::confirmer_activation(
+            &pool,
+            cle().octets(),
+            patient_id,
+            &generateur.generate(maintenant()).to_string(),
+            totp::Autorisation::Libre,
+        )
+        .await
+        .unwrap();
+
+        let cible = trouver_compte(&pool, TypeCompte::Patient, "70 14 00 17")
             .await
             .unwrap();
-
-        let cible = trouver_compte(&pool, TypeCompte::Patient, "70 14 00 17").await.unwrap();
-        assert!(matches!(desactiver_totp(&pool, &emails, CONTACT, op, &cible, "  ", true).await, Err(ErreurOutil::MotifVide)));
         assert!(matches!(
-            desactiver_totp(&pool, &emails, CONTACT, op, &cible, "Téléphone perdu", false).await,
+            desactiver_totp(&pool, &emails, CONTACT, op, &cible, "  ", true).await,
+            Err(ErreurOutil::MotifVide)
+        ));
+        assert!(matches!(
+            desactiver_totp(
+                &pool,
+                &emails,
+                CONTACT,
+                op,
+                &cible,
+                "Téléphone perdu",
+                false
+            )
+            .await,
             Err(ErreurOutil::CnibNonVerifiee)
         ));
-        let resultat = desactiver_totp(&pool, &emails, CONTACT, op, &cible, "Téléphone perdu", true).await.unwrap();
+        let resultat =
+            desactiver_totp(&pool, &emails, CONTACT, op, &cible, "Téléphone perdu", true)
+                .await
+                .unwrap();
         assert!(!resultat.fenetre_ouverte);
         assert!(!resultat.personne_prevenue, "patient sans email");
 
         // L'opérateur ne désactive pas le TOTP de son propre compte
         // administrateur ; rien n'est modifié.
-        let soi = trouver_compte(&pool, TypeCompte::Administrateur, "operateur@example.org").await.unwrap();
+        let soi = trouver_compte(&pool, TypeCompte::Administrateur, "operateur@example.org")
+            .await
+            .unwrap();
         assert!(matches!(
             desactiver_totp(&pool, &emails, CONTACT, op, &soi, "Essai", true).await,
             Err(ErreurOutil::PropreCompte)

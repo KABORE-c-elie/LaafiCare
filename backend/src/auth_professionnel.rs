@@ -60,7 +60,9 @@ pub enum ConnexionProfessionnelle {
     Complete(PaireJetons),
     /// TOTP actif : jeton intermédiaire, à échanger contre la paire avec le
     /// code (étape 3.6.3). Aucune session n'est encore ouverte.
-    SecondFacteur { jeton_intermediaire: JetonIntermediaire },
+    SecondFacteur {
+        jeton_intermediaire: JetonIntermediaire,
+    },
 }
 
 // Écrit à la main : `PaireJetons` n'a volontairement pas de `Debug`, et
@@ -69,7 +71,9 @@ impl fmt::Debug for ConnexionProfessionnelle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ConnexionProfessionnelle::Complete(_) => f.write_str("Complete(***)"),
-            ConnexionProfessionnelle::SecondFacteur { jeton_intermediaire } => f
+            ConnexionProfessionnelle::SecondFacteur {
+                jeton_intermediaire,
+            } => f
                 .debug_struct("SecondFacteur")
                 .field("jeton_intermediaire", jeton_intermediaire)
                 .finish(),
@@ -89,7 +93,9 @@ pub enum ErreurAuthProfessionnel {
 
     /// Mot de passe correct, email jamais vérifié (R0, P3) : seul le
     /// détenteur du mot de passe l'apprend.
-    #[error("Votre email n'est pas encore vérifié. Ouvrez le lien que nous vous avons envoyé, ou demandez-en un nouveau.")]
+    #[error(
+        "Votre email n'est pas encore vérifié. Ouvrez le lien que nous vous avons envoyé, ou demandez-en un nouveau."
+    )]
     EmailNonVerifie,
 
     /// Seulement la nature de l'échec, un texte fixe : jamais l'email ni le
@@ -103,7 +109,10 @@ pub enum ErreurAuthProfessionnel {
 /// peut reprendre une valeur. Seule cette nature va aux journaux.
 pub(crate) fn nature_sqlx(erreur: &sqlx::Error) -> String {
     match erreur {
-        sqlx::Error::Database(e) => format!("base de données, code {}", e.code().as_deref().unwrap_or("inconnu")),
+        sqlx::Error::Database(e) => format!(
+            "base de données, code {}",
+            e.code().as_deref().unwrap_or("inconnu")
+        ),
         sqlx::Error::PoolTimedOut => "délai d'attente de la base dépassé".to_string(),
         sqlx::Error::PoolClosed => "connexions à la base fermées".to_string(),
         sqlx::Error::Io(_) => "entrée-sortie avec la base".to_string(),
@@ -133,9 +142,17 @@ pub async fn se_connecter(
     let compte = verifier_identifiants(pool, "professionnel", email, mot_de_passe).await?;
     if compte.second_facteur {
         let jeton = jwt
-            .emettre(SorteJeton::SecondFacteurProfessionnel, compte.compte_id, compte.version_jeton, None, None)
+            .emettre(
+                SorteJeton::SecondFacteurProfessionnel,
+                compte.compte_id,
+                compte.version_jeton,
+                None,
+                None,
+            )
             .map_err(|_| interne("émission du jeton intermédiaire"))?;
-        return Ok(ConnexionProfessionnelle::SecondFacteur { jeton_intermediaire: JetonIntermediaire(jeton) });
+        return Ok(ConnexionProfessionnelle::SecondFacteur {
+            jeton_intermediaire: JetonIntermediaire(jeton),
+        });
     }
     let paire = session::ouvrir(pool, compte.compte_id, None)
         .await
@@ -195,7 +212,9 @@ pub(crate) async fn verifier_identifiants(
     let verification = verrouillage::verifier(pool, compte.map(|(id, _, _, _)| id), mot_de_passe)
         .await
         .map_err(|erreur| match erreur {
-            ErreurConnexion::IdentifiantsInvalides => ErreurAuthProfessionnel::IdentifiantsInvalides,
+            ErreurConnexion::IdentifiantsInvalides => {
+                ErreurAuthProfessionnel::IdentifiantsInvalides
+            }
             ErreurConnexion::Interne(_) => interne("vérification du mot de passe"),
         })?;
 
@@ -275,15 +294,22 @@ pub async fn terminer_connexion(
     saisie: &SaisieSecondFacteur,
 ) -> Result<PaireJetons, ErreurSecondFacteur> {
     let verification = match saisie {
-        SaisieSecondFacteur::Code(code) => totp::verifier_code(pool, cle.octets(), compte_id, code).await,
-        SaisieSecondFacteur::CodeSecours(code) => totp::verifier_code_secours(pool, compte_id, code).await,
+        SaisieSecondFacteur::Code(code) => {
+            totp::verifier_code(pool, cle.octets(), compte_id, code).await
+        }
+        SaisieSecondFacteur::CodeSecours(code) => {
+            totp::verifier_code_secours(pool, compte_id, code).await
+        }
     };
     verification.map_err(|erreur| match erreur {
         ErreurTotp::Refuse => ErreurSecondFacteur::CodeInvalide,
         // Le détail de `totp.rs` n'est pas journalisé : il ne garantit pas
         // l'absence de la saisie.
         ErreurTotp::Interne(_) => {
-            tracing::error!(etape = "vérification du code", "second facteur : erreur interne");
+            tracing::error!(
+                etape = "vérification du code",
+                "second facteur : erreur interne"
+            );
             ErreurSecondFacteur::Interne("vérification du code")
         }
     })?;
@@ -315,7 +341,10 @@ pub async fn terminer_connexion(
         .await
         .and_then(|active| active.en_paire(jwt))
         .map_err(|_| {
-            tracing::error!(etape = "ouverture de session", "second facteur : erreur interne");
+            tracing::error!(
+                etape = "ouverture de session",
+                "second facteur : erreur interne"
+            );
             ErreurSecondFacteur::Interne("ouverture de session")
         })
 }
@@ -335,12 +364,14 @@ mod tests {
     }
 
     async fn identite(pool: &PgPool, telephone: &str, email: &str, verifie: bool) -> Uuid {
-        let id: Uuid = sqlx::query_scalar("INSERT INTO utilisateur (telephone, email) VALUES ($1, $2) RETURNING id")
-            .bind(telephone)
-            .bind(email)
-            .fetch_one(pool)
-            .await
-            .unwrap();
+        let id: Uuid = sqlx::query_scalar(
+            "INSERT INTO utilisateur (telephone, email) VALUES ($1, $2) RETURNING id",
+        )
+        .bind(telephone)
+        .bind(email)
+        .fetch_one(pool)
+        .await
+        .unwrap();
         if verifie {
             sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1")
                 .bind(id)
@@ -389,7 +420,10 @@ mod tests {
     }
 
     fn refuse(resultat: Result<ConnexionProfessionnelle, ErreurAuthProfessionnel>) -> bool {
-        matches!(resultat, Err(ErreurAuthProfessionnel::IdentifiantsInvalides))
+        matches!(
+            resultat,
+            Err(ErreurAuthProfessionnel::IdentifiantsInvalides)
+        )
     }
 
     #[sqlx::test]
@@ -398,18 +432,43 @@ mod tests {
         let jwt = jwt();
         let compte_id = professionnel(&pool, "+22670050001", "pro.refus@example.org", true).await;
 
-        assert!(refuse(se_connecter(&pool, &jwt, "inconnu@example.org", BON).await), "email inconnu");
-        assert!(refuse(se_connecter(&pool, &jwt, "pro.refus@example.org", MAUVAIS).await), "mauvais mot de passe");
+        assert!(
+            refuse(se_connecter(&pool, &jwt, "inconnu@example.org", BON).await),
+            "email inconnu"
+        );
+        assert!(
+            refuse(se_connecter(&pool, &jwt, "pro.refus@example.org", MAUVAIS).await),
+            "mauvais mot de passe"
+        );
 
-        sqlx::query("UPDATE compte SET statut = 'desactive' WHERE id = $1").bind(compte_id).execute(&pool).await.unwrap();
-        assert!(refuse(se_connecter(&pool, &jwt, "pro.refus@example.org", BON).await), "compte désactivé");
-        sqlx::query("UPDATE compte SET statut = 'actif' WHERE id = $1").bind(compte_id).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE compte SET statut = 'desactive' WHERE id = $1")
+            .bind(compte_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            refuse(se_connecter(&pool, &jwt, "pro.refus@example.org", BON).await),
+            "compte désactivé"
+        );
+        sqlx::query("UPDATE compte SET statut = 'actif' WHERE id = $1")
+            .bind(compte_id)
+            .execute(&pool)
+            .await
+            .unwrap();
 
         for _ in 0..5 {
-            assert!(refuse(se_connecter(&pool, &jwt, "pro.refus@example.org", MAUVAIS).await));
+            assert!(refuse(
+                se_connecter(&pool, &jwt, "pro.refus@example.org", MAUVAIS).await
+            ));
         }
-        assert!(refuse(se_connecter(&pool, &jwt, "pro.refus@example.org", BON).await), "compte verrouillé");
-        assert_eq!(ErreurAuthProfessionnel::IdentifiantsInvalides.to_string(), "Email ou mot de passe incorrect.");
+        assert!(
+            refuse(se_connecter(&pool, &jwt, "pro.refus@example.org", BON).await),
+            "compte verrouillé"
+        );
+        assert_eq!(
+            ErreurAuthProfessionnel::IdentifiantsInvalides.to_string(),
+            "Email ou mot de passe incorrect."
+        );
     }
 
     #[sqlx::test]
@@ -417,7 +476,9 @@ mod tests {
     async fn compte_patient_seul_refuse(pool: PgPool) {
         let id = identite(&pool, "+22670050002", "patient.seul@example.org", true).await;
         compte(&pool, id, "patient").await;
-        assert!(refuse(se_connecter(&pool, &jwt(), "patient.seul@example.org", BON).await));
+        assert!(refuse(
+            se_connecter(&pool, &jwt(), "patient.seul@example.org", BON).await
+        ));
     }
 
     #[sqlx::test]
@@ -426,11 +487,15 @@ mod tests {
         let jwt = jwt();
         let compte_id = professionnel(&pool, "+22670050003", "pro.complet@example.org", true).await;
 
-        let connexion = se_connecter(&pool, &jwt, "  Pro.Complet@Example.ORG ", BON).await.unwrap();
+        let connexion = se_connecter(&pool, &jwt, "  Pro.Complet@Example.ORG ", BON)
+            .await
+            .unwrap();
         let ConnexionProfessionnelle::Complete(paire) = connexion else {
             panic!("connexion complète attendue");
         };
-        let claims = jwt.verifier(&paire.jeton_acces, SorteJeton::ProfessionnelSansAffectation).unwrap();
+        let claims = jwt
+            .verifier(&paire.jeton_acces, SorteJeton::ProfessionnelSansAffectation)
+            .unwrap();
         assert_eq!((claims.sub, claims.aff), (compte_id, None));
         assert_eq!(paire.jeton_renouvellement.en_clair().len(), 64);
 
@@ -450,9 +515,12 @@ mod tests {
     #[ignore]
     async fn email_non_verifie_sans_totp_remet_le_compteur_a_zero(pool: PgPool) {
         let jwt = jwt();
-        let compte_id = professionnel(&pool, "+22670050004", "pro.nonverifie@example.org", false).await;
+        let compte_id =
+            professionnel(&pool, "+22670050004", "pro.nonverifie@example.org", false).await;
         for _ in 0..2 {
-            assert!(refuse(se_connecter(&pool, &jwt, "pro.nonverifie@example.org", MAUVAIS).await));
+            assert!(refuse(
+                se_connecter(&pool, &jwt, "pro.nonverifie@example.org", MAUVAIS).await
+            ));
         }
         assert_eq!(tentatives(&pool, compte_id).await, 2);
 
@@ -460,7 +528,11 @@ mod tests {
             se_connecter(&pool, &jwt, "pro.nonverifie@example.org", BON).await,
             Err(ErreurAuthProfessionnel::EmailNonVerifie)
         ));
-        assert_eq!(tentatives(&pool, compte_id).await, 0, "mot de passe correct, pas de TOTP");
+        assert_eq!(
+            tentatives(&pool, compte_id).await,
+            0,
+            "mot de passe correct, pas de TOTP"
+        );
         let sessions: i64 = sqlx::query_scalar("SELECT count(*) FROM session WHERE compte_id = $1")
             .bind(compte_id)
             .fetch_one(&pool)
@@ -472,13 +544,23 @@ mod tests {
     #[sqlx::test]
     #[ignore]
     async fn email_non_verifie_avec_totp_ne_remet_pas_le_compteur_a_zero(pool: PgPool) {
-        let compte_id = professionnel(&pool, "+22670050005", "pro.totp.nonverifie@example.org", false).await;
+        let compte_id = professionnel(
+            &pool,
+            "+22670050005",
+            "pro.totp.nonverifie@example.org",
+            false,
+        )
+        .await;
         activer_totp(&pool, compte_id).await;
         assert!(matches!(
             se_connecter(&pool, &jwt(), "pro.totp.nonverifie@example.org", BON).await,
             Err(ErreurAuthProfessionnel::EmailNonVerifie)
         ));
-        assert_eq!(tentatives(&pool, compte_id).await, 1, "règle V1 : pas de remise à zéro avec un TOTP actif");
+        assert_eq!(
+            tentatives(&pool, compte_id).await,
+            1,
+            "règle V1 : pas de remise à zéro avec un TOTP actif"
+        );
     }
 
     #[sqlx::test]
@@ -488,17 +570,33 @@ mod tests {
         let compte_id = professionnel(&pool, "+22670050006", "pro.totp@example.org", true).await;
         activer_totp(&pool, compte_id).await;
 
-        let connexion = se_connecter(&pool, &jwt, "pro.totp@example.org", BON).await.unwrap();
+        let connexion = se_connecter(&pool, &jwt, "pro.totp@example.org", BON)
+            .await
+            .unwrap();
         let affichage = format!("{connexion:?}");
-        let ConnexionProfessionnelle::SecondFacteur { jeton_intermediaire } = &connexion else {
+        let ConnexionProfessionnelle::SecondFacteur {
+            jeton_intermediaire,
+        } = &connexion
+        else {
             panic!("second facteur attendu");
         };
-        let claims = jwt.verifier(jeton_intermediaire.en_clair(), SorteJeton::SecondFacteurProfessionnel).unwrap();
-        assert_eq!((claims.sub, claims.sid, claims.aff), (compte_id, None, None));
+        let claims = jwt
+            .verifier(
+                jeton_intermediaire.en_clair(),
+                SorteJeton::SecondFacteurProfessionnel,
+            )
+            .unwrap();
+        assert_eq!(
+            (claims.sub, claims.sid, claims.aff),
+            (compte_id, None, None)
+        );
         assert_eq!(claims.exp - claims.iat, 5 * 60);
 
         // Le jeton n'apparaît jamais dans `Debug`.
-        assert!(!affichage.contains(jeton_intermediaire.en_clair()), "{affichage}");
+        assert!(
+            !affichage.contains(jeton_intermediaire.en_clair()),
+            "{affichage}"
+        );
         assert!(affichage.contains("***"), "{affichage}");
         assert_eq!(format!("{jeton_intermediaire:?}"), "***");
 
@@ -519,10 +617,18 @@ mod tests {
         let mot_de_passe = "MotDePasse#Secret1";
         pool.close().await;
 
-        let erreur = se_connecter(&pool, &jwt(), email, mot_de_passe).await.unwrap_err();
-        assert!(matches!(erreur, ErreurAuthProfessionnel::Interne(_)), "{erreur:?}");
+        let erreur = se_connecter(&pool, &jwt(), email, mot_de_passe)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(erreur, ErreurAuthProfessionnel::Interne(_)),
+            "{erreur:?}"
+        );
         for texte in [erreur.to_string(), format!("{erreur:?}")] {
-            assert!(!texte.contains(email) && !texte.contains("secret.saisi"), "{texte}");
+            assert!(
+                !texte.contains(email) && !texte.contains("secret.saisi"),
+                "{texte}"
+            );
             assert!(!texte.contains(mot_de_passe), "{texte}");
         }
     }
@@ -541,9 +647,15 @@ mod tests {
     /// confirmée avec le code de l'instant présent. Renvoie le compte, un
     /// code valable pour le pas suivant (accepté grâce à la tolérance d'un
     /// pas, Z3, et jamais utilisé), et les codes de secours.
-    async fn professionnel_avec_totp(pool: &PgPool, telephone: &str, email: &str) -> (Uuid, String, Vec<String>) {
+    async fn professionnel_avec_totp(
+        pool: &PgPool,
+        telephone: &str,
+        email: &str,
+    ) -> (Uuid, String, Vec<String>) {
         let compte_id = professionnel(pool, telephone, email, true).await;
-        let activation = totp::commencer_activation(pool, cle().octets(), compte_id, BON).await.unwrap();
+        let activation = totp::commencer_activation(pool, cle().octets(), compte_id, BON)
+            .await
+            .unwrap();
         let generateur = totp_rs::Builder::new()
             .with_secret(totp_rs::Secret::try_from_base32(&activation.cle_base32).unwrap())
             .build()
@@ -563,12 +675,18 @@ mod tests {
 
     /// Jeton intermédiaire réel, obtenu par la connexion : renvoie son `iat`.
     async fn iat_du_jeton_intermediaire(pool: &PgPool, jwt: &JwtService, email: &str) -> u64 {
-        let ConnexionProfessionnelle::SecondFacteur { jeton_intermediaire } =
-            se_connecter(pool, jwt, email, BON).await.unwrap()
+        let ConnexionProfessionnelle::SecondFacteur {
+            jeton_intermediaire,
+        } = se_connecter(pool, jwt, email, BON).await.unwrap()
         else {
             panic!("second facteur attendu");
         };
-        jwt.verifier(jeton_intermediaire.en_clair(), SorteJeton::SecondFacteurProfessionnel).unwrap().iat
+        jwt.verifier(
+            jeton_intermediaire.en_clair(),
+            SorteJeton::SecondFacteurProfessionnel,
+        )
+        .unwrap()
+        .iat
     }
 
     async fn dernier_iat(pool: &PgPool, compte_id: Uuid) -> Option<i64> {
@@ -580,23 +698,45 @@ mod tests {
     }
 
     fn code_faux(code: &str) -> String {
-        if code == "000000" { "000001".into() } else { "000000".into() }
+        if code == "000000" {
+            "000001".into()
+        } else {
+            "000000".into()
+        }
     }
 
     #[sqlx::test]
     #[ignore]
     async fn bon_code_totp_ouvre_la_session(pool: PgPool) {
         let jwt = jwt();
-        let (compte_id, code, _) = professionnel_avec_totp(&pool, "+22670090001", "sf.totp@example.org").await;
+        let (compte_id, code, _) =
+            professionnel_avec_totp(&pool, "+22670090001", "sf.totp@example.org").await;
         let iat = iat_du_jeton_intermediaire(&pool, &jwt, "sf.totp@example.org").await;
 
-        let paire = terminer_connexion(&pool, &jwt, &cle(), compte_id, iat, &SaisieSecondFacteur::Code(code))
-            .await
+        let paire = terminer_connexion(
+            &pool,
+            &jwt,
+            &cle(),
+            compte_id,
+            iat,
+            &SaisieSecondFacteur::Code(code),
+        )
+        .await
+        .unwrap();
+        let claims = jwt
+            .verifier(&paire.jeton_acces, SorteJeton::ProfessionnelSansAffectation)
             .unwrap();
-        let claims = jwt.verifier(&paire.jeton_acces, SorteJeton::ProfessionnelSansAffectation).unwrap();
         assert_eq!(claims.sub, compte_id);
-        assert_eq!(tentatives(&pool, compte_id).await, 0, "compteur remis à zéro après le succès");
-        assert_eq!(dernier_iat(&pool, compte_id).await, Some(iat as i64), "jeton consommé");
+        assert_eq!(
+            tentatives(&pool, compte_id).await,
+            0,
+            "compteur remis à zéro après le succès"
+        );
+        assert_eq!(
+            dernier_iat(&pool, compte_id).await,
+            Some(iat as i64),
+            "jeton consommé"
+        );
     }
 
     /// Usage unique (F5 b) : après un succès, le même jeton (même `iat`)
@@ -607,18 +747,43 @@ mod tests {
     #[ignore]
     async fn jeton_a_usage_unique_et_jeton_plus_recent_accepte(pool: PgPool) {
         let jwt = jwt();
-        let (compte_id, code, secours) = professionnel_avec_totp(&pool, "+22670090002", "sf.unique@example.org").await;
+        let (compte_id, code, secours) =
+            professionnel_avec_totp(&pool, "+22670090002", "sf.unique@example.org").await;
         let iat = iat_du_jeton_intermediaire(&pool, &jwt, "sf.unique@example.org").await;
 
-        terminer_connexion(&pool, &jwt, &cle(), compte_id, iat, &SaisieSecondFacteur::Code(code)).await.unwrap();
+        terminer_connexion(
+            &pool,
+            &jwt,
+            &cle(),
+            compte_id,
+            iat,
+            &SaisieSecondFacteur::Code(code),
+        )
+        .await
+        .unwrap();
         assert!(matches!(
-            terminer_connexion(&pool, &jwt, &cle(), compte_id, iat, &SaisieSecondFacteur::CodeSecours(secours[0].clone())).await,
+            terminer_connexion(
+                &pool,
+                &jwt,
+                &cle(),
+                compte_id,
+                iat,
+                &SaisieSecondFacteur::CodeSecours(secours[0].clone())
+            )
+            .await,
             Err(ErreurSecondFacteur::JetonDejaUtilise)
         ));
 
-        terminer_connexion(&pool, &jwt, &cle(), compte_id, iat + 1, &SaisieSecondFacteur::CodeSecours(secours[1].clone()))
-            .await
-            .unwrap();
+        terminer_connexion(
+            &pool,
+            &jwt,
+            &cle(),
+            compte_id,
+            iat + 1,
+            &SaisieSecondFacteur::CodeSecours(secours[1].clone()),
+        )
+        .await
+        .unwrap();
         assert_eq!(dernier_iat(&pool, compte_id).await, Some(iat as i64 + 1));
     }
 
@@ -626,11 +791,14 @@ mod tests {
     #[ignore]
     async fn code_de_secours_ouvre_la_session_une_seule_fois(pool: PgPool) {
         let jwt = jwt();
-        let (compte_id, _, secours) = professionnel_avec_totp(&pool, "+22670090003", "sf.secours@example.org").await;
+        let (compte_id, _, secours) =
+            professionnel_avec_totp(&pool, "+22670090003", "sf.secours@example.org").await;
         let iat = iat_du_jeton_intermediaire(&pool, &jwt, "sf.secours@example.org").await;
         let saisie = SaisieSecondFacteur::CodeSecours(secours[0].clone());
 
-        terminer_connexion(&pool, &jwt, &cle(), compte_id, iat, &saisie).await.unwrap();
+        terminer_connexion(&pool, &jwt, &cle(), compte_id, iat, &saisie)
+            .await
+            .unwrap();
         // Le même code de secours, avec un jeton plus récent : refusé.
         assert!(matches!(
             terminer_connexion(&pool, &jwt, &cle(), compte_id, iat + 1, &saisie).await,
@@ -644,23 +812,56 @@ mod tests {
     #[ignore]
     async fn code_faux_compte_l_essai_sans_consommer_le_jeton(pool: PgPool) {
         let jwt = jwt();
-        let (compte_id, code, _) = professionnel_avec_totp(&pool, "+22670090004", "sf.faux@example.org").await;
+        let (compte_id, code, _) =
+            professionnel_avec_totp(&pool, "+22670090004", "sf.faux@example.org").await;
         let iat = iat_du_jeton_intermediaire(&pool, &jwt, "sf.faux@example.org").await;
         let avant = tentatives(&pool, compte_id).await;
 
         assert!(matches!(
-            terminer_connexion(&pool, &jwt, &cle(), compte_id, iat, &SaisieSecondFacteur::Code(code_faux(&code))).await,
+            terminer_connexion(
+                &pool,
+                &jwt,
+                &cle(),
+                compte_id,
+                iat,
+                &SaisieSecondFacteur::Code(code_faux(&code))
+            )
+            .await,
             Err(ErreurSecondFacteur::CodeInvalide)
         ));
         assert!(matches!(
-            terminer_connexion(&pool, &jwt, &cle(), compte_id, iat, &SaisieSecondFacteur::CodeSecours("AAAAA-AAAAA".into()))
-                .await,
+            terminer_connexion(
+                &pool,
+                &jwt,
+                &cle(),
+                compte_id,
+                iat,
+                &SaisieSecondFacteur::CodeSecours("AAAAA-AAAAA".into())
+            )
+            .await,
             Err(ErreurSecondFacteur::CodeInvalide)
         ));
-        assert_eq!(tentatives(&pool, compte_id).await, avant + 2, "chaque essai compte");
-        assert_eq!(dernier_iat(&pool, compte_id).await, None, "jeton pas consommé");
+        assert_eq!(
+            tentatives(&pool, compte_id).await,
+            avant + 2,
+            "chaque essai compte"
+        );
+        assert_eq!(
+            dernier_iat(&pool, compte_id).await,
+            None,
+            "jeton pas consommé"
+        );
 
-        terminer_connexion(&pool, &jwt, &cle(), compte_id, iat, &SaisieSecondFacteur::Code(code)).await.unwrap();
+        terminer_connexion(
+            &pool,
+            &jwt,
+            &cle(),
+            compte_id,
+            iat,
+            &SaisieSecondFacteur::Code(code),
+        )
+        .await
+        .unwrap();
     }
 
     /// Mots de passe et codes faux mêlés comptent dans le même verrouillage
@@ -672,30 +873,65 @@ mod tests {
     #[ignore]
     async fn mots_de_passe_et_codes_faux_meles_verrouillent(pool: PgPool) {
         let jwt = jwt();
-        let (compte_id, code, secours) = professionnel_avec_totp(&pool, "+22670090005", "sf.meles@example.org").await;
+        let (compte_id, code, secours) =
+            professionnel_avec_totp(&pool, "+22670090005", "sf.meles@example.org").await;
         for _ in 0..2 {
-            assert!(refuse(se_connecter(&pool, &jwt, "sf.meles@example.org", MAUVAIS).await));
+            assert!(refuse(
+                se_connecter(&pool, &jwt, "sf.meles@example.org", MAUVAIS).await
+            ));
         }
         let iat = iat_du_jeton_intermediaire(&pool, &jwt, "sf.meles@example.org").await;
         assert!(matches!(
-            terminer_connexion(&pool, &jwt, &cle(), compte_id, iat, &SaisieSecondFacteur::Code(code_faux(&code))).await,
+            terminer_connexion(
+                &pool,
+                &jwt,
+                &cle(),
+                compte_id,
+                iat,
+                &SaisieSecondFacteur::Code(code_faux(&code))
+            )
+            .await,
             Err(ErreurSecondFacteur::CodeInvalide)
         ));
         assert!(matches!(
-            terminer_connexion(&pool, &jwt, &cle(), compte_id, iat, &SaisieSecondFacteur::CodeSecours("AAAAA-AAAAA".into()))
-                .await,
+            terminer_connexion(
+                &pool,
+                &jwt,
+                &cle(),
+                compte_id,
+                iat,
+                &SaisieSecondFacteur::CodeSecours("AAAAA-AAAAA".into())
+            )
+            .await,
             Err(ErreurSecondFacteur::CodeInvalide)
         ));
 
         // Verrouillé : le bon mot de passe et le bon code sont refusés.
-        assert!(refuse(se_connecter(&pool, &jwt, "sf.meles@example.org", BON).await));
+        assert!(refuse(
+            se_connecter(&pool, &jwt, "sf.meles@example.org", BON).await
+        ));
         assert!(matches!(
-            terminer_connexion(&pool, &jwt, &cle(), compte_id, iat, &SaisieSecondFacteur::Code(code)).await,
+            terminer_connexion(
+                &pool,
+                &jwt,
+                &cle(),
+                compte_id,
+                iat,
+                &SaisieSecondFacteur::Code(code)
+            )
+            .await,
             Err(ErreurSecondFacteur::CodeInvalide)
         ));
         assert!(matches!(
-            terminer_connexion(&pool, &jwt, &cle(), compte_id, iat, &SaisieSecondFacteur::CodeSecours(secours[0].clone()))
-                .await,
+            terminer_connexion(
+                &pool,
+                &jwt,
+                &cle(),
+                compte_id,
+                iat,
+                &SaisieSecondFacteur::CodeSecours(secours[0].clone())
+            )
+            .await,
             Err(ErreurSecondFacteur::CodeInvalide)
         ));
         let verrouille: bool =
@@ -713,16 +949,24 @@ mod tests {
     #[ignore]
     async fn deux_requetes_simultanees_une_seule_reussit(pool: PgPool) {
         let jwt = jwt();
-        let (compte_id, _, secours) = professionnel_avec_totp(&pool, "+22670090006", "sf.simultane@example.org").await;
+        let (compte_id, _, secours) =
+            professionnel_avec_totp(&pool, "+22670090006", "sf.simultane@example.org").await;
         let iat = iat_du_jeton_intermediaire(&pool, &jwt, "sf.simultane@example.org").await;
 
         let mut taches = tokio::task::JoinSet::new();
         for code in [secours[0].clone(), secours[1].clone()] {
             let (pool, jwt) = (pool.clone(), jwt.clone());
             taches.spawn(async move {
-                terminer_connexion(&pool, &jwt, &cle(), compte_id, iat, &SaisieSecondFacteur::CodeSecours(code))
-                    .await
-                    .is_ok()
+                terminer_connexion(
+                    &pool,
+                    &jwt,
+                    &cle(),
+                    compte_id,
+                    iat,
+                    &SaisieSecondFacteur::CodeSecours(code),
+                )
+                .await
+                .is_ok()
             });
         }
         let mut reussites = 0;
@@ -748,16 +992,28 @@ mod tests {
         let code = "ABCDE-FGHIJ";
         // `PaireJetons` n'a pas de `Debug` (volontairement) : pas de
         // `unwrap_err`.
-        let Err(erreur) =
-            terminer_connexion(&pool, &jwt(), &cle(), Uuid::from_u128(1), 10, &SaisieSecondFacteur::CodeSecours(code.into()))
-                .await
+        let Err(erreur) = terminer_connexion(
+            &pool,
+            &jwt(),
+            &cle(),
+            Uuid::from_u128(1),
+            10,
+            &SaisieSecondFacteur::CodeSecours(code.into()),
+        )
+        .await
         else {
             panic!("erreur attendue");
         };
-        assert!(matches!(erreur, ErreurSecondFacteur::Interne(_)), "{erreur:?}");
+        assert!(
+            matches!(erreur, ErreurSecondFacteur::Interne(_)),
+            "{erreur:?}"
+        );
         for texte in [erreur.to_string(), format!("{erreur:?}")] {
             assert!(!texte.contains(code) && !texte.contains("ABCDE"), "{texte}");
         }
-        assert_eq!(format!("{:?}", SaisieSecondFacteur::CodeSecours(code.into())), "CodeSecours(***)");
+        assert_eq!(
+            format!("{:?}", SaisieSecondFacteur::CodeSecours(code.into())),
+            "CodeSecours(***)"
+        );
     }
 }

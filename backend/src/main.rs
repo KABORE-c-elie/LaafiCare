@@ -8,8 +8,8 @@ mod routes_membres;
 mod routes_mot_de_passe;
 mod routes_patient;
 mod routes_pharmacie;
-mod routes_remboursement_munaseb;
 mod routes_professionnel;
+mod routes_remboursement_munaseb;
 mod routes_session;
 mod routes_structure;
 
@@ -21,7 +21,9 @@ use axum::http::HeaderName;
 use axum::{Json, Router, extract::State, http::StatusCode, routing::get, routing::post};
 use serde::Serialize;
 use sqlx::PgPool;
-use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, RequestId, SetRequestIdLayer};
+use tower_http::request_id::{
+    MakeRequestUuid, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
+};
 use tower_http::trace::TraceLayer;
 
 use laaficare_backend::config::{self, CleTotp, Config, Programme};
@@ -146,7 +148,10 @@ async fn main() {
     match db::migrations_manquantes(&pool).await {
         Ok(0) => tracing::info!("base à jour"),
         Ok(manquantes) => {
-            tracing::error!(manquantes, "base pas à jour : lancer `cargo run --bin migrer`");
+            tracing::error!(
+                manquantes,
+                "base pas à jour : lancer `cargo run --bin migrer`"
+            );
             std::process::exit(1);
         }
         Err(erreur) => {
@@ -161,9 +166,10 @@ async fn main() {
     // B2 (décision du porteur, 2026-10-18) : en production, refus de
     // démarrer tant qu'un envoi est simulé.
     let email: Arc<dyn EmailSender> = Arc::new(EmailSenderConsole);
-    if let Err(erreur) =
-        config::verifier_envois(config.environnement, &[("SMS", sms.simule()), ("email", email.simule())])
-    {
+    if let Err(erreur) = config::verifier_envois(
+        config.environnement,
+        &[("SMS", sms.simule()), ("email", email.simule())],
+    ) {
         tracing::error!(%erreur, "configuration invalide");
         std::process::exit(1);
     }
@@ -176,7 +182,9 @@ async fn main() {
         email,
         url_application_web: Arc::from(config.url_application_web),
         contact_securite: Arc::from(config.contact_securite),
-        taches_reinitialisation: Arc::new(laaficare_backend::reinitialisation::LimiteTaches::default()),
+        taches_reinitialisation: Arc::new(
+            laaficare_backend::reinitialisation::LimiteTaches::default(),
+        ),
     });
 
     // 127.0.0.1 par défaut (SERVER_HOST, `config.rs`) : cohérent avec
@@ -230,12 +238,18 @@ const TAILLE_MAX_CORPS_OCTETS: usize = 256 * 1024;
 pub(crate) fn routeur(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
-        .route("/api/assurance-munaseb/remboursements", get(routes_remboursement_munaseb::lister))
+        .route(
+            "/api/assurance-munaseb/remboursements",
+            get(routes_remboursement_munaseb::lister),
+        )
         .route(
             "/api/assurance-munaseb/remboursements/simuler-acte",
             post(routes_remboursement_munaseb::simuler_acte),
         )
-        .route("/api/assurance-munaseb/remboursements/{id}", get(routes_remboursement_munaseb::detail))
+        .route(
+            "/api/assurance-munaseb/remboursements/{id}",
+            get(routes_remboursement_munaseb::detail),
+        )
         .route(
             "/api/assurance-munaseb/remboursements/{id}/prendre-en-charge",
             post(routes_remboursement_munaseb::prendre_en_charge),
@@ -254,7 +268,8 @@ pub(crate) fn routeur(state: AppState) -> Router {
         )
         .route(
             "/api/assurance-munaseb/parametres",
-            get(routes_contrat_munaseb::parametres).put(routes_contrat_munaseb::modifier_parametres),
+            get(routes_contrat_munaseb::parametres)
+                .put(routes_contrat_munaseb::modifier_parametres),
         )
         .route(
             "/api/assurance-munaseb/parametres/historique",
@@ -264,25 +279,52 @@ pub(crate) fn routeur(state: AppState) -> Router {
             "/api/assurance-munaseb/contrats",
             get(routes_contrat_munaseb::rechercher).post(routes_contrat_munaseb::adherer),
         )
-        .route("/api/assurance-munaseb/contrats/{id}", get(routes_contrat_munaseb::detail))
+        .route(
+            "/api/assurance-munaseb/contrats/{id}",
+            get(routes_contrat_munaseb::detail),
+        )
         .route(
             "/api/assurance-munaseb/contrats/{id}/renouvellements",
             post(routes_contrat_munaseb::renouveler),
         )
-        .route("/api/patients/connexion", post(routes_patient::se_connecter))
+        .route(
+            "/api/patients/connexion",
+            post(routes_patient::se_connecter),
+        )
         .route("/api/patients/moi", get(routes_patient::moi))
         .route("/api/sessions/renouveler", post(routes_session::renouveler))
-        .route("/api/sessions/deconnexion", post(routes_session::deconnexion))
-        .route("/api/sessions/deconnexion-partout", post(routes_session::deconnexion_partout))
-        .route("/api/professionnels/connexion", post(routes_professionnel::se_connecter))
-        .route("/api/professionnels/connexion/second-facteur", post(routes_professionnel::second_facteur))
-        .route("/api/professionnels/affectations", get(routes_professionnel::lister_affectations))
+        .route(
+            "/api/sessions/deconnexion",
+            post(routes_session::deconnexion),
+        )
+        .route(
+            "/api/sessions/deconnexion-partout",
+            post(routes_session::deconnexion_partout),
+        )
+        .route(
+            "/api/professionnels/connexion",
+            post(routes_professionnel::se_connecter),
+        )
+        .route(
+            "/api/professionnels/connexion/second-facteur",
+            post(routes_professionnel::second_facteur),
+        )
+        .route(
+            "/api/professionnels/affectations",
+            get(routes_professionnel::lister_affectations),
+        )
         .route(
             "/api/professionnels/affectations/{id}/activer",
             post(routes_professionnel::activer_affectation),
         )
-        .route("/api/administrateurs/connexion", post(routes_administrateur::se_connecter))
-        .route("/api/administrateurs/connexion/second-facteur", post(routes_administrateur::second_facteur))
+        .route(
+            "/api/administrateurs/connexion",
+            post(routes_administrateur::se_connecter),
+        )
+        .route(
+            "/api/administrateurs/connexion/second-facteur",
+            post(routes_administrateur::second_facteur),
+        )
         .route(
             "/api/administrateurs/reenrolement/commencer",
             post(routes_administrateur::commencer_reenrolement),
@@ -292,33 +334,87 @@ pub(crate) fn routeur(state: AppState) -> Router {
             post(routes_administrateur::confirmer_reenrolement),
         )
         .route("/api/patients/otp", post(routes_patient::demander_otp))
-        .route("/api/patients/inscription", post(routes_patient::creer_compte))
+        .route(
+            "/api/patients/inscription",
+            post(routes_patient::creer_compte),
+        )
         .route(
             "/api/patients/mot-de-passe/reinitialiser",
             post(routes_patient::reinitialiser_mot_de_passe),
         )
-        .route("/api/professionnels/email/verifier", post(routes_professionnel::verifier_email))
-        .route("/api/professionnels/email/renvoyer", post(routes_professionnel::renvoyer_lien_email))
-        .route("/api/administrateurs/structures", get(routes_administrateur::lister_structures))
-        .route("/api/administrateurs/structures/{id}", get(routes_administrateur::detail_structure))
-        .route("/api/administrateurs/structures/{id}/valider", post(routes_administrateur::valider_structure))
-        .route("/api/administrateurs/structures/{id}/refuser", post(routes_administrateur::refuser_structure))
+        .route(
+            "/api/professionnels/email/verifier",
+            post(routes_professionnel::verifier_email),
+        )
+        .route(
+            "/api/professionnels/email/renvoyer",
+            post(routes_professionnel::renvoyer_lien_email),
+        )
+        .route(
+            "/api/administrateurs/structures",
+            get(routes_administrateur::lister_structures),
+        )
+        .route(
+            "/api/administrateurs/structures/{id}",
+            get(routes_administrateur::detail_structure),
+        )
+        .route(
+            "/api/administrateurs/structures/{id}/valider",
+            post(routes_administrateur::valider_structure),
+        )
+        .route(
+            "/api/administrateurs/structures/{id}/refuser",
+            post(routes_administrateur::refuser_structure),
+        )
         .route(
             "/api/professionnels/invitations",
             get(routes_invitation::lister).post(routes_invitation::creer),
         )
-        .route("/api/professionnels/invitations/{id}/annuler", post(routes_invitation::annuler))
-        .route("/api/patients/invitations", get(routes_invitation::lister_recues))
-        .route("/api/patients/invitations/{id}/accepter", post(routes_invitation::accepter))
-        .route("/api/patients/invitations/{id}/refuser", post(routes_invitation::refuser))
-        .route("/api/professionnels/mot-de-passe/oubli", post(routes_mot_de_passe::oubli_professionnel))
-        .route("/api/administrateurs/mot-de-passe/oubli", post(routes_mot_de_passe::oubli_administrateur))
-        .route("/api/mot-de-passe/reinitialiser", post(routes_mot_de_passe::reinitialiser))
+        .route(
+            "/api/professionnels/invitations/{id}/annuler",
+            post(routes_invitation::annuler),
+        )
+        .route(
+            "/api/patients/invitations",
+            get(routes_invitation::lister_recues),
+        )
+        .route(
+            "/api/patients/invitations/{id}/accepter",
+            post(routes_invitation::accepter),
+        )
+        .route(
+            "/api/patients/invitations/{id}/refuser",
+            post(routes_invitation::refuser),
+        )
+        .route(
+            "/api/professionnels/mot-de-passe/oubli",
+            post(routes_mot_de_passe::oubli_professionnel),
+        )
+        .route(
+            "/api/administrateurs/mot-de-passe/oubli",
+            post(routes_mot_de_passe::oubli_administrateur),
+        )
+        .route(
+            "/api/mot-de-passe/reinitialiser",
+            post(routes_mot_de_passe::reinitialiser),
+        )
         .route("/api/structures", post(routes_structure::creer))
-        .route("/api/structures/mes-demandes", get(routes_structure::mes_demandes))
-        .route("/api/structures/{id}/soumettre", post(routes_structure::soumettre))
-        .route("/api/structures/{id}/abandonner", post(routes_structure::abandonner))
-        .route("/api/structures/{id}/pieces", get(routes_structure::lister_pieces))
+        .route(
+            "/api/structures/mes-demandes",
+            get(routes_structure::mes_demandes),
+        )
+        .route(
+            "/api/structures/{id}/soumettre",
+            post(routes_structure::soumettre),
+        )
+        .route(
+            "/api/structures/{id}/abandonner",
+            post(routes_structure::abandonner),
+        )
+        .route(
+            "/api/structures/{id}/pieces",
+            get(routes_structure::lister_pieces),
+        )
         .route(
             "/api/structures/{id}/pieces/{type_piece}",
             // Limite de 5 Mio sur cette seule route (§14) ; les autres ont
@@ -332,13 +428,34 @@ pub(crate) fn routeur(state: AppState) -> Router {
             get(routes_administrateur::telecharger_piece),
         )
         .route("/api/professionnels/membres", get(routes_membres::lister))
-        .route("/api/professionnels/membres/{id}/desactiver", post(routes_membres::desactiver))
-        .route("/api/patients/munaseb/droits", get(routes_espace_patient::droits))
-        .route("/api/patients/munaseb/demandes", get(routes_espace_patient::lister_demandes))
-        .route("/api/patients/munaseb/demandes/{id}", get(routes_espace_patient::detail_demande))
-        .route("/api/patients/notifications", get(routes_espace_patient::lister_notifications))
-        .route("/api/patients/notifications/lues", post(routes_espace_patient::marquer_toutes_lues))
-        .route("/api/patients/notifications/{id}/lue", post(routes_espace_patient::marquer_lue))
+        .route(
+            "/api/professionnels/membres/{id}/desactiver",
+            post(routes_membres::desactiver),
+        )
+        .route(
+            "/api/patients/munaseb/droits",
+            get(routes_espace_patient::droits),
+        )
+        .route(
+            "/api/patients/munaseb/demandes",
+            get(routes_espace_patient::lister_demandes),
+        )
+        .route(
+            "/api/patients/munaseb/demandes/{id}",
+            get(routes_espace_patient::detail_demande),
+        )
+        .route(
+            "/api/patients/notifications",
+            get(routes_espace_patient::lister_notifications),
+        )
+        .route(
+            "/api/patients/notifications/lues",
+            post(routes_espace_patient::marquer_toutes_lues),
+        )
+        .route(
+            "/api/patients/notifications/{id}/lue",
+            post(routes_espace_patient::marquer_lue),
+        )
         // Pharmacie (CLAUDE.md §15, docs/api.md §2.15).
         .route(
             "/api/pharmacie/medicaments",

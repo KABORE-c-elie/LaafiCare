@@ -103,19 +103,25 @@ pub enum ConfigError {
     SecretJwtTropCourt(usize),
 
     // La valeur n'est jamais reprise dans le message : c'est une clé.
-    #[error("TOTP_CLE_CHIFFREMENT invalide : 64 caractères hexadécimaux attendus (32 octets, AES-256)")]
+    #[error(
+        "TOTP_CLE_CHIFFREMENT invalide : 64 caractères hexadécimaux attendus (32 octets, AES-256)"
+    )]
     CleTotpInvalide,
 
     #[error("ENVIRONNEMENT invalide : « developpement » ou « production » attendu")]
     EnvironnementInvalide,
 
-    #[error("URL_APPLICATION_WEB invalide : adresse en http:// ou https://, sans espace, sans « ? » ni « # »")]
+    #[error(
+        "URL_APPLICATION_WEB invalide : adresse en http:// ou https://, sans espace, sans « ? » ni « # »"
+    )]
     UrlApplicationWebInvalide,
 
     // Les liens envoyés par email portent un jeton : en production, la page
     // qui le reçoit et le renvoie au serveur doit être servie en https
     // (décision du porteur, 2026-10-21).
-    #[error("URL_APPLICATION_WEB doit commencer par https:// en production (ENVIRONNEMENT=production)")]
+    #[error(
+        "URL_APPLICATION_WEB doit commencer par https:// en production (ENVIRONNEMENT=production)"
+    )]
     UrlApplicationWebSansHttps,
 
     #[error("CONTACT_SECURITE invalide : une adresse email attendue (ASCII, sans espace)")]
@@ -123,7 +129,9 @@ pub enum ConfigError {
 
     // Une adresse fictive ne doit jamais partir dans une alerte réelle
     // (décision du porteur, 2026-10-21).
-    #[error("CONTACT_SECURITE est une adresse d'exemple (RFC 2606) : refusée en production (ENVIRONNEMENT=production)")]
+    #[error(
+        "CONTACT_SECURITE est une adresse d'exemple (RFC 2606) : refusée en production (ENVIRONNEMENT=production)"
+    )]
     ContactSecuriteFictif,
 
     // Le SMS porte le code d'inscription, l'email le jeton de vérification :
@@ -163,7 +171,8 @@ impl Config {
         let jwt_secret = valider_secret_jwt(lire("JWT_SECRET")?)?;
         let totp_cle_chiffrement = decoder_cle_totp(&lire("TOTP_CLE_CHIFFREMENT")?)?;
         let environnement = parse_environnement(env::var("ENVIRONNEMENT").ok().as_deref())?;
-        let url_application_web = valider_url_application_web(&lire("URL_APPLICATION_WEB")?, environnement)?;
+        let url_application_web =
+            valider_url_application_web(&lire("URL_APPLICATION_WEB")?, environnement)?;
         let contact_securite = valider_contact_securite(&lire("CONTACT_SECURITE")?, environnement)?;
         // Exceptions assumées à « aucune valeur par défaut » (remédiation de
         // l'audit, 2026-11-17) : ces réglages ne touchent ni la sécurité des
@@ -193,14 +202,28 @@ impl Config {
 // « example.org » (et leurs sous-domaines). Comparaison sans tenir compte
 // des majuscules (RFC 5321 §2.4 : « Mailbox domains follow normal DNS rules
 // and are hence not case sensitive »).
-fn valider_contact_securite(valeur: &str, environnement: Environnement) -> Result<String, ConfigError> {
+fn valider_contact_securite(
+    valeur: &str,
+    environnement: Environnement,
+) -> Result<String, ConfigError> {
     adresse_email::controler(valeur).map_err(|_| ConfigError::ContactSecuriteInvalide)?;
     if environnement == Environnement::Production {
-        let domaine = valeur.rsplit_once('@').map(|(_, d)| d.to_ascii_lowercase()).unwrap_or_default();
+        let domaine = valeur
+            .rsplit_once('@')
+            .map(|(_, d)| d.to_ascii_lowercase())
+            .unwrap_or_default();
         let reserve = |nom: &str| domaine == nom || domaine.ends_with(&format!(".{nom}"));
-        let fictif = ["example.com", "example.net", "example.org", "test", "example", "invalid", "localhost"]
-            .into_iter()
-            .any(reserve);
+        let fictif = [
+            "example.com",
+            "example.net",
+            "example.org",
+            "test",
+            "example",
+            "invalid",
+            "localhost",
+        ]
+        .into_iter()
+        .any(reserve);
         if fictif {
             return Err(ConfigError::ContactSecuriteFictif);
         }
@@ -219,12 +242,19 @@ fn valider_contact_securite(valeur: &str, environnement: Environnement) -> Resul
 // exige un canal authentifié et chiffré pour ces secrets. En
 // développement, http reste permis (http://localhost:4200, rien ne sort de
 // la machine).
-fn valider_url_application_web(valeur: &str, environnement: Environnement) -> Result<String, ConfigError> {
-    let sans_schema = valeur.strip_prefix("https://").or_else(|| valeur.strip_prefix("http://"));
+fn valider_url_application_web(
+    valeur: &str,
+    environnement: Environnement,
+) -> Result<String, ConfigError> {
+    let sans_schema = valeur
+        .strip_prefix("https://")
+        .or_else(|| valeur.strip_prefix("http://"));
     match sans_schema {
         Some(reste)
             if !reste.trim_end_matches('/').is_empty()
-                && !valeur.chars().any(|c| c.is_whitespace() || c.is_control() || c == '?' || c == '#') =>
+                && !valeur
+                    .chars()
+                    .any(|c| c.is_whitespace() || c.is_control() || c == '?' || c == '#') =>
         {
             if environnement == Environnement::Production && !valeur.starts_with("https://") {
                 return Err(ConfigError::UrlApplicationWebSansHttps);
@@ -251,7 +281,10 @@ fn parse_environnement(valeur: Option<&str>) -> Result<Environnement, ConfigErro
 /// envoient (`SmsSender::simule`, `EmailSender::simule`). En production,
 /// tout envoi simulé est refusé : sinon les codes et les jetons ne
 /// partiraient jamais, et s'afficheraient dans le terminal du serveur.
-pub fn verifier_envois(environnement: Environnement, envois: &[(&'static str, bool)]) -> Result<(), ConfigError> {
+pub fn verifier_envois(
+    environnement: Environnement,
+    envois: &[(&'static str, bool)],
+) -> Result<(), ConfigError> {
     if environnement == Environnement::Production {
         if let Some((nature, _)) = envois.iter().find(|(_, simule)| *simule) {
             return Err(ConfigError::EnvoiSimuleEnProduction(nature));
@@ -278,35 +311,62 @@ fn lire(nom: &'static str) -> Result<String, ConfigError> {
 fn parse_hote(valeur: Option<&str>) -> Result<IpAddr, ConfigError> {
     match valeur.map(str::trim).filter(|v| !v.is_empty()) {
         None => Ok(IpAddr::V4(Ipv4Addr::LOCALHOST)),
-        Some(v) => v.parse().map_err(|_| ConfigError::HoteInvalide(v.to_string())),
+        Some(v) => v
+            .parse()
+            .map_err(|_| ConfigError::HoteInvalide(v.to_string())),
     }
 }
 
 /// Options du pool, chacune facultative : absente ou vide, la valeur de
 /// `OptionsPool::default()`. Le lecteur de variables est passé en
 /// paramètre pour être testé sans toucher l'environnement du processus.
-fn lire_options_pool(lire: impl Fn(&'static str) -> Option<String>) -> Result<OptionsPool, ConfigError> {
+fn lire_options_pool(
+    lire: impl Fn(&'static str) -> Option<String>,
+) -> Result<OptionsPool, ConfigError> {
     let defaut = OptionsPool::default();
     let nombre = |nom: &'static str, defaut: u64| -> Result<u64, ConfigError> {
-        match lire(nom).as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        match lire(nom)
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
             None => Ok(defaut),
-            Some(v) => v.parse::<u64>().ok().filter(|n| *n >= 1).ok_or(ConfigError::NombreInvalide(nom)),
+            Some(v) => v
+                .parse::<u64>()
+                .ok()
+                .filter(|n| *n >= 1)
+                .ok_or(ConfigError::NombreInvalide(nom)),
         }
     };
     let entier = |nom: &'static str, defaut: u32| -> Result<u32, ConfigError> {
         u32::try_from(nombre(nom, u64::from(defaut))?).map_err(|_| ConfigError::NombreInvalide(nom))
     };
     // Le minimum peut valoir 0 (défaut de sqlx) : lu à part.
-    let min_connexions = match lire("DATABASE_MIN_CONNECTIONS").as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+    let min_connexions = match lire("DATABASE_MIN_CONNECTIONS")
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
         None => defaut.min_connexions,
-        Some(v) => v.parse::<u32>().map_err(|_| ConfigError::NombreInvalide("DATABASE_MIN_CONNECTIONS"))?,
+        Some(v) => v
+            .parse::<u32>()
+            .map_err(|_| ConfigError::NombreInvalide("DATABASE_MIN_CONNECTIONS"))?,
     };
     let options = OptionsPool {
         max_connexions: entier("DATABASE_MAX_CONNECTIONS", defaut.max_connexions)?,
         min_connexions,
-        acquire_timeout: Duration::from_secs(nombre("DATABASE_ACQUIRE_TIMEOUT_SECS", defaut.acquire_timeout.as_secs())?),
-        idle_timeout: Duration::from_secs(nombre("DATABASE_IDLE_TIMEOUT_SECS", defaut.idle_timeout.as_secs())?),
-        max_lifetime: Duration::from_secs(nombre("DATABASE_MAX_LIFETIME_SECS", defaut.max_lifetime.as_secs())?),
+        acquire_timeout: Duration::from_secs(nombre(
+            "DATABASE_ACQUIRE_TIMEOUT_SECS",
+            defaut.acquire_timeout.as_secs(),
+        )?),
+        idle_timeout: Duration::from_secs(nombre(
+            "DATABASE_IDLE_TIMEOUT_SECS",
+            defaut.idle_timeout.as_secs(),
+        )?),
+        max_lifetime: Duration::from_secs(nombre(
+            "DATABASE_MAX_LIFETIME_SECS",
+            defaut.max_lifetime.as_secs(),
+        )?),
     };
     // La doc de sqlx (`min_connections`) borne déjà le minimum au maximum,
     // mais recommande que l'application le vérifie elle-même (« it should be
@@ -359,12 +419,25 @@ mod tests {
 
     #[test]
     fn adresse_d_ecoute() {
-        assert_eq!(parse_hote(None).unwrap(), IpAddr::V4(Ipv4Addr::LOCALHOST), "défaut : local seulement");
-        assert_eq!(parse_hote(Some("  ")).unwrap(), IpAddr::V4(Ipv4Addr::LOCALHOST));
-        assert_eq!(parse_hote(Some("0.0.0.0")).unwrap(), IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        assert_eq!(
+            parse_hote(None).unwrap(),
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            "défaut : local seulement"
+        );
+        assert_eq!(
+            parse_hote(Some("  ")).unwrap(),
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
+        );
+        assert_eq!(
+            parse_hote(Some("0.0.0.0")).unwrap(),
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        );
         assert_eq!(parse_hote(Some("::1")).unwrap().to_string(), "::1");
         for faux in ["localhost", "127.0.0", "0.0.0.0:8080"] {
-            assert!(matches!(parse_hote(Some(faux)), Err(ConfigError::HoteInvalide(_))), "{faux}");
+            assert!(
+                matches!(parse_hote(Some(faux)), Err(ConfigError::HoteInvalide(_))),
+                "{faux}"
+            );
         }
     }
 
@@ -373,7 +446,12 @@ mod tests {
         let aucune = |_: &'static str| None;
         assert_eq!(lire_options_pool(aucune).unwrap(), OptionsPool::default());
         let avec = |valeurs: &'static [(&'static str, &'static str)]| {
-            move |nom: &'static str| valeurs.iter().find(|(n, _)| *n == nom).map(|(_, v)| v.to_string())
+            move |nom: &'static str| {
+                valeurs
+                    .iter()
+                    .find(|(n, _)| *n == nom)
+                    .map(|(_, v)| v.to_string())
+            }
         };
         let lu = lire_options_pool(avec(&[
             ("DATABASE_MAX_CONNECTIONS", "20"),
@@ -381,7 +459,14 @@ mod tests {
             ("DATABASE_ACQUIRE_TIMEOUT_SECS", "8"),
         ]))
         .unwrap();
-        assert_eq!((lu.max_connexions, lu.min_connexions, lu.acquire_timeout.as_secs()), (20, 2, 8));
+        assert_eq!(
+            (
+                lu.max_connexions,
+                lu.min_connexions,
+                lu.acquire_timeout.as_secs()
+            ),
+            (20, 2, 8)
+        );
         assert_eq!(lu.idle_timeout, OptionsPool::default().idle_timeout);
         for faux in [
             &[("DATABASE_MAX_CONNECTIONS", "0")][..],
@@ -389,10 +474,19 @@ mod tests {
             &[("DATABASE_ACQUIRE_TIMEOUT_SECS", "-5")],
             &[("DATABASE_MAX_CONNECTIONS", "99999999999")],
         ] {
-            assert!(matches!(lire_options_pool(avec(faux)), Err(ConfigError::NombreInvalide(_))), "{faux:?}");
+            assert!(
+                matches!(
+                    lire_options_pool(avec(faux)),
+                    Err(ConfigError::NombreInvalide(_))
+                ),
+                "{faux:?}"
+            );
         }
         assert!(matches!(
-            lire_options_pool(avec(&[("DATABASE_MAX_CONNECTIONS", "3"), ("DATABASE_MIN_CONNECTIONS", "4")])),
+            lire_options_pool(avec(&[
+                ("DATABASE_MAX_CONNECTIONS", "3"),
+                ("DATABASE_MIN_CONNECTIONS", "4")
+            ])),
             Err(ConfigError::PoolIncoherent)
         ));
     }
@@ -413,30 +507,59 @@ mod tests {
         let cle = decoder_cle_totp(&hexadecimal).unwrap();
         let affichage = format!("{cle:?}");
         assert_eq!(affichage, "***");
-        assert!(!affichage.contains(&hexadecimal) && !affichage.contains("60"), "{affichage}");
+        assert!(
+            !affichage.contains(&hexadecimal) && !affichage.contains("60"),
+            "{affichage}"
+        );
         assert_eq!(format!("{:?}", CleTotp::depuis_octets([7; 32])), "***");
     }
 
     #[test]
     fn cle_totp_invalide_refusee() {
-        for valeur in ["ab".repeat(31), "ab".repeat(33), format!("+{}", "a".repeat(63)), "zz".repeat(32)] {
-            assert!(matches!(decoder_cle_totp(&valeur), Err(ConfigError::CleTotpInvalide)), "{valeur}");
+        for valeur in [
+            "ab".repeat(31),
+            "ab".repeat(33),
+            format!("+{}", "a".repeat(63)),
+            "zz".repeat(32),
+        ] {
+            assert!(
+                matches!(decoder_cle_totp(&valeur), Err(ConfigError::CleTotpInvalide)),
+                "{valeur}"
+            );
         }
     }
 
     #[test]
     fn environnement_absent_ou_inconnu_refuse() {
-        assert!(matches!(parse_environnement(None), Err(ConfigError::Manquante("ENVIRONNEMENT"))));
-        assert!(matches!(parse_environnement(Some("")), Err(ConfigError::Manquante("ENVIRONNEMENT"))));
+        assert!(matches!(
+            parse_environnement(None),
+            Err(ConfigError::Manquante("ENVIRONNEMENT"))
+        ));
+        assert!(matches!(
+            parse_environnement(Some("")),
+            Err(ConfigError::Manquante("ENVIRONNEMENT"))
+        ));
         for valeur in ["Production", "prod", "dev", "developpement "] {
-            assert!(matches!(parse_environnement(Some(valeur)), Err(ConfigError::EnvironnementInvalide)), "{valeur}");
+            assert!(
+                matches!(
+                    parse_environnement(Some(valeur)),
+                    Err(ConfigError::EnvironnementInvalide)
+                ),
+                "{valeur}"
+            );
         }
     }
 
     #[test]
     fn environnement_reconnu() {
-        assert_eq!(parse_environnement(Some("developpement")).unwrap(), Environnement::Developpement);
-        assert_eq!(parse_environnement(Some("production")).unwrap(), Environnement::Production);
+        assert_eq!(
+            parse_environnement(Some("developpement")).unwrap(),
+            Environnement::Developpement
+        );
+        assert_eq!(
+            parse_environnement(Some("production")).unwrap(),
+            Environnement::Production
+        );
     }
 
     #[test]
@@ -448,28 +571,57 @@ mod tests {
             Err(ConfigError::EnvoiSimuleEnProduction("SMS"))
         ));
         assert!(matches!(
-            verifier_envois(Environnement::Production, &[("SMS", false), ("email", true)]),
+            verifier_envois(
+                Environnement::Production,
+                &[("SMS", false), ("email", true)]
+            ),
             Err(ConfigError::EnvoiSimuleEnProduction("email"))
         ));
-        assert!(verifier_envois(Environnement::Production, &[("SMS", false), ("email", false)]).is_ok());
+        assert!(
+            verifier_envois(
+                Environnement::Production,
+                &[("SMS", false), ("email", false)]
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn url_application_web() {
         let dev = Environnement::Developpement;
         let prod = Environnement::Production;
-        assert_eq!(valider_url_application_web("http://localhost:4200", dev).unwrap(), "http://localhost:4200");
-        assert_eq!(valider_url_application_web("https://exemple.bf/app/", dev).unwrap(), "https://exemple.bf/app");
-        for valeur in ["localhost:4200", "ftp://exemple.bf", "https://", "https:///", "https://a.bf/?x=1", "https://a.bf/#x", "https://a b.bf"] {
+        assert_eq!(
+            valider_url_application_web("http://localhost:4200", dev).unwrap(),
+            "http://localhost:4200"
+        );
+        assert_eq!(
+            valider_url_application_web("https://exemple.bf/app/", dev).unwrap(),
+            "https://exemple.bf/app"
+        );
+        for valeur in [
+            "localhost:4200",
+            "ftp://exemple.bf",
+            "https://",
+            "https:///",
+            "https://a.bf/?x=1",
+            "https://a.bf/#x",
+            "https://a b.bf",
+        ] {
             for environnement in [dev, prod] {
                 assert!(
-                    matches!(valider_url_application_web(valeur, environnement), Err(ConfigError::UrlApplicationWebInvalide)),
+                    matches!(
+                        valider_url_application_web(valeur, environnement),
+                        Err(ConfigError::UrlApplicationWebInvalide)
+                    ),
                     "{valeur}"
                 );
             }
         }
         // En production, https seulement.
-        assert_eq!(valider_url_application_web("https://exemple.bf", prod).unwrap(), "https://exemple.bf");
+        assert_eq!(
+            valider_url_application_web("https://exemple.bf", prod).unwrap(),
+            "https://exemple.bf"
+        );
         assert!(matches!(
             valider_url_application_web("http://exemple.bf", prod),
             Err(ConfigError::UrlApplicationWebSansHttps)
@@ -481,12 +633,26 @@ mod tests {
         let dev = Environnement::Developpement;
         let prod = Environnement::Production;
         // En développement, une adresse d'exemple est acceptée.
-        assert_eq!(valider_contact_securite("securite@example.org", dev).unwrap(), "securite@example.org");
-        assert_eq!(valider_contact_securite("securite@laaficare.bf", prod).unwrap(), "securite@laaficare.bf");
-        for valeur in ["", "pas une adresse", "sécurité@laaficare.bf", " securite@laaficare.bf"] {
+        assert_eq!(
+            valider_contact_securite("securite@example.org", dev).unwrap(),
+            "securite@example.org"
+        );
+        assert_eq!(
+            valider_contact_securite("securite@laaficare.bf", prod).unwrap(),
+            "securite@laaficare.bf"
+        );
+        for valeur in [
+            "",
+            "pas une adresse",
+            "sécurité@laaficare.bf",
+            " securite@laaficare.bf",
+        ] {
             for environnement in [dev, prod] {
                 assert!(
-                    matches!(valider_contact_securite(valeur, environnement), Err(ConfigError::ContactSecuriteInvalide)),
+                    matches!(
+                        valider_contact_securite(valeur, environnement),
+                        Err(ConfigError::ContactSecuriteInvalide)
+                    ),
                     "{valeur:?}"
                 );
             }
@@ -500,7 +666,13 @@ mod tests {
             "securite@x.invalid",
             "securite@localhost",
         ] {
-            assert!(matches!(valider_contact_securite(valeur, prod), Err(ConfigError::ContactSecuriteFictif)), "{valeur}");
+            assert!(
+                matches!(
+                    valider_contact_securite(valeur, prod),
+                    Err(ConfigError::ContactSecuriteFictif)
+                ),
+                "{valeur}"
+            );
         }
         // Un domaine qui contient « example » sans être réservé reste accepté.
         assert!(valider_contact_securite("securite@counterexample.org", prod).is_ok());

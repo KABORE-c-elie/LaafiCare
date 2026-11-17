@@ -31,7 +31,9 @@ async fn main() -> ExitCode {
 async fn executer() -> Result<(), String> {
     match dotenvy::dotenv() {
         Ok(_) => {}
-        Err(dotenvy::Error::LineParse(..)) => return Err("fichier .env mal formé (erreur de syntaxe)".into()),
+        Err(dotenvy::Error::LineParse(..)) => {
+            return Err("fichier .env mal formé (erreur de syntaxe)".into());
+        }
         Err(erreur) if erreur.not_found() => {}
         Err(_) => return Err("fichier .env illisible".into()),
     }
@@ -43,10 +45,15 @@ async fn executer() -> Result<(), String> {
     let pool = db::connecter(&url)
         .await
         .map_err(|_| "base injoignable : vérifier que PostgreSQL est démarré et que DATABASE_URL est correct")?;
-    let avant = db::migrations_manquantes(&pool).await.map_err(|e| format!("lecture de la base impossible : {e}"))?;
+    let avant = db::migrations_manquantes(&pool)
+        .await
+        .map_err(|e| format!("lecture de la base impossible : {e}"))?;
     // L'erreur de sqlx nomme la migration et la cause (rôle manquant, par
     // exemple) ; elle ne contient pas l'adresse de la base.
-    db::MIGRATIONS.run(&pool).await.map_err(|e| format!("échec des migrations : {e}"))?;
+    db::MIGRATIONS
+        .run(&pool)
+        .await
+        .map_err(|e| format!("échec des migrations : {e}"))?;
     println!("Base à jour : {avant} migration(s) appliquée(s).");
     Ok(())
 }

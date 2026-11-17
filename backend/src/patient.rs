@@ -47,7 +47,14 @@ impl From<sqlx::Error> for ErreurProfil {
 /// migration 0004 laisse vides seulement pour une inscription inachevée,
 /// donc sans compte (M2).
 pub async fn profil(pool: &PgPool, compte_id: Uuid) -> Result<ProfilPatient, ErreurProfil> {
-    type Ligne = (Option<String>, Option<String>, String, Option<String>, Option<NaiveDate>, Option<String>);
+    type Ligne = (
+        Option<String>,
+        Option<String>,
+        String,
+        Option<String>,
+        Option<NaiveDate>,
+        Option<String>,
+    );
     let ligne: Option<Ligne> = sqlx::query_as(
         "SELECT u.nom, u.prenom, u.telephone, p.nip, p.date_naissance, p.lieu_naissance \
          FROM compte c JOIN utilisateur u ON u.id = c.utilisateur_id \
@@ -59,16 +66,32 @@ pub async fn profil(pool: &PgPool, compte_id: Uuid) -> Result<ProfilPatient, Err
     .await?;
 
     let Some((nom, prenom, telephone, nip, date_naissance, lieu_naissance)) = ligne else {
-        return Err(ErreurProfil::Interne(format!("compte patient introuvable : {compte_id}")));
+        return Err(ErreurProfil::Interne(format!(
+            "compte patient introuvable : {compte_id}"
+        )));
     };
-    let (Some(nip), Some(date_naissance), Some(lieu_naissance)) = (nip, date_naissance, lieu_naissance) else {
-        return Err(ErreurProfil::Interne(format!("compte patient sans dossier patient : {compte_id}")));
+    let (Some(nip), Some(date_naissance), Some(lieu_naissance)) =
+        (nip, date_naissance, lieu_naissance)
+    else {
+        return Err(ErreurProfil::Interne(format!(
+            "compte patient sans dossier patient : {compte_id}"
+        )));
     };
     let (Some(nom), Some(prenom)) = (nom, prenom) else {
-        return Err(ErreurProfil::Interne(format!("compte patient sans nom ni prénom : {compte_id}")));
+        return Err(ErreurProfil::Interne(format!(
+            "compte patient sans nom ni prénom : {compte_id}"
+        )));
     };
 
-    Ok(ProfilPatient { compte_id, nip, nom, prenom, telephone, date_naissance, lieu_naissance })
+    Ok(ProfilPatient {
+        compte_id,
+        nip,
+        nom,
+        prenom,
+        telephone,
+        date_naissance,
+        lieu_naissance,
+    })
 }
 
 #[cfg(test)]
@@ -95,7 +118,10 @@ mod tests {
         .unwrap();
 
         // Compte sans dossier patient : incohérence signalée (M3).
-        assert!(matches!(profil(&pool, compte_id).await, Err(ErreurProfil::Interne(_))));
+        assert!(matches!(
+            profil(&pool, compte_id).await,
+            Err(ErreurProfil::Interne(_))
+        ));
 
         sqlx::query(
             "INSERT INTO patient (utilisateur_id, nip, date_naissance, lieu_naissance) \
@@ -120,6 +146,9 @@ mod tests {
         );
 
         // Compte inconnu : erreur interne (l'extracteur l'a normalement écarté).
-        assert!(matches!(profil(&pool, Uuid::from_u128(1)).await, Err(ErreurProfil::Interne(_))));
+        assert!(matches!(
+            profil(&pool, Uuid::from_u128(1)).await,
+            Err(ErreurProfil::Interne(_))
+        ));
     }
 }

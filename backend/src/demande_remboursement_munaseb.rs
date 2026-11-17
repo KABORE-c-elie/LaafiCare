@@ -100,7 +100,9 @@ impl StatutDemande {
     /// push futur s'afficherait sur l'écran verrouillé (section 12).
     pub fn message_notification(self) -> &'static str {
         match self {
-            StatutDemande::EnAttente => "Une demande de remboursement a été enregistrée à votre nom.",
+            StatutDemande::EnAttente => {
+                "Une demande de remboursement a été enregistrée à votre nom."
+            }
             StatutDemande::EnCours => "Votre demande de remboursement est en cours de traitement.",
             StatutDemande::Valide => "Votre demande de remboursement a été validée.",
             StatutDemande::Rejete => "Votre demande de remboursement a été rejetée.",
@@ -113,8 +115,7 @@ pub const TITRE_NOTIFICATION: &str = "Remboursement MUNASEB";
 
 /// Texte d'une validation à 0 FCFA (plafond de la période épuisé) : le
 /// patient ne doit pas croire qu'il est remboursé (décision du porteur).
-pub const MESSAGE_VALIDEE_PLAFOND_ATTEINT: &str =
-    "Votre demande a été traitée : le plafond de votre période est atteint, aucun montant ne sera versé.";
+pub const MESSAGE_VALIDEE_PLAFOND_ATTEINT: &str = "Votre demande a été traitée : le plafond de votre période est atteint, aucun montant ne sera versé.";
 
 /// Garde-fou technique sur le motif de rejet (décision V4), en caractères.
 pub const MOTIF_LONGUEUR_MAX: usize = 1000;
@@ -237,7 +238,8 @@ pub async fn creer_depuis_acte(
             .bind(acte.partenaire_id)
             .fetch_optional(pool)
             .await?;
-    let statut_partenaire = statut_partenaire.ok_or(ErreurDemandeRemboursement::PartenaireInconnu)?;
+    let statut_partenaire =
+        statut_partenaire.ok_or(ErreurDemandeRemboursement::PartenaireInconnu)?;
 
     // Rejeu d'un acte déjà transmis (ex. après un timeout côté appelant) :
     // renvoyer la demande existante, avant tout autre contrôle, pour que le
@@ -259,7 +261,8 @@ pub async fn creer_depuis_acte(
     .bind(&acte.nip)
     .fetch_optional(pool)
     .await?;
-    let (utilisateur_id, contrat_id, statut_contrat) = ligne.ok_or(ErreurDemandeRemboursement::PatientInconnu)?;
+    let (utilisateur_id, contrat_id, statut_contrat) =
+        ligne.ok_or(ErreurDemandeRemboursement::PatientInconnu)?;
 
     let contrat_id = match (contrat_id, statut_contrat.as_deref()) {
         (Some(id), Some("actif")) => id,
@@ -301,9 +304,9 @@ pub async fn creer_depuis_acte(
         // et c'est cet autre appel qui a notifié. Rien n'a été écrit ici.
         // Même comparaison des champs que pour un rejeu ordinaire.
         tx.rollback().await?;
-        return rejeu(pool, acte)
-            .await?
-            .ok_or_else(|| ErreurDemandeRemboursement::Interne("conflit sans demande existante".into()));
+        return rejeu(pool, acte).await?.ok_or_else(|| {
+            ErreurDemandeRemboursement::Interne("conflit sans demande existante".into())
+        });
     };
 
     historiser(&mut tx, demande_id, None, StatutDemande::EnAttente, None).await?;
@@ -399,12 +402,16 @@ async fn periode_de_l_acte(
     })
 }
 
-async fn lire_tarif(pool: &PgPool, type_acte: TypeActeMunaseb) -> Result<Tarif, ErreurDemandeRemboursement> {
-    let ligne: Option<(Option<i16>, Option<i32>)> =
-        sqlx::query_as("SELECT taux_percent, forfait_fcfa FROM tarif_acte_munaseb WHERE type_acte = $1")
-            .bind(type_acte.as_str())
-            .fetch_optional(pool)
-            .await?;
+async fn lire_tarif(
+    pool: &PgPool,
+    type_acte: TypeActeMunaseb,
+) -> Result<Tarif, ErreurDemandeRemboursement> {
+    let ligne: Option<(Option<i16>, Option<i32>)> = sqlx::query_as(
+        "SELECT taux_percent, forfait_fcfa FROM tarif_acte_munaseb WHERE type_acte = $1",
+    )
+    .bind(type_acte.as_str())
+    .fetch_optional(pool)
+    .await?;
     // Chaque variante de l'enum a sa ligne (migration 0007) et la contrainte
     // `taux_ou_forfait` garantit exactement une des deux valeurs : les autres
     // cas signalent une base incohérente avec le code, pas une erreur métier.
@@ -480,14 +487,28 @@ async fn verrouiller_demande(
     .await?;
     let (statut, periode_id, montant_demande_fcfa, montant_rembourse_fcfa, utilisateur_id) =
         ligne.ok_or(ErreurTransition::DemandeInconnue)?;
-    Ok(DemandeVerrouillee { statut, periode_id, montant_demande_fcfa, montant_rembourse_fcfa, utilisateur_id })
+    Ok(DemandeVerrouillee {
+        statut,
+        periode_id,
+        montant_demande_fcfa,
+        montant_rembourse_fcfa,
+        utilisateur_id,
+    })
 }
 
-fn exiger_statut(demande: &DemandeVerrouillee, autorises: &[StatutDemande]) -> Result<(), ErreurTransition> {
-    if autorises.iter().any(|statut| statut.as_str() == demande.statut) {
+fn exiger_statut(
+    demande: &DemandeVerrouillee,
+    autorises: &[StatutDemande],
+) -> Result<(), ErreurTransition> {
+    if autorises
+        .iter()
+        .any(|statut| statut.as_str() == demande.statut)
+    {
         Ok(())
     } else {
-        Err(ErreurTransition::TransitionInvalide { statut_actuel: demande.statut.clone() })
+        Err(ErreurTransition::TransitionInvalide {
+            statut_actuel: demande.statut.clone(),
+        })
     }
 }
 
@@ -564,10 +585,23 @@ pub async fn prendre_en_charge(
         .bind(demande_id)
         .execute(&mut *tx)
         .await?;
-    historiser(&mut tx, demande_id, Some(&demande.statut), StatutDemande::EnCours, Some(agent)).await?;
+    historiser(
+        &mut tx,
+        demande_id,
+        Some(&demande.statut),
+        StatutDemande::EnCours,
+        Some(agent),
+    )
+    .await?;
     tx.commit().await?;
 
-    notifier(pool, demande.utilisateur_id, StatutDemande::EnCours.message_notification(), demande_id).await;
+    notifier(
+        pool,
+        demande.utilisateur_id,
+        StatutDemande::EnCours.message_notification(),
+        demande_id,
+    )
+    .await;
     Ok(())
 }
 
@@ -593,7 +627,9 @@ pub async fn valider(
         .execute(&mut *tx)
         .await?;
 
-    let solde = solde_periode(&mut *tx, demande.periode_id).await?.solde_fcfa;
+    let solde = solde_periode(&mut *tx, demande.periode_id)
+        .await?
+        .solde_fcfa;
     let montant_rembourse = demande.montant_demande_fcfa.min(solde);
 
     sqlx::query(
@@ -603,7 +639,14 @@ pub async fn valider(
     .bind(montant_rembourse)
     .execute(&mut *tx)
     .await?;
-    historiser(&mut tx, demande_id, Some(&demande.statut), StatutDemande::Valide, Some(agent)).await?;
+    historiser(
+        &mut tx,
+        demande_id,
+        Some(&demande.statut),
+        StatutDemande::Valide,
+        Some(agent),
+    )
+    .await?;
     tx.commit().await?;
 
     let message = if montant_rembourse == 0 {
@@ -634,17 +677,33 @@ pub async fn rejeter(
 
     let mut tx = pool.begin().await?;
     let demande = verrouiller_demande(&mut tx, demande_id).await?;
-    exiger_statut(&demande, &[StatutDemande::EnAttente, StatutDemande::EnCours])?;
+    exiger_statut(
+        &demande,
+        &[StatutDemande::EnAttente, StatutDemande::EnCours],
+    )?;
 
     sqlx::query("UPDATE demande_remboursement_munaseb SET statut = 'rejete', motif_rejet = $2 WHERE id = $1")
         .bind(demande_id)
         .bind(motif)
         .execute(&mut *tx)
         .await?;
-    historiser(&mut tx, demande_id, Some(&demande.statut), StatutDemande::Rejete, Some(agent)).await?;
+    historiser(
+        &mut tx,
+        demande_id,
+        Some(&demande.statut),
+        StatutDemande::Rejete,
+        Some(agent),
+    )
+    .await?;
     tx.commit().await?;
 
-    notifier(pool, demande.utilisateur_id, StatutDemande::Rejete.message_notification(), demande_id).await;
+    notifier(
+        pool,
+        demande.utilisateur_id,
+        StatutDemande::Rejete.message_notification(),
+        demande_id,
+    )
+    .await;
     Ok(())
 }
 
@@ -664,16 +723,28 @@ pub async fn marquer_payee(
         .bind(demande_id)
         .execute(&mut *tx)
         .await?;
-    historiser(&mut tx, demande_id, Some(&demande.statut), StatutDemande::Paye, Some(agent)).await?;
+    historiser(
+        &mut tx,
+        demande_id,
+        Some(&demande.statut),
+        StatutDemande::Paye,
+        Some(agent),
+    )
+    .await?;
     tx.commit().await?;
 
     // Toujours Some en statut Validé (contrainte montant_rembourse_si_valide_ou_paye).
     if demande.montant_rembourse_fcfa.unwrap_or(0) > 0 {
-        notifier(pool, demande.utilisateur_id, StatutDemande::Paye.message_notification(), demande_id).await;
+        notifier(
+            pool,
+            demande.utilisateur_id,
+            StatutDemande::Paye.message_notification(),
+            demande_id,
+        )
+        .await;
     }
     Ok(())
 }
-
 
 // ---------------------------------------------------------------------
 // Lectures pour les agents
@@ -775,11 +846,15 @@ pub struct DetailDemande {
 
 /// Détail d'une demande avec son historique complet, `None` si elle
 /// n'existe pas.
-pub async fn detail_demande(pool: &PgPool, demande_id: Uuid) -> Result<Option<DetailDemande>, sqlx::Error> {
-    let Some(demande) = sqlx::query_as::<_, ResumeDemande>(concat!(select_resume!(), " WHERE d.id = $1"))
-        .bind(demande_id)
-        .fetch_optional(pool)
-        .await?
+pub async fn detail_demande(
+    pool: &PgPool,
+    demande_id: Uuid,
+) -> Result<Option<DetailDemande>, sqlx::Error> {
+    let Some(demande) =
+        sqlx::query_as::<_, ResumeDemande>(concat!(select_resume!(), " WHERE d.id = $1"))
+            .bind(demande_id)
+            .fetch_optional(pool)
+            .await?
     else {
         return Ok(None);
     };
@@ -835,18 +910,30 @@ mod tests {
         assert_eq!(calculer_montant_demande(1499, Tarif::TauxPercent(80)), 1199);
         // Demi exact : 50 % de 3 = 1,5 -> 2.
         assert_eq!(calculer_montant_demande(3, Tarif::TauxPercent(50)), 2);
-        assert_eq!(calculer_montant_demande(1000, Tarif::TauxPercent(100)), 1000);
+        assert_eq!(
+            calculer_montant_demande(1000, Tarif::TauxPercent(100)),
+            1000
+        );
     }
 
     #[test]
     fn taux_sans_debordement_sur_un_gros_montant() {
-        assert_eq!(calculer_montant_demande(i32::MAX, Tarif::TauxPercent(100)), i32::MAX);
+        assert_eq!(
+            calculer_montant_demande(i32::MAX, Tarif::TauxPercent(100)),
+            i32::MAX
+        );
     }
 
     #[test]
     fn forfait_jamais_superieur_au_cout_reel() {
-        assert_eq!(calculer_montant_demande(20_000, Tarif::ForfaitFcfa(15_000)), 15_000);
-        assert_eq!(calculer_montant_demande(10_000, Tarif::ForfaitFcfa(15_000)), 10_000);
+        assert_eq!(
+            calculer_montant_demande(20_000, Tarif::ForfaitFcfa(15_000)),
+            15_000
+        );
+        assert_eq!(
+            calculer_montant_demande(10_000, Tarif::ForfaitFcfa(15_000)),
+            10_000
+        );
     }
 
     #[test]
@@ -878,15 +965,21 @@ mod tests {
     /// Agent MUNASEB : identité, compte professionnel et affectation
     /// `agent_assurance_munaseb` dans la structure MUNASEB validée, créée au
     /// premier appel (la base n'en admet qu'une, migration 0012).
-    async fn agent_munaseb(pool: &PgPool, telephone: &str, nom: &str, prenom: &str) -> AffectationAgent {
-        let utilisateur_id: Uuid =
-            sqlx::query_scalar("INSERT INTO utilisateur (nom, prenom, telephone) VALUES ($1, $2, $3) RETURNING id")
-                .bind(nom)
-                .bind(prenom)
-                .bind(telephone)
-                .fetch_one(pool)
-                .await
-                .unwrap();
+    async fn agent_munaseb(
+        pool: &PgPool,
+        telephone: &str,
+        nom: &str,
+        prenom: &str,
+    ) -> AffectationAgent {
+        let utilisateur_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO utilisateur (nom, prenom, telephone) VALUES ($1, $2, $3) RETURNING id",
+        )
+        .bind(nom)
+        .bind(prenom)
+        .bind(telephone)
+        .fetch_one(pool)
+        .await
+        .unwrap();
         let compte_id: Uuid = sqlx::query_scalar(
             "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'professionnel', 'x') RETURNING id",
         )
@@ -894,11 +987,12 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap();
-        let existante: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM structure WHERE type_structure = 'munaseb' AND statut = 'validee'")
-                .fetch_optional(pool)
-                .await
-                .unwrap();
+        let existante: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM structure WHERE type_structure = 'munaseb' AND statut = 'validee'",
+        )
+        .fetch_optional(pool)
+        .await
+        .unwrap();
         let structure_id = match existante {
             Some(id) => id,
             None => sqlx::query_scalar(
@@ -920,10 +1014,19 @@ mod tests {
                 .fetch_one(pool)
                 .await
                 .unwrap();
-        AffectationAgent { affectation_id, structure_id }
+        AffectationAgent {
+            affectation_id,
+            structure_id,
+        }
     }
 
-    fn acte(nip: &str, partenaire_id: Uuid, reference: &str, type_acte: TypeActeMunaseb, montant: i32) -> Acte {
+    fn acte(
+        nip: &str,
+        partenaire_id: Uuid,
+        reference: &str,
+        type_acte: TypeActeMunaseb,
+        montant: i32,
+    ) -> Acte {
         Acte {
             nip: nip.to_string(),
             partenaire_id,
@@ -944,13 +1047,16 @@ mod tests {
     #[sqlx::test]
     #[ignore]
     async fn creer_depuis_acte_en_base(pool: PgPool) {
-
         // La liste de l'enum et les lignes de la grille tarifaire doivent
         // rester identiques.
         let mut types_en_base: Vec<String> =
-            sqlx::query_scalar("SELECT type_acte FROM tarif_acte_munaseb").fetch_all(&pool).await.unwrap();
+            sqlx::query_scalar("SELECT type_acte FROM tarif_acte_munaseb")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
         types_en_base.sort();
-        let mut types_du_code: Vec<&str> = TypeActeMunaseb::TOUS.iter().map(|t| t.as_str()).collect();
+        let mut types_du_code: Vec<&str> =
+            TypeActeMunaseb::TOUS.iter().map(|t| t.as_str()).collect();
         types_du_code.sort();
         assert_eq!(types_en_base, types_du_code);
 
@@ -998,9 +1104,21 @@ mod tests {
         let mut contrats = Vec::new();
         for (patient_id, carte, paiement, debut, fin) in [
             // Période en cours, payée il y a 30 jours.
-            (patients[0], "TEST-REMB-0001", jours(-30), jours(-30), jours(300)),
+            (
+                patients[0],
+                "TEST-REMB-0001",
+                jours(-30),
+                jours(-30),
+                jours(300),
+            ),
             // Payée il y a 5 jours, couverture dans 25 jours : en carence.
-            (patients[2], "TEST-REMB-0003", jours(-5), debut_couverture_carence, jours(25 + 364)),
+            (
+                patients[2],
+                "TEST-REMB-0003",
+                jours(-5),
+                debut_couverture_carence,
+                jours(25 + 364),
+            ),
         ] {
             let contrat_id: Uuid = sqlx::query_scalar(
                 "INSERT INTO contrat_assurance_munaseb (patient_id, numero_carte, ufr, universite, num_matricule) \
@@ -1026,7 +1144,10 @@ mod tests {
         }
 
         let mut partenaires = Vec::new();
-        for (nom, statut) in [("Pharmacie Test Actif", "actif"), ("Pharmacie Test Suspendu", "suspendu")] {
+        for (nom, statut) in [
+            ("Pharmacie Test Actif", "actif"),
+            ("Pharmacie Test Suspendu", "suspendu"),
+        ] {
             let id: Uuid = sqlx::query_scalar(
                 "INSERT INTO partenaire_sante_munaseb (nom, type, ville, telephone, statut) \
                  VALUES ($1, 'pharmacie', 'Ouagadougou', '+22670010099', $2) RETURNING id",
@@ -1041,7 +1162,13 @@ mod tests {
         let (actif, suspendu) = (partenaires[0], partenaires[1]);
 
         // --- cas nominal : taux 80 %, arrondi ---
-        let pharmacie = acte(nip_couvert, actif, "REF-PHARMA-1", TypeActeMunaseb::Pharmacie, 1501);
+        let pharmacie = acte(
+            nip_couvert,
+            actif,
+            "REF-PHARMA-1",
+            TypeActeMunaseb::Pharmacie,
+            1501,
+        );
         let id = creer_depuis_acte(&pool, &pharmacie).await.unwrap();
         let (statut, montant_demande, montant_rembourse): (String, i32, Option<i32>) = sqlx::query_as(
             "SELECT statut, montant_demande_fcfa, montant_rembourse_fcfa FROM demande_remboursement_munaseb WHERE id = $1",
@@ -1100,28 +1227,43 @@ mod tests {
             creer_depuis_acte(&pool, &autre_patient).await,
             Err(ErreurDemandeRemboursement::ReferenceActeDejaUtilisee)
         ));
-        let nb_demandes: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM demande_remboursement_munaseb WHERE partenaire_id = $1")
-                .bind(actif)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(nb_demandes, 1, "aucune demande ne doit avoir été créée ou modifiée");
+        let nb_demandes: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM demande_remboursement_munaseb WHERE partenaire_id = $1",
+        )
+        .bind(actif)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            nb_demandes, 1,
+            "aucune demande ne doit avoir été créée ou modifiée"
+        );
 
         // --- forfait plafonné au forfait ---
-        let lunettes = acte(nip_couvert, actif, "REF-LUN-1", TypeActeMunaseb::Lunetterie, 20_000);
+        let lunettes = acte(
+            nip_couvert,
+            actif,
+            "REF-LUN-1",
+            TypeActeMunaseb::Lunetterie,
+            20_000,
+        );
         let id_lunettes = creer_depuis_acte(&pool, &lunettes).await.unwrap();
-        let montant_lunettes: i32 =
-            sqlx::query_scalar("SELECT montant_demande_fcfa FROM demande_remboursement_munaseb WHERE id = $1")
-                .bind(id_lunettes)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let montant_lunettes: i32 = sqlx::query_scalar(
+            "SELECT montant_demande_fcfa FROM demande_remboursement_munaseb WHERE id = $1",
+        )
+        .bind(id_lunettes)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(montant_lunettes, 15_000);
 
         // --- erreurs ---
         assert!(matches!(
-            creer_depuis_acte(&pool, &acte(nip_couvert, actif, "REF-0", TypeActeMunaseb::Pharmacie, 0)).await,
+            creer_depuis_acte(
+                &pool,
+                &acte(nip_couvert, actif, "REF-0", TypeActeMunaseb::Pharmacie, 0)
+            )
+            .await,
             Err(ErreurDemandeRemboursement::MontantInvalide)
         ));
         // Faute de frappe sur le dernier chiffre : refusée par Luhn, avant
@@ -1130,28 +1272,78 @@ mod tests {
         let dernier = nip_faute.pop().unwrap().to_digit(10).unwrap();
         nip_faute.push(char::from_digit((dernier + 1) % 10, 10).unwrap());
         assert!(matches!(
-            creer_depuis_acte(&pool, &acte(&nip_faute, actif, "REF-X", TypeActeMunaseb::Pharmacie, 1000)).await,
+            creer_depuis_acte(
+                &pool,
+                &acte(&nip_faute, actif, "REF-X", TypeActeMunaseb::Pharmacie, 1000)
+            )
+            .await,
             Err(ErreurDemandeRemboursement::NipInvalide)
         ));
         assert!(matches!(
-            creer_depuis_acte(&pool, &acte(&nip_inconnu, actif, "REF-X", TypeActeMunaseb::Pharmacie, 1000)).await,
+            creer_depuis_acte(
+                &pool,
+                &acte(
+                    &nip_inconnu,
+                    actif,
+                    "REF-X",
+                    TypeActeMunaseb::Pharmacie,
+                    1000
+                )
+            )
+            .await,
             Err(ErreurDemandeRemboursement::PatientInconnu)
         ));
         assert!(matches!(
-            creer_depuis_acte(&pool, &acte(nip_couvert, Uuid::nil(), "REF-X", TypeActeMunaseb::Pharmacie, 1000)).await,
+            creer_depuis_acte(
+                &pool,
+                &acte(
+                    nip_couvert,
+                    Uuid::nil(),
+                    "REF-X",
+                    TypeActeMunaseb::Pharmacie,
+                    1000
+                )
+            )
+            .await,
             Err(ErreurDemandeRemboursement::PartenaireInconnu)
         ));
         assert!(matches!(
-            creer_depuis_acte(&pool, &acte(nip_couvert, suspendu, "REF-X", TypeActeMunaseb::Pharmacie, 1000)).await,
+            creer_depuis_acte(
+                &pool,
+                &acte(
+                    nip_couvert,
+                    suspendu,
+                    "REF-X",
+                    TypeActeMunaseb::Pharmacie,
+                    1000
+                )
+            )
+            .await,
             Err(ErreurDemandeRemboursement::PartenaireSuspendu)
         ));
         assert!(matches!(
-            creer_depuis_acte(&pool, &acte(nip_sans_contrat, actif, "REF-X", TypeActeMunaseb::Pharmacie, 1000)).await,
+            creer_depuis_acte(
+                &pool,
+                &acte(
+                    nip_sans_contrat,
+                    actif,
+                    "REF-X",
+                    TypeActeMunaseb::Pharmacie,
+                    1000
+                )
+            )
+            .await,
             Err(ErreurDemandeRemboursement::NonCouvert)
         ));
 
         // Acte antérieur au paiement de la seule période : non couvert.
-        let mut hors_periode = acte(nip_couvert, actif, "REF-VIEUX", TypeActeMunaseb::Pharmacie, 1000);
+        let mut hors_periode = acte(
+            nip_couvert,
+            actif,
+            "REF-VIEUX",
+            TypeActeMunaseb::Pharmacie,
+            1000,
+        );
         hors_periode.date_acte = jours(-60);
         assert!(matches!(
             creer_depuis_acte(&pool, &hors_periode).await,
@@ -1159,14 +1351,31 @@ mod tests {
         ));
 
         // --- carence : acte après le paiement, avant le début ---
-        match creer_depuis_acte(&pool, &acte(nip_en_carence, actif, "REF-CARENCE", TypeActeMunaseb::Pharmacie, 1000)).await {
+        match creer_depuis_acte(
+            &pool,
+            &acte(
+                nip_en_carence,
+                actif,
+                "REF-CARENCE",
+                TypeActeMunaseb::Pharmacie,
+                1000,
+            ),
+        )
+        .await
+        {
             Err(ErreurDemandeRemboursement::EnCarence { debut_couverture }) => {
                 assert_eq!(debut_couverture, debut_couverture_carence)
             }
             autre => panic!("EnCarence attendu, obtenu {autre:?}"),
         }
         // Acte avant le paiement : jours non couverts, pas de carence.
-        let mut avant_paiement = acte(nip_en_carence, actif, "REF-AVANT-PAIEMENT", TypeActeMunaseb::Pharmacie, 1000);
+        let mut avant_paiement = acte(
+            nip_en_carence,
+            actif,
+            "REF-AVANT-PAIEMENT",
+            TypeActeMunaseb::Pharmacie,
+            1000,
+        );
         avant_paiement.date_acte = jours(-10);
         assert!(matches!(
             creer_depuis_acte(&pool, &avant_paiement).await,
@@ -1174,12 +1383,13 @@ mod tests {
         ));
 
         // --- la demande est rattachée à la période de l'acte ---
-        let periode_rattachee: Uuid =
-            sqlx::query_scalar("SELECT periode_id FROM demande_remboursement_munaseb WHERE id = $1")
-                .bind(id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let periode_rattachee: Uuid = sqlx::query_scalar(
+            "SELECT periode_id FROM demande_remboursement_munaseb WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         let periode_du_contrat: Uuid =
             sqlx::query_scalar("SELECT id FROM periode_adhesion_munaseb WHERE contrat_id = $1")
                 .bind(contrats[0])
@@ -1188,13 +1398,25 @@ mod tests {
                 .unwrap();
         assert_eq!(periode_rattachee, periode_du_contrat);
 
-        sqlx::query("UPDATE contrat_assurance_munaseb SET statut = 'suspendu' WHERE patient_id = $1")
-            .bind(patients[0])
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "UPDATE contrat_assurance_munaseb SET statut = 'suspendu' WHERE patient_id = $1",
+        )
+        .bind(patients[0])
+        .execute(&pool)
+        .await
+        .unwrap();
         assert!(matches!(
-            creer_depuis_acte(&pool, &acte(nip_couvert, actif, "REF-SUSP", TypeActeMunaseb::Pharmacie, 1000)).await,
+            creer_depuis_acte(
+                &pool,
+                &acte(
+                    nip_couvert,
+                    actif,
+                    "REF-SUSP",
+                    TypeActeMunaseb::Pharmacie,
+                    1000
+                )
+            )
+            .await,
             Err(ErreurDemandeRemboursement::NonCouvert)
         ));
         // Le rejeu d'un acte déjà enregistré reste idempotent même après la
@@ -1222,8 +1444,15 @@ mod tests {
             "DELETE FROM historique_statut_demande",
             "TRUNCATE historique_statut_demande",
         ] {
-            let erreur = sqlx::query(requete).execute(&pool).await.unwrap_err().to_string();
-            assert!(erreur.contains("jamais modifiées ni supprimées"), "{requete} : {erreur}");
+            let erreur = sqlx::query(requete)
+                .execute(&pool)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(
+                erreur.contains("jamais modifiées ni supprimées"),
+                "{requete} : {erreur}"
+            );
         }
         // Une transition sans agent est refusée (contrainte agent_si_transition).
         assert!(
@@ -1255,7 +1484,12 @@ mod tests {
 
     /// Patient avec un contrat et une période en cours (posée en base :
     /// `creer` impose une carence). Renvoie (NIP, utilisateur_id du patient).
-    async fn patient_couvert(pool: &PgPool, payload_nip: &str, telephone: &str, carte: &str) -> (String, Uuid) {
+    async fn patient_couvert(
+        pool: &PgPool,
+        payload_nip: &str,
+        telephone: &str,
+        carte: &str,
+    ) -> (String, Uuid) {
         let nip = nip_valide(payload_nip);
         let utilisateur_id: Uuid = sqlx::query_scalar(
             "INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('Test', 'Transitions', $1) RETURNING id",
@@ -1302,7 +1536,10 @@ mod tests {
             .unwrap()
     }
 
-    async fn historique(pool: &PgPool, demande_id: Uuid) -> Vec<(Option<String>, String, Option<Uuid>)> {
+    async fn historique(
+        pool: &PgPool,
+        demande_id: Uuid,
+    ) -> Vec<(Option<String>, String, Option<Uuid>)> {
         sqlx::query_as(
             "SELECT statut_precedent, statut_nouveau, agent_affectation_id FROM historique_statut_demande \
              WHERE demande_id = $1 ORDER BY date_changement, id",
@@ -1318,7 +1555,8 @@ mod tests {
     #[sqlx::test]
     #[ignore]
     async fn transitions_en_base(pool: PgPool) {
-        let (nip, _) = patient_couvert(&pool, "904040404040404", "+22670012001", "TEST-TR-0001").await;
+        let (nip, _) =
+            patient_couvert(&pool, "904040404040404", "+22670012001", "TEST-TR-0001").await;
         let partenaire: Uuid = sqlx::query_scalar(
             "INSERT INTO partenaire_sante_munaseb (nom, type, ville, telephone) \
              VALUES ('Pharmacie Test', 'pharmacie', 'Ouagadougou', '+22670012099') RETURNING id",
@@ -1332,9 +1570,18 @@ mod tests {
             let pool = pool.clone();
             let nip = nip.clone();
             async move {
-                creer_depuis_acte(&pool, &acte(&nip, partenaire, reference, TypeActeMunaseb::Pharmacie, montant))
-                    .await
-                    .unwrap()
+                creer_depuis_acte(
+                    &pool,
+                    &acte(
+                        &nip,
+                        partenaire,
+                        reference,
+                        TypeActeMunaseb::Pharmacie,
+                        montant,
+                    ),
+                )
+                .await
+                .unwrap()
             }
         };
 
@@ -1346,24 +1593,46 @@ mod tests {
         let d = creer("TR-D", 1_000).await;
 
         // --- création : ligne d'historique sans statut précédent ni agent ---
-        assert_eq!(historique(&pool, a).await, vec![(None, "en_attente".to_string(), None)]);
+        assert_eq!(
+            historique(&pool, a).await,
+            vec![(None, "en_attente".to_string(), None)]
+        );
 
         // --- transitions interdites ---
         match valider(&pool, a, agent).await {
-            Err(ErreurTransition::TransitionInvalide { statut_actuel }) => assert_eq!(statut_actuel, "en_attente"),
+            Err(ErreurTransition::TransitionInvalide { statut_actuel }) => {
+                assert_eq!(statut_actuel, "en_attente")
+            }
             autre => panic!("TransitionInvalide attendu, obtenu {autre:?}"),
         }
-        assert!(matches!(marquer_payee(&pool, a, agent).await, Err(ErreurTransition::TransitionInvalide { .. })));
-        assert!(matches!(prendre_en_charge(&pool, Uuid::nil(), agent).await, Err(ErreurTransition::DemandeInconnue)));
+        assert!(matches!(
+            marquer_payee(&pool, a, agent).await,
+            Err(ErreurTransition::TransitionInvalide { .. })
+        ));
+        assert!(matches!(
+            prendre_en_charge(&pool, Uuid::nil(), agent).await,
+            Err(ErreurTransition::DemandeInconnue)
+        ));
 
         // --- plafond : 90 000 puis 10 000 (reste du solde) puis 0 ---
         for demande in [a, b, c] {
             prendre_en_charge(&pool, demande, agent).await.unwrap();
         }
         assert_eq!(valider(&pool, a, agent).await.unwrap(), 90_000);
-        assert_eq!(valider(&pool, b, agent).await.unwrap(), 10_000, "plafonné au solde restant");
-        assert_eq!(valider(&pool, c, agent).await.unwrap(), 0, "solde épuisé : validé à 0, jamais rejeté");
-        assert!(matches!(prendre_en_charge(&pool, a, agent).await, Err(ErreurTransition::TransitionInvalide { .. })));
+        assert_eq!(
+            valider(&pool, b, agent).await.unwrap(),
+            10_000,
+            "plafonné au solde restant"
+        );
+        assert_eq!(
+            valider(&pool, c, agent).await.unwrap(),
+            0,
+            "solde épuisé : validé à 0, jamais rejeté"
+        );
+        assert!(matches!(
+            prendre_en_charge(&pool, a, agent).await,
+            Err(ErreurTransition::TransitionInvalide { .. })
+        ));
 
         // --- textes de notification ---
         assert_eq!(
@@ -1374,40 +1643,72 @@ mod tests {
                 StatutDemande::Valide.message_notification(),
             ]
         );
-        assert_eq!(messages(&pool, c).await.last().unwrap(), MESSAGE_VALIDEE_PLAFOND_ATTEINT);
+        assert_eq!(
+            messages(&pool, c).await.last().unwrap(),
+            MESSAGE_VALIDEE_PLAFOND_ATTEINT
+        );
 
         // --- paiement : notification si montant > 0, aucune à 0 FCFA ---
         marquer_payee(&pool, b, agent).await.unwrap();
-        assert_eq!(messages(&pool, b).await.last().unwrap(), StatutDemande::Paye.message_notification());
+        assert_eq!(
+            messages(&pool, b).await.last().unwrap(),
+            StatutDemande::Paye.message_notification()
+        );
         let avant = messages(&pool, c).await.len();
         marquer_payee(&pool, c, agent).await.unwrap();
-        assert_eq!(messages(&pool, c).await.len(), avant, "aucune notification pour un paiement de 0 FCFA");
+        assert_eq!(
+            messages(&pool, c).await.len(),
+            avant,
+            "aucune notification pour un paiement de 0 FCFA"
+        );
 
         // --- historique complet d'une demande ---
         assert_eq!(
             historique(&pool, b).await,
             vec![
                 (None, "en_attente".to_string(), None),
-                (Some("en_attente".to_string()), "en_cours".to_string(), Some(agent.affectation_id)),
-                (Some("en_cours".to_string()), "valide".to_string(), Some(agent.affectation_id)),
-                (Some("valide".to_string()), "paye".to_string(), Some(agent.affectation_id)),
+                (
+                    Some("en_attente".to_string()),
+                    "en_cours".to_string(),
+                    Some(agent.affectation_id)
+                ),
+                (
+                    Some("en_cours".to_string()),
+                    "valide".to_string(),
+                    Some(agent.affectation_id)
+                ),
+                (
+                    Some("valide".to_string()),
+                    "paye".to_string(),
+                    Some(agent.affectation_id)
+                ),
             ]
         );
 
         // --- rejet : motif obligatoire, borné, jamais dans la notification ---
-        assert!(matches!(rejeter(&pool, d, agent, "   ").await, Err(ErreurTransition::MotifVide)));
+        assert!(matches!(
+            rejeter(&pool, d, agent, "   ").await,
+            Err(ErreurTransition::MotifVide)
+        ));
         let trop_long = "é".repeat(MOTIF_LONGUEUR_MAX + 1);
-        assert!(matches!(rejeter(&pool, d, agent, &trop_long).await, Err(ErreurTransition::MotifTropLong)));
+        assert!(matches!(
+            rejeter(&pool, d, agent, &trop_long).await,
+            Err(ErreurTransition::MotifTropLong)
+        ));
         // Exactement 1 000 caractères accentués (2 000 octets) : accepté.
         let motif = "é".repeat(MOTIF_LONGUEUR_MAX);
         rejeter(&pool, d, agent, &motif).await.unwrap();
-        let (statut, motif_enregistre): (String, Option<String>) =
-            sqlx::query_as("SELECT statut, motif_rejet FROM demande_remboursement_munaseb WHERE id = $1")
-                .bind(d)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!((statut.as_str(), motif_enregistre.as_deref()), ("rejete", Some(motif.as_str())));
+        let (statut, motif_enregistre): (String, Option<String>) = sqlx::query_as(
+            "SELECT statut, motif_rejet FROM demande_remboursement_munaseb WHERE id = $1",
+        )
+        .bind(d)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            (statut.as_str(), motif_enregistre.as_deref()),
+            ("rejete", Some(motif.as_str()))
+        );
         let dernier = messages(&pool, d).await.pop().unwrap();
         assert_eq!(dernier, StatutDemande::Rejete.message_notification());
         assert!(!dernier.contains("éé"), "le motif n'apparaît pas");
@@ -1420,7 +1721,8 @@ mod tests {
     #[sqlx::test]
     #[ignore]
     async fn validations_simultanees_en_base(pool: PgPool) {
-        let (nip, _) = patient_couvert(&pool, "905050505050505", "+22670013001", "TEST-TR-0002").await;
+        let (nip, _) =
+            patient_couvert(&pool, "905050505050505", "+22670013001", "TEST-TR-0002").await;
         let partenaire: Uuid = sqlx::query_scalar(
             "INSERT INTO partenaire_sante_munaseb (nom, type, ville, telephone) \
              VALUES ('Pharmacie Test', 'pharmacie', 'Ouagadougou', '+22670013099') RETURNING id",
@@ -1433,14 +1735,26 @@ mod tests {
         // 100 000 x 80 % = 80 000 chacune ; ensemble 160 000 > plafond.
         let mut demandes = Vec::new();
         for reference in ["SIM-1", "SIM-2"] {
-            let id = creer_depuis_acte(&pool, &acte(&nip, partenaire, reference, TypeActeMunaseb::Pharmacie, 100_000))
-                .await
-                .unwrap();
+            let id = creer_depuis_acte(
+                &pool,
+                &acte(
+                    &nip,
+                    partenaire,
+                    reference,
+                    TypeActeMunaseb::Pharmacie,
+                    100_000,
+                ),
+            )
+            .await
+            .unwrap();
             prendre_en_charge(&pool, id, agent).await.unwrap();
             demandes.push(id);
         }
 
-        let (premier, second) = tokio::join!(valider(&pool, demandes[0], agent), valider(&pool, demandes[1], agent));
+        let (premier, second) = tokio::join!(
+            valider(&pool, demandes[0], agent),
+            valider(&pool, demandes[1], agent)
+        );
         let mut montants = [premier.unwrap(), second.unwrap()];
         montants.sort();
         assert_eq!(montants, [20_000, 80_000]);
@@ -1458,7 +1772,8 @@ mod tests {
     #[sqlx::test]
     #[ignore]
     async fn lectures_en_base(pool: PgPool) {
-        let (nip, _) = patient_couvert(&pool, "906060606060606", "+22670014001", "TEST-LEC-0001").await;
+        let (nip, _) =
+            patient_couvert(&pool, "906060606060606", "+22670014001", "TEST-LEC-0001").await;
         let partenaire: Uuid = sqlx::query_scalar(
             "INSERT INTO partenaire_sante_munaseb (nom, type, ville, telephone) \
              VALUES ('Pharmacie Lecture', 'pharmacie', 'Ouagadougou', '+22670014099') RETURNING id",
@@ -1471,9 +1786,18 @@ mod tests {
         let mut ids = Vec::new();
         for reference in ["LEC-1", "LEC-2", "LEC-3"] {
             ids.push(
-                creer_depuis_acte(&pool, &acte(&nip, partenaire, reference, TypeActeMunaseb::Pharmacie, 10_000))
-                    .await
-                    .unwrap(),
+                creer_depuis_acte(
+                    &pool,
+                    &acte(
+                        &nip,
+                        partenaire,
+                        reference,
+                        TypeActeMunaseb::Pharmacie,
+                        10_000,
+                    ),
+                )
+                .await
+                .unwrap(),
             );
         }
         // Ordre des identifiants = ordre d'arrivée (uuidv7), sur une même
@@ -1483,18 +1807,34 @@ mod tests {
         assert_eq!(tries, ids);
 
         // --- pagination par curseur : 2 puis 1 ---
-        let page1 = lister_demandes(&pool, Some(StatutDemande::EnAttente), None, 2).await.unwrap();
+        let page1 = lister_demandes(&pool, Some(StatutDemande::EnAttente), None, 2)
+            .await
+            .unwrap();
         assert_eq!(page1.iter().map(|d| d.id).collect::<Vec<_>>(), ids[..2]);
-        let page2 = lister_demandes(&pool, Some(StatutDemande::EnAttente), Some(page1[1].id), 2).await.unwrap();
+        let page2 = lister_demandes(&pool, Some(StatutDemande::EnAttente), Some(page1[1].id), 2)
+            .await
+            .unwrap();
         assert_eq!(page2.iter().map(|d| d.id).collect::<Vec<_>>(), ids[2..]);
 
         // --- une demande prise en charge ne décale pas la suite (P2) ---
         prendre_en_charge(&pool, ids[0], agent).await.unwrap();
-        let apres_page1 = lister_demandes(&pool, Some(StatutDemande::EnAttente), Some(page1[1].id), 2).await.unwrap();
-        assert_eq!(apres_page1.iter().map(|d| d.id).collect::<Vec<_>>(), ids[2..]);
-        let en_cours = lister_demandes(&pool, Some(StatutDemande::EnCours), None, 50).await.unwrap();
+        let apres_page1 =
+            lister_demandes(&pool, Some(StatutDemande::EnAttente), Some(page1[1].id), 2)
+                .await
+                .unwrap();
+        assert_eq!(
+            apres_page1.iter().map(|d| d.id).collect::<Vec<_>>(),
+            ids[2..]
+        );
+        let en_cours = lister_demandes(&pool, Some(StatutDemande::EnCours), None, 50)
+            .await
+            .unwrap();
         assert_eq!(en_cours.iter().map(|d| d.id).collect::<Vec<_>>(), [ids[0]]);
-        assert_eq!(lister_demandes(&pool, None, None, 50).await.unwrap().len(), 3, "sans filtre : toutes");
+        assert_eq!(
+            lister_demandes(&pool, None, None, 50).await.unwrap().len(),
+            3,
+            "sans filtre : toutes"
+        );
 
         // --- détail : solde, historique, nom de l'agent ---
         valider(&pool, ids[0], agent).await.unwrap();
@@ -1502,13 +1842,23 @@ mod tests {
         assert_eq!(detail.demande.statut, "valide");
         assert_eq!(detail.demande.montant_rembourse_fcfa, Some(8_000));
         assert_eq!(detail.demande.numero_carte, "TEST-LEC-0001");
-        assert_eq!(detail.solde_restant_periode_fcfa, PLAFOND_ANNUEL_FCFA - 8_000);
+        assert_eq!(
+            detail.solde_restant_periode_fcfa,
+            PLAFOND_ANNUEL_FCFA - 8_000
+        );
         let etapes: Vec<_> = detail
             .historique
             .iter()
             .map(|l| (l.statut_nouveau.as_str(), l.agent_prenom.as_deref()))
             .collect();
-        assert_eq!(etapes, [("en_attente", None), ("en_cours", Some("Awa")), ("valide", Some("Awa"))]);
+        assert_eq!(
+            etapes,
+            [
+                ("en_attente", None),
+                ("en_cours", Some("Awa")),
+                ("valide", Some("Awa"))
+            ]
+        );
 
         // --- ni NIP ni téléphone dans ce que voit l'agent ---
         let json = serde_json::to_string(&detail).unwrap();

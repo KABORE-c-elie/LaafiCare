@@ -17,7 +17,10 @@ use sqlx::PgPool;
 async fn index_presents(pool: PgPool) {
     for (table, index) in [
         ("code_secours", "code_secours_second_facteur_idx"),
-        ("jeton_renouvellement", "jeton_renouvellement_remplace_par_idx"),
+        (
+            "jeton_renouvellement",
+            "jeton_renouvellement_remplace_par_idx",
+        ),
         ("structure", "structure_createur_idx"),
         ("piece_justificative", "piece_justificative_structure_idx"),
         ("jeton_email", "jeton_email_compte_objet_idx"),
@@ -57,5 +60,8 @@ async fn cles_vers_des_tables_effacees_indexees(pool: PgPool) {
     .fetch_all(&pool)
     .await
     .unwrap();
-    assert!(sans_index.is_empty(), "clés étrangères sans index : {sans_index:?}");
+    assert!(
+        sans_index.is_empty(),
+        "clés étrangères sans index : {sans_index:?}"
+    );
 }

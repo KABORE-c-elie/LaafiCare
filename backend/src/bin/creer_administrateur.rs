@@ -35,22 +35,35 @@ async fn executer() -> Result<(), String> {
     let choix = console::lire_ligne("Choix : ").map_err(|e| e.to_string())?;
     let en_cours = match choix.as_str() {
         "1" => {
-            println!("Le nouvel administrateur doit avoir un compte patient actif, et être présent pour taper son mot de passe.");
-            let telephone = console::lire_ligne("Téléphone de son compte patient : ").map_err(|e| e.to_string())?;
-            let adresse = console::lire_ligne("Son email administrateur : ").map_err(|e| e.to_string())?;
+            println!(
+                "Le nouvel administrateur doit avoir un compte patient actif, et être présent pour taper son mot de passe."
+            );
+            let telephone = console::lire_ligne("Téléphone de son compte patient : ")
+                .map_err(|e| e.to_string())?;
+            let adresse =
+                console::lire_ligne("Son email administrateur : ").map_err(|e| e.to_string())?;
             let cnib = console::lire_cnib().map_err(|e| e.to_string())?;
             println!("Au nouvel administrateur de taper son mot de passe.");
-            let Some(mot_de_passe) = console::lire_nouveau_mot_de_passe().map_err(|e| e.to_string())? else {
-                return Err("Les deux saisies du mot de passe diffèrent. Rien n'a été créé.".into());
+            let Some(mot_de_passe) =
+                console::lire_nouveau_mot_de_passe().map_err(|e| e.to_string())?
+            else {
+                return Err(
+                    "Les deux saisies du mot de passe diffèrent. Rien n'a été créé.".into(),
+                );
             };
-            let saisie =
-                NouvelAdministrateur { telephone: &telephone, email: &adresse, cnib_chiffres: &cnib, mot_de_passe: &mot_de_passe };
+            let saisie = NouvelAdministrateur {
+                telephone: &telephone,
+                email: &adresse,
+                cnib_chiffres: &cnib,
+                mot_de_passe: &mot_de_passe,
+            };
             outils_administrateur::creer_administrateur(pool, email, operateur, &saisie)
                 .await
                 .map_err(|e| console::expliquer(&e))?
         }
         "2" => {
-            let adresse = console::lire_ligne("Email de l'administrateur à reprendre : ").map_err(|e| e.to_string())?;
+            let adresse = console::lire_ligne("Email de l'administrateur à reprendre : ")
+                .map_err(|e| e.to_string())?;
             outils_administrateur::reprendre_administrateur(pool, email, operateur, &adresse)
                 .await
                 .map_err(|e| console::expliquer(&e))?

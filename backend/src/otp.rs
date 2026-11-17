@@ -57,7 +57,11 @@ const ECHECS_AVANT_UN_SEUL_ESSAI: i16 = 5;
 /// `CryptoRng` -- doc rand 0.10.3) : un OTP prévisible casserait
 /// l'authentification.
 fn generer_code() -> String {
-    format!("{:0width$}", random_range(0..10u32.pow(LONGUEUR_CODE)), width = LONGUEUR_CODE as usize)
+    format!(
+        "{:0width$}",
+        random_range(0..10u32.pow(LONGUEUR_CODE)),
+        width = LONGUEUR_CODE as usize
+    )
 }
 
 // Le sel n'est pas un secret à conserver séparément : `utilisateur_id` sert
@@ -104,7 +108,10 @@ pub enum ErreurDemandeOtp {
 /// `now()` est l'heure de début de la transaction (doc PostgreSQL 18,
 /// « Current Date/Time ») : la même pour le nettoyage, le comptage et
 /// l'expiration.
-pub async fn generer_et_enregistrer(pool: &PgPool, utilisateur_id: Uuid) -> Result<String, ErreurDemandeOtp> {
+pub async fn generer_et_enregistrer(
+    pool: &PgPool,
+    utilisateur_id: Uuid,
+) -> Result<String, ErreurDemandeOtp> {
     let mut tx = pool.begin().await?;
 
     sqlx::query("SELECT id FROM utilisateur WHERE id = $1 FOR UPDATE")
@@ -143,7 +150,9 @@ pub async fn generer_et_enregistrer(pool: &PgPool, utilisateur_id: Uuid) -> Resu
     if attente > 0 {
         // La transaction est annulée à sa destruction : rien n'est écrit,
         // pas même le nettoyage, sans conséquence.
-        return Err(ErreurDemandeOtp::TropDeDemandes { reessayer_dans_secs: attente as u64 });
+        return Err(ErreurDemandeOtp::TropDeDemandes {
+            reessayer_dans_secs: attente as u64,
+        });
     }
 
     // Compte patient bloqué (P2) : les limites ci-dessus s'appliquent et
@@ -157,10 +166,12 @@ pub async fn generer_et_enregistrer(pool: &PgPool, utilisateur_id: Uuid) -> Resu
     .fetch_one(&mut *tx)
     .await?;
     if bloque {
-        sqlx::query("UPDATE utilisateur SET otp_code_hash = NULL, otp_expire_a = NULL WHERE id = $1")
-            .bind(utilisateur_id)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "UPDATE utilisateur SET otp_code_hash = NULL, otp_expire_a = NULL WHERE id = $1",
+        )
+        .bind(utilisateur_id)
+        .execute(&mut *tx)
+        .await?;
         sqlx::query("INSERT INTO envoi_otp (utilisateur_id) VALUES ($1)")
             .bind(utilisateur_id)
             .execute(&mut *tx)
@@ -214,7 +225,11 @@ pub enum VerificationOtp {
 /// sérialise les essais simultanés, qui ne peuvent donc jamais dépasser le
 /// nombre permis (même principe que le verrouillage BF-01). L'échec est
 /// compté d'avance et annulé en cas de succès.
-pub async fn verifier(pool: &PgPool, utilisateur_id: Uuid, code: &str) -> Result<VerificationOtp, sqlx::Error> {
+pub async fn verifier(
+    pool: &PgPool,
+    utilisateur_id: Uuid,
+    code: &str,
+) -> Result<VerificationOtp, sqlx::Error> {
     let essai: Option<(String, i16)> = sqlx::query_as(
         "UPDATE utilisateur SET otp_essais_restants = otp_essais_restants - 1, otp_echecs = otp_echecs + 1 \
          WHERE id = $1 AND otp_code_hash IS NOT NULL AND otp_expire_a > now() AND otp_essais_restants > 0 \
@@ -241,10 +256,12 @@ pub async fn verifier(pool: &PgPool, utilisateur_id: Uuid, code: &str) -> Result
     }
 
     if essais_restants == 0 {
-        sqlx::query("UPDATE utilisateur SET otp_code_hash = NULL, otp_expire_a = NULL WHERE id = $1")
-            .bind(utilisateur_id)
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            "UPDATE utilisateur SET otp_code_hash = NULL, otp_expire_a = NULL WHERE id = $1",
+        )
+        .bind(utilisateur_id)
+        .execute(pool)
+        .await?;
         return Ok(VerificationOtp::EssaisEpuises);
     }
 
@@ -314,7 +331,9 @@ mod tests {
 
     fn attente(resultat: Result<String, ErreurDemandeOtp>) -> u64 {
         match resultat {
-            Err(ErreurDemandeOtp::TropDeDemandes { reessayer_dans_secs }) => reessayer_dans_secs,
+            Err(ErreurDemandeOtp::TropDeDemandes {
+                reessayer_dans_secs,
+            }) => reessayer_dans_secs,
             autre => panic!("attendu TropDeDemandes, obtenu {autre:?}"),
         }
     }
@@ -337,11 +356,17 @@ mod tests {
         }
 
         // Mauvais code : refusé, et le vrai code reste utilisable ensuite.
-        assert_eq!(verifier(&pool, id, autre_code(&second_code)).await.unwrap(), VerificationOtp::Invalide);
+        assert_eq!(
+            verifier(&pool, id, autre_code(&second_code)).await.unwrap(),
+            VerificationOtp::Invalide
+        );
 
         // Règle 2 (NIST) : un code vérifié avec succès ne doit plus être
         // réutilisable, même immédiatement après, dans sa fenêtre de 5 min.
-        assert_eq!(verifier(&pool, id, &second_code).await.unwrap(), VerificationOtp::Valide);
+        assert_eq!(
+            verifier(&pool, id, &second_code).await.unwrap(),
+            VerificationOtp::Valide
+        );
         assert_eq!(
             verifier(&pool, id, &second_code).await.unwrap(),
             VerificationOtp::Invalide,
@@ -397,12 +422,16 @@ mod tests {
         let id = utilisateur(&pool, "+22670009004").await;
         generer_et_enregistrer(&pool, id).await.unwrap();
 
-        let restants: i64 = sqlx::query_scalar("SELECT count(*) FROM envoi_otp WHERE utilisateur_id = $1")
-            .bind(autre)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(restants, 0, "l'envoi de plus d'une heure d'un autre numéro doit être effacé");
+        let restants: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM envoi_otp WHERE utilisateur_id = $1")
+                .bind(autre)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            restants, 0,
+            "l'envoi de plus d'une heure d'un autre numéro doit être effacé"
+        );
     }
 
     #[sqlx::test]
@@ -414,23 +443,39 @@ mod tests {
         let code = generer_et_enregistrer(&pool, id).await.unwrap();
         assert_eq!(compteurs(&pool, id).await, (0, 5));
         for _ in 0..4 {
-            assert_eq!(verifier(&pool, id, autre_code(&code)).await.unwrap(), VerificationOtp::Invalide);
+            assert_eq!(
+                verifier(&pool, id, autre_code(&code)).await.unwrap(),
+                VerificationOtp::Invalide
+            );
         }
-        assert_eq!(verifier(&pool, id, autre_code(&code)).await.unwrap(), VerificationOtp::EssaisEpuises);
-        assert_eq!(verifier(&pool, id, &code).await.unwrap(), VerificationOtp::Invalide, "code effacé");
+        assert_eq!(
+            verifier(&pool, id, autre_code(&code)).await.unwrap(),
+            VerificationOtp::EssaisEpuises
+        );
+        assert_eq!(
+            verifier(&pool, id, &code).await.unwrap(),
+            VerificationOtp::Invalide,
+            "code effacé"
+        );
         assert_eq!(compteurs(&pool, id).await, (5, 0));
 
         // Nouveau code : le cumul n'est pas remis à zéro, un seul essai.
         reculer_envois(&pool, id, 61.0).await;
         let code = generer_et_enregistrer(&pool, id).await.unwrap();
         assert_eq!(compteurs(&pool, id).await, (5, 1));
-        assert_eq!(verifier(&pool, id, autre_code(&code)).await.unwrap(), VerificationOtp::EssaisEpuises);
+        assert_eq!(
+            verifier(&pool, id, autre_code(&code)).await.unwrap(),
+            VerificationOtp::EssaisEpuises
+        );
 
         // Encore un seul essai ; un succès remet le cumul à zéro.
         reculer_envois(&pool, id, 61.0).await;
         let code = generer_et_enregistrer(&pool, id).await.unwrap();
         assert_eq!(compteurs(&pool, id).await, (6, 1));
-        assert_eq!(verifier(&pool, id, &code).await.unwrap(), VerificationOtp::Valide);
+        assert_eq!(
+            verifier(&pool, id, &code).await.unwrap(),
+            VerificationOtp::Valide
+        );
         assert_eq!(compteurs(&pool, id).await.0, 0);
 
         // Le code suivant a de nouveau 5 essais.

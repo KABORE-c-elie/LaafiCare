@@ -129,8 +129,14 @@ mod tests {
         let b = generer(&pool).await.unwrap();
 
         assert_eq!(a.len(), 16);
-        assert!(valider(&a), "le NIP généré doit passer sa propre validation");
+        assert!(
+            valider(&a),
+            "le NIP généré doit passer sa propre validation"
+        );
         assert!(valider(&b));
-        assert_ne!(a, b, "deux appels doivent produire des NIP différents (séquence)");
+        assert_ne!(
+            a, b,
+            "deux appels doivent produire des NIP différents (séquence)"
+        );
     }
 }

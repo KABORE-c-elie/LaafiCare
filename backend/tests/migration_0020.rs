@@ -17,12 +17,13 @@ fn contrainte(erreur: sqlx::Error) -> String {
 }
 
 async fn compte(pool: &PgPool, telephone: &str, type_compte: &str) -> Uuid {
-    let utilisateur_id: Uuid =
-        sqlx::query_scalar("INSERT INTO utilisateur (telephone, email) VALUES ($1, $1 || '@example.org') RETURNING id")
-            .bind(telephone)
-            .fetch_one(pool)
-            .await
-            .unwrap();
+    let utilisateur_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO utilisateur (telephone, email) VALUES ($1, $1 || '@example.org') RETURNING id",
+    )
+    .bind(telephone)
+    .fetch_one(pool)
+    .await
+    .unwrap();
     sqlx::query_scalar("INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, $2, 'x') RETURNING id")
         .bind(utilisateur_id)
         .bind(type_compte)
@@ -31,7 +32,13 @@ async fn compte(pool: &PgPool, telephone: &str, type_compte: &str) -> Uuid {
         .unwrap()
 }
 
-async fn jeton(pool: &PgPool, compte_id: Uuid, type_compte: &str, objet: &str, empreinte: u8) -> Result<(), sqlx::Error> {
+async fn jeton(
+    pool: &PgPool,
+    compte_id: Uuid,
+    type_compte: &str,
+    objet: &str,
+    empreinte: u8,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO jeton_email (compte_id, compte_type, objet, empreinte, email_vise, expire_le) \
          VALUES ($1, $2, $3, $4, 'a@example.org', now() + interval '24 hours')",
@@ -53,26 +60,69 @@ async fn jetons_d_email(pool: PgPool) {
 
     // Jamais pour un compte patient (deux contrôles : type annoncé, et type
     // réel par la clé étrangère composite).
-    assert_eq!(contrainte(jeton(&pool, patient, "patient", "verification_email", 1).await.unwrap_err()), "jeton_email_type_compte");
     assert_eq!(
-        contrainte(jeton(&pool, patient, "professionnel", "verification_email", 1).await.unwrap_err()),
+        contrainte(
+            jeton(&pool, patient, "patient", "verification_email", 1)
+                .await
+                .unwrap_err()
+        ),
+        "jeton_email_type_compte"
+    );
+    assert_eq!(
+        contrainte(
+            jeton(&pool, patient, "professionnel", "verification_email", 1)
+                .await
+                .unwrap_err()
+        ),
         "jeton_email_compte"
     );
     // Objet inconnu.
     assert_eq!(
-        contrainte(jeton(&pool, professionnel, "professionnel", "autre", 1).await.unwrap_err()),
+        contrainte(
+            jeton(&pool, professionnel, "professionnel", "autre", 1)
+                .await
+                .unwrap_err()
+        ),
         "jeton_email_objet_check"
     );
 
-    jeton(&pool, professionnel, "professionnel", "verification_email", 1).await.unwrap();
+    jeton(
+        &pool,
+        professionnel,
+        "professionnel",
+        "verification_email",
+        1,
+    )
+    .await
+    .unwrap();
     // Même empreinte : refusée ; second jeton de vérification en attente :
     // refusé tant que le premier n'est pas annulé.
     assert_eq!(
-        contrainte(jeton(&pool, professionnel, "professionnel", "verification_email", 1).await.unwrap_err()),
+        contrainte(
+            jeton(
+                &pool,
+                professionnel,
+                "professionnel",
+                "verification_email",
+                1
+            )
+            .await
+            .unwrap_err()
+        ),
         "jeton_email_empreinte_key"
     );
     assert_eq!(
-        contrainte(jeton(&pool, professionnel, "professionnel", "verification_email", 2).await.unwrap_err()),
+        contrainte(
+            jeton(
+                &pool,
+                professionnel,
+                "professionnel",
+                "verification_email",
+                2
+            )
+            .await
+            .unwrap_err()
+        ),
         "jeton_email_une_verification_en_attente"
     );
     sqlx::query("UPDATE jeton_email SET annule_le = now() WHERE compte_id = $1")
@@ -80,13 +130,22 @@ async fn jetons_d_email(pool: PgPool) {
         .execute(&pool)
         .await
         .unwrap();
-    jeton(&pool, professionnel, "professionnel", "verification_email", 2).await.unwrap();
+    jeton(
+        &pool,
+        professionnel,
+        "professionnel",
+        "verification_email",
+        2,
+    )
+    .await
+    .unwrap();
 
     // Jamais utilisé et annulé à la fois.
-    let erreur = sqlx::query("UPDATE jeton_email SET utilise_le = now() WHERE annule_le IS NOT NULL")
-        .execute(&pool)
-        .await
-        .unwrap_err();
+    let erreur =
+        sqlx::query("UPDATE jeton_email SET utilise_le = now() WHERE annule_le IS NOT NULL")
+            .execute(&pool)
+            .await
+            .unwrap_err();
     assert_eq!(contrainte(erreur), "jeton_email_utilise_ou_annule");
 }
 
@@ -135,44 +194,67 @@ async fn traces_des_administrateurs(pool: PgPool) {
         .execute(&pool)
         .await
         .unwrap_err();
-    assert_eq!(contrainte(erreur), "creation_administrateur_un_seul_premier");
-    sqlx::query("INSERT INTO creation_administrateur (compte_id, cree_par_compte_id) VALUES ($1, $2)")
-        .bind(second)
-        .bind(premier)
-        .execute(&pool)
-        .await
-        .unwrap();
+    assert_eq!(
+        contrainte(erreur),
+        "creation_administrateur_un_seul_premier"
+    );
+    sqlx::query(
+        "INSERT INTO creation_administrateur (compte_id, cree_par_compte_id) VALUES ($1, $2)",
+    )
+    .bind(second)
+    .bind(premier)
+    .execute(&pool)
+    .await
+    .unwrap();
     // Jamais un compte non administrateur, ni comme créé, ni comme créateur.
     for (cree, par, attendue) in [
-        (professionnel, Some(premier), "creation_administrateur_compte"),
-        (troisieme, Some(professionnel), "creation_administrateur_cree_par"),
-        (troisieme, Some(troisieme), "creation_administrateur_pas_soi_meme"),
+        (
+            professionnel,
+            Some(premier),
+            "creation_administrateur_compte",
+        ),
+        (
+            troisieme,
+            Some(professionnel),
+            "creation_administrateur_cree_par",
+        ),
+        (
+            troisieme,
+            Some(troisieme),
+            "creation_administrateur_pas_soi_meme",
+        ),
     ] {
-        let erreur = sqlx::query("INSERT INTO creation_administrateur (compte_id, cree_par_compte_id) VALUES ($1, $2)")
-            .bind(cree)
-            .bind(par)
-            .execute(&pool)
-            .await
-            .unwrap_err();
+        let erreur = sqlx::query(
+            "INSERT INTO creation_administrateur (compte_id, cree_par_compte_id) VALUES ($1, $2)",
+        )
+        .bind(cree)
+        .bind(par)
+        .execute(&pool)
+        .await
+        .unwrap_err();
         assert_eq!(contrainte(erreur), attendue);
     }
 
-    sqlx::query("INSERT INTO reprise_administrateur (compte_id, repris_par_compte_id) VALUES ($1, $2)")
-        .bind(second)
-        .bind(premier)
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO reprise_administrateur (compte_id, repris_par_compte_id) VALUES ($1, $2)",
+    )
+    .bind(second)
+    .bind(premier)
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query("INSERT INTO reprise_administrateur (compte_id) VALUES ($1)")
         .bind(premier)
         .execute(&pool)
         .await
         .unwrap();
-    let erreur = sqlx::query("INSERT INTO reprise_administrateur (compte_id, repris_par_compte_id) VALUES ($1, $1)")
-        .bind(second)
-        .execute(&pool)
-        .await
-        .unwrap_err();
+    let erreur = sqlx::query(
+        "INSERT INTO reprise_administrateur (compte_id, repris_par_compte_id) VALUES ($1, $1)",
+    )
+    .bind(second)
+    .execute(&pool)
+    .await
+    .unwrap_err();
     assert_eq!(contrainte(erreur), "reprise_administrateur_pas_soi_meme");
 
     // Jamais modifiées ni supprimées.
@@ -185,6 +267,9 @@ async fn traces_des_administrateurs(pool: PgPool) {
         "TRUNCATE reprise_administrateur",
     ] {
         let erreur = sqlx::query(requete).execute(&pool).await.unwrap_err();
-        assert!(format!("{erreur}").contains("jamais modifiées ni supprimées"), "{requete} : {erreur}");
+        assert!(
+            format!("{erreur}").contains("jamais modifiées ni supprimées"),
+            "{requete} : {erreur}"
+        );
     }
 }

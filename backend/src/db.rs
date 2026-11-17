@@ -74,16 +74,21 @@ pub static MIGRATIONS: Migrator = sqlx::migrate!();
 /// une base en retard et échoueraient plus tard, au milieu d'une requête.
 /// Renvoie le nombre de migrations manquantes.
 pub async fn migrations_manquantes(pool: &PgPool) -> Result<usize, sqlx::Error> {
-    let journal_present: bool = sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
-        .fetch_one(pool)
-        .await?;
+    let journal_present: bool =
+        sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
+            .fetch_one(pool)
+            .await?;
     if !journal_present {
         return Ok(MIGRATIONS.iter().count());
     }
-    let appliquees: Vec<i64> = sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE success")
-        .fetch_all(pool)
-        .await?;
-    Ok(MIGRATIONS.iter().filter(|m| !appliquees.contains(&m.version)).count())
+    let appliquees: Vec<i64> =
+        sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE success")
+            .fetch_all(pool)
+            .await?;
+    Ok(MIGRATIONS
+        .iter()
+        .filter(|m| !appliquees.contains(&m.version))
+        .count())
 }
 
 pub async fn connecter(database_url: &str) -> Result<PgPool, sqlx::Error> {
@@ -91,7 +96,10 @@ pub async fn connecter(database_url: &str) -> Result<PgPool, sqlx::Error> {
 }
 
 /// `connecter`, avec un pool dimensionné par l'appelant (le serveur).
-pub async fn connecter_avec(database_url: &str, options: &OptionsPool) -> Result<PgPool, sqlx::Error> {
+pub async fn connecter_avec(
+    database_url: &str,
+    options: &OptionsPool,
+) -> Result<PgPool, sqlx::Error> {
     let mut tentative: u32 = 1;
     let mut delai = DELAI_INITIAL;
 

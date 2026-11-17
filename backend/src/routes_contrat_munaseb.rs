@@ -19,11 +19,13 @@ use serde::{Deserialize, Serialize};
 use sqlx::types::Uuid;
 
 use crate::AppState;
-use crate::erreur_api::{CheminApi, JsonApi, ReponseErreur, RequeteApi, reponse_erreur, reponse_erreur_interne};
+use crate::erreur_api::{
+    CheminApi, JsonApi, ReponseErreur, RequeteApi, reponse_erreur, reponse_erreur_interne,
+};
 use crate::extracteur_jwt::{AgentMunaseb, MembreMunaseb, ResponsableMunaseb};
 use laaficare_backend::contrat_assurance_munaseb::{
-    self as contrat, Adhesion, DetailContrat, ErreurContratAssuranceMunaseb, Parametres, Renouvellement,
-    VersionParametres,
+    self as contrat, Adhesion, DetailContrat, ErreurContratAssuranceMunaseb, Parametres,
+    Renouvellement, VersionParametres,
 };
 
 // Mêmes bornes que les autres listes de l'API.
@@ -40,7 +42,9 @@ fn mapper_erreur(erreur: ErreurContratAssuranceMunaseb) -> ReponseErreur {
         E::PeriodeFutureDejaPayee => (StatusCode::CONFLICT, "periode_future_deja_payee"),
         E::NipInvalide => (StatusCode::UNPROCESSABLE_ENTITY, "nip_invalide"),
         E::PatientInconnu => (StatusCode::NOT_FOUND, "patient_inconnu"),
-        E::ReferenceTransactionDejaUtilisee => (StatusCode::CONFLICT, "reference_transaction_deja_utilisee"),
+        E::ReferenceTransactionDejaUtilisee => {
+            (StatusCode::CONFLICT, "reference_transaction_deja_utilisee")
+        }
         E::DonneesInvalides(_) => (StatusCode::UNPROCESSABLE_ENTITY, "donnees_invalides"),
         // Même code que les autres limites de l'API (O5, R5).
         E::TropDEchecs { .. } => (StatusCode::TOO_MANY_REQUESTS, "trop_de_demandes"),
@@ -61,12 +65,16 @@ fn mapper_erreur(erreur: ErreurContratAssuranceMunaseb) -> ReponseErreur {
 /// `routes_patient::reponse_erreur_patient`.
 fn reponse_erreur_contrat(erreur: ErreurContratAssuranceMunaseb) -> Response {
     let reessayer_dans_secs = match &erreur {
-        ErreurContratAssuranceMunaseb::TropDEchecs { reessayer_dans_secs } => Some(*reessayer_dans_secs),
+        ErreurContratAssuranceMunaseb::TropDEchecs {
+            reessayer_dans_secs,
+        } => Some(*reessayer_dans_secs),
         _ => None,
     };
     let mut reponse = mapper_erreur(erreur).into_response();
     if let Some(secs) = reessayer_dans_secs {
-        reponse.headers_mut().insert(RETRY_AFTER, HeaderValue::from(secs));
+        reponse
+            .headers_mut()
+            .insert(RETRY_AFTER, HeaderValue::from(secs));
     }
     reponse
 }
@@ -94,7 +102,9 @@ async fn relire(state: &AppState, contrat_id: Uuid) -> Result<DetailContrat, Rep
     contrat::detail_contrat(&state.db, contrat_id)
         .await
         .map_err(|e| reponse_erreur_interne("detail_contrat", &e.to_string()))?
-        .ok_or_else(|| reponse_erreur_interne("detail_contrat", "contrat introuvable après écriture"))
+        .ok_or_else(|| {
+            reponse_erreur_interne("detail_contrat", "contrat introuvable après écriture")
+        })
 }
 
 // ---------------------------------------------------------------------
@@ -122,7 +132,10 @@ pub async fn modifier_parametres(
     State(state): State<AppState>,
     JsonApi(corps): JsonApi<Parametres>,
 ) -> Result<Json<VersionParametres>, ReponseErreur> {
-    contrat::modifier_parametres(&state.db, responsable, corps).await.map(Json).map_err(mapper_erreur)
+    contrat::modifier_parametres(&state.db, responsable, corps)
+        .await
+        .map(Json)
+        .map_err(mapper_erreur)
 }
 
 #[derive(Deserialize)]
@@ -149,7 +162,11 @@ pub async fn historique_parametres(
     let versions = contrat::historique_parametres(&state.db, filtre.avant, limite)
         .await
         .map_err(|e| reponse_erreur_interne("historique_parametres", &e.to_string()))?;
-    let suivant = if versions.len() as i64 == limite { versions.last().map(|v| v.id) } else { None };
+    let suivant = if versions.len() as i64 == limite {
+        versions.last().map(|v| v.id)
+    } else {
+        None
+    };
     Ok(Json(HistoriqueReponse { versions, suivant }))
 }
 
@@ -165,8 +182,12 @@ pub async fn adherer(
     State(state): State<AppState>,
     JsonApi(corps): JsonApi<Adhesion>,
 ) -> Result<(StatusCode, Json<DetailContrat>), Response> {
-    let contrat_id = contrat::adherer(&state.db, agent, &corps).await.map_err(reponse_erreur_contrat)?;
-    let detail = relire(&state, contrat_id).await.map_err(IntoResponse::into_response)?;
+    let contrat_id = contrat::adherer(&state.db, agent, &corps)
+        .await
+        .map_err(reponse_erreur_contrat)?;
+    let detail = relire(&state, contrat_id)
+        .await
+        .map_err(IntoResponse::into_response)?;
     Ok((StatusCode::CREATED, Json(detail)))
 }
 
@@ -210,7 +231,9 @@ pub async fn renouveler(
     CheminApi(contrat_id): CheminApi<Uuid>,
     JsonApi(corps): JsonApi<Renouvellement>,
 ) -> Result<(StatusCode, Json<DetailContrat>), ReponseErreur> {
-    contrat::renouveler(&state.db, agent, contrat_id, &corps).await.map_err(mapper_erreur)?;
+    contrat::renouveler(&state.db, agent, contrat_id, &corps)
+        .await
+        .map_err(mapper_erreur)?;
     Ok((StatusCode::CREATED, Json(relire(&state, contrat_id).await?)))
 }
 
@@ -222,27 +245,72 @@ mod tests {
     fn erreurs_du_contrat() {
         use ErreurContratAssuranceMunaseb as E;
         for (erreur, statut, code) in [
-            (E::NumeroCarteDejaUtilise, StatusCode::CONFLICT, "numero_carte_deja_utilise"),
-            (E::ContratDejaExistant, StatusCode::CONFLICT, "contrat_deja_existant"),
+            (
+                E::NumeroCarteDejaUtilise,
+                StatusCode::CONFLICT,
+                "numero_carte_deja_utilise",
+            ),
+            (
+                E::ContratDejaExistant,
+                StatusCode::CONFLICT,
+                "contrat_deja_existant",
+            ),
             (E::AucunContrat, StatusCode::NOT_FOUND, "contrat_inconnu"),
             (E::ContratSuspendu, StatusCode::CONFLICT, "contrat_suspendu"),
-            (E::PeriodeFutureDejaPayee, StatusCode::CONFLICT, "periode_future_deja_payee"),
-            (E::NipInvalide, StatusCode::UNPROCESSABLE_ENTITY, "nip_invalide"),
+            (
+                E::PeriodeFutureDejaPayee,
+                StatusCode::CONFLICT,
+                "periode_future_deja_payee",
+            ),
+            (
+                E::NipInvalide,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "nip_invalide",
+            ),
             (E::PatientInconnu, StatusCode::NOT_FOUND, "patient_inconnu"),
-            (E::ReferenceTransactionDejaUtilisee, StatusCode::CONFLICT, "reference_transaction_deja_utilisee"),
-            (E::DonneesInvalides("ufr : obligatoire.".into()), StatusCode::UNPROCESSABLE_ENTITY, "donnees_invalides"),
-            (E::TropDEchecs { reessayer_dans_secs: 42 }, StatusCode::TOO_MANY_REQUESTS, "trop_de_demandes"),
-            (E::ContratExpire, StatusCode::INTERNAL_SERVER_ERROR, "erreur_interne"),
-            (E::Interne("détail secret".into()), StatusCode::INTERNAL_SERVER_ERROR, "erreur_interne"),
+            (
+                E::ReferenceTransactionDejaUtilisee,
+                StatusCode::CONFLICT,
+                "reference_transaction_deja_utilisee",
+            ),
+            (
+                E::DonneesInvalides("ufr : obligatoire.".into()),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "donnees_invalides",
+            ),
+            (
+                E::TropDEchecs {
+                    reessayer_dans_secs: 42,
+                },
+                StatusCode::TOO_MANY_REQUESTS,
+                "trop_de_demandes",
+            ),
+            (
+                E::ContratExpire,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "erreur_interne",
+            ),
+            (
+                E::Interne("détail secret".into()),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "erreur_interne",
+            ),
         ] {
             let (s, Json(corps)) = mapper_erreur(erreur);
             assert_eq!((s, corps.code), (statut, code));
             assert!(!corps.erreur.contains("secret"));
         }
         // Retry-After seulement pour la limite d'échecs.
-        let reponse = reponse_erreur_contrat(E::TropDEchecs { reessayer_dans_secs: 42 });
+        let reponse = reponse_erreur_contrat(E::TropDEchecs {
+            reessayer_dans_secs: 42,
+        });
         assert_eq!(reponse.headers().get(RETRY_AFTER).unwrap(), "42");
-        assert!(reponse_erreur_contrat(E::PatientInconnu).headers().get(RETRY_AFTER).is_none());
+        assert!(
+            reponse_erreur_contrat(E::PatientInconnu)
+                .headers()
+                .get(RETRY_AFTER)
+                .is_none()
+        );
     }
 
     /// Les routes par le vrai extracteur `AgentMunaseb` (données fictives) :
@@ -276,7 +344,10 @@ mod tests {
         let db = state.db.clone();
 
         // Patient fictif.
-        let nip = (0..=9).map(|c| format!("900000000045001{c}")).find(|n| nip::valider(n)).unwrap();
+        let nip = (0..=9)
+            .map(|c| format!("900000000045001{c}"))
+            .find(|n| nip::valider(n))
+            .unwrap();
         let identite: Uuid = sqlx::query_scalar(
             "INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('OUEDRAOGO', 'Awa', '+22670450001') RETURNING id",
         )
@@ -304,7 +375,11 @@ mod tests {
                 .fetch_one(&db)
                 .await
                 .unwrap();
-                sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1").bind(u).execute(&db).await.unwrap();
+                sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1")
+                    .bind(u)
+                    .execute(&db)
+                    .await
+                    .unwrap();
                 sqlx::query_scalar::<_, Uuid>(
                     "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'professionnel', 'x') RETURNING id",
                 )
@@ -342,39 +417,72 @@ mod tests {
                         .fetch_one(&state.db)
                         .await
                         .unwrap();
-                let session = session::ouvrir(&state.db, compte, Some(affectation)).await.unwrap();
+                let session = session::ouvrir(&state.db, compte, Some(affectation))
+                    .await
+                    .unwrap();
                 let jeton = state
                     .jwt
-                    .emettre(SorteJeton::ProfessionnelEnExercice, compte, 0, Some(affectation), Some(session.session_id))
+                    .emettre(
+                        SorteJeton::ProfessionnelEnExercice,
+                        compte,
+                        0,
+                        Some(affectation),
+                        Some(session.session_id),
+                    )
                     .unwrap();
                 format!("Bearer {jeton}")
             }
         };
-        let parts = |en_tete: &str| Request::builder().header(AUTHORIZATION, en_tete).body(()).unwrap().into_parts().0;
+        let parts = |en_tete: &str| {
+            Request::builder()
+                .header(AUTHORIZATION, en_tete)
+                .body(())
+                .unwrap()
+                .into_parts()
+                .0
+        };
         let extraire = |en_tete: String| {
             let state = state.clone();
             async move { AgentMunaseb::from_request_parts(&mut parts(&en_tete), &state).await }
         };
 
         // Refus avant la route.
-        let jeton_patient = state.jwt.emettre(SorteJeton::Patient, Uuid::max(), 0, None, Some(Uuid::max())).unwrap();
-        let refus = extraire(format!("Bearer {jeton_patient}")).await.map_err(IntoResponse::into_response).unwrap_err();
+        let jeton_patient = state
+            .jwt
+            .emettre(SorteJeton::Patient, Uuid::max(), 0, None, Some(Uuid::max()))
+            .unwrap();
+        let refus = extraire(format!("Bearer {jeton_patient}"))
+            .await
+            .map_err(IntoResponse::into_response)
+            .unwrap_err();
         assert_eq!(refus.status(), StatusCode::UNAUTHORIZED);
         let createur_attente = compte_pro("+22670450002", "KABRE").await;
         let attente = structure(createur_attente, "en_attente").await;
         let en_attente = en_exercice(createur_attente, attente, "agent_assurance_munaseb").await;
-        let refus = extraire(en_attente).await.map_err(IntoResponse::into_response).unwrap_err();
+        let refus = extraire(en_attente)
+            .await
+            .map_err(IntoResponse::into_response)
+            .unwrap_err();
         assert_eq!(refus.status(), StatusCode::FORBIDDEN);
 
         // La MUNASEB validée : un responsable et un agent.
         let compte_responsable = compte_pro("+22670450004", "ZONGO").await;
         let munaseb = structure(compte_responsable, "validee").await;
         let jeton_responsable = en_exercice(compte_responsable, munaseb, "responsable").await;
-        let jeton = en_exercice(compte_pro("+22670450003", "KABRE").await, munaseb, "agent_assurance_munaseb").await;
+        let jeton = en_exercice(
+            compte_pro("+22670450003", "KABRE").await,
+            munaseb,
+            "agent_assurance_munaseb",
+        )
+        .await;
         let agent = || async { extraire(jeton.clone()).await.unwrap() };
         let membre = |en_tete: String| {
             let state = state.clone();
-            async move { MembreMunaseb::from_request_parts(&mut parts(&en_tete), &state).await.unwrap() }
+            async move {
+                MembreMunaseb::from_request_parts(&mut parts(&en_tete), &state)
+                    .await
+                    .unwrap()
+            }
         };
         let responsable = |en_tete: String| {
             let state = state.clone();
@@ -383,11 +491,22 @@ mod tests {
 
         // Rôles : l'agent ne modifie pas les paramètres (403 acces_refuse),
         // le responsable n'enregistre pas de contrat (403).
-        let refus = responsable(jeton.clone()).await.map_err(IntoResponse::into_response).unwrap_err();
+        let refus = responsable(jeton.clone())
+            .await
+            .map_err(IntoResponse::into_response)
+            .unwrap_err();
         assert_eq!(refus.status(), StatusCode::FORBIDDEN);
-        let corps_refus = axum::body::to_bytes(refus.into_body(), usize::MAX).await.unwrap();
-        assert_eq!(serde_json::from_slice::<serde_json::Value>(&corps_refus).unwrap()["code"], "acces_refuse");
-        let refus = extraire(jeton_responsable.clone()).await.map_err(IntoResponse::into_response).unwrap_err();
+        let corps_refus = axum::body::to_bytes(refus.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&corps_refus).unwrap()["code"],
+            "acces_refuse"
+        );
+        let refus = extraire(jeton_responsable.clone())
+            .await
+            .map_err(IntoResponse::into_response)
+            .unwrap_err();
         assert_eq!(refus.status(), StatusCode::FORBIDDEN);
 
         // Adhésion, puis relecture par la carte et par l'identifiant.
@@ -401,31 +520,54 @@ mod tests {
             personne_a_prevenir: None,
             niveau_etudes: None,
             antenne: None,
-            paiement: NouveauPaiement { mode: ModePaiement::Especes, reference_transaction: None, date_declaree: None },
+            paiement: NouveauPaiement {
+                mode: ModePaiement::Especes,
+                reference_transaction: None,
+                date_declaree: None,
+            },
         };
-        let (statut, Json(cree)) = adherer(agent().await, State(state.clone()), JsonApi(corps.clone())).await.unwrap();
+        let (statut, Json(cree)) =
+            adherer(agent().await, State(state.clone()), JsonApi(corps.clone()))
+                .await
+                .unwrap();
         assert_eq!(statut, StatusCode::CREATED);
         let json = serde_json::to_string(&cree).unwrap();
-        assert!(!json.contains(&nip) && !json.contains("+22670450001"), "{json}");
-        let refus = adherer(agent().await, State(state.clone()), JsonApi(corps.clone())).await.unwrap_err();
+        assert!(
+            !json.contains(&nip) && !json.contains("+22670450001"),
+            "{json}"
+        );
+        let refus = adherer(agent().await, State(state.clone()), JsonApi(corps.clone()))
+            .await
+            .unwrap_err();
         assert_eq!(refus.status(), StatusCode::CONFLICT);
 
         let Json(trouve) = rechercher(
             agent().await,
             State(state.clone()),
-            RequeteApi(RechercheCarte { numero_carte: "0001/2026".into() }),
+            RequeteApi(RechercheCarte {
+                numero_carte: "0001/2026".into(),
+            }),
         )
         .await
         .unwrap();
         assert_eq!(trouve.id, cree.id);
-        let (s, Json(e)) =
-            rechercher(agent().await, State(state.clone()), RequeteApi(RechercheCarte { numero_carte: "9999/2026".into() }))
-                .await
-                .unwrap_err();
+        let (s, Json(e)) = rechercher(
+            agent().await,
+            State(state.clone()),
+            RequeteApi(RechercheCarte {
+                numero_carte: "9999/2026".into(),
+            }),
+        )
+        .await
+        .unwrap_err();
         assert_eq!((s, e.code), (StatusCode::NOT_FOUND, "contrat_inconnu"));
-        let Json(lu) = detail(agent().await, State(state.clone()), CheminApi(cree.id)).await.unwrap();
+        let Json(lu) = detail(agent().await, State(state.clone()), CheminApi(cree.id))
+            .await
+            .unwrap();
         assert_eq!(lu.periodes.len(), 1);
-        let (s, _) = detail(agent().await, State(state.clone()), CheminApi(Uuid::max())).await.unwrap_err();
+        let (s, _) = detail(agent().await, State(state.clone()), CheminApi(Uuid::max()))
+            .await
+            .unwrap_err();
         assert_eq!(s, StatusCode::NOT_FOUND);
 
         // Renouvellement pendant la carence : 409.
@@ -433,19 +575,41 @@ mod tests {
             numero_carte: "0001/2027".into(),
             niveau_etudes: None,
             antenne: None,
-            paiement: NouveauPaiement { mode: ModePaiement::Especes, reference_transaction: None, date_declaree: None },
+            paiement: NouveauPaiement {
+                mode: ModePaiement::Especes,
+                reference_transaction: None,
+                date_declaree: None,
+            },
         };
-        let (s, Json(e)) = renouveler(agent().await, State(state.clone()), CheminApi(cree.id), JsonApi(renouvellement))
-            .await
-            .unwrap_err();
-        assert_eq!((s, e.code), (StatusCode::CONFLICT, "periode_future_deja_payee"));
+        let (s, Json(e)) = renouveler(
+            agent().await,
+            State(state.clone()),
+            CheminApi(cree.id),
+            JsonApi(renouvellement),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            (s, e.code),
+            (StatusCode::CONFLICT, "periode_future_deja_payee")
+        );
 
         // Paramètres : lecture par l'agent et par le responsable,
         // modification par le responsable, historique, limite hors bornes.
-        let Json(actuels) = parametres(membre(jeton.clone()).await, State(state.clone())).await.unwrap();
-        let Json(memes) = parametres(membre(jeton_responsable.clone()).await, State(state.clone())).await.unwrap();
+        let Json(actuels) = parametres(membre(jeton.clone()).await, State(state.clone()))
+            .await
+            .unwrap();
+        let Json(memes) = parametres(
+            membre(jeton_responsable.clone()).await,
+            State(state.clone()),
+        )
+        .await
+        .unwrap();
         assert_eq!(actuels.id, memes.id);
-        let nouveaux = Parametres { fiche_fcfa: 200, ..actuels.valeurs };
+        let nouveaux = Parametres {
+            fiche_fcfa: 200,
+            ..actuels.valeurs
+        };
         let Json(version) = modifier_parametres(
             responsable(jeton_responsable.clone()).await.unwrap(),
             State(state.clone()),
@@ -453,11 +617,17 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!((version.valeurs.fiche_fcfa, version.auteur_nom.as_deref()), (200, Some("ZONGO")));
+        assert_eq!(
+            (version.valeurs.fiche_fcfa, version.auteur_nom.as_deref()),
+            (200, Some("ZONGO"))
+        );
         let Json(h) = historique_parametres(
             membre(jeton.clone()).await,
             State(state.clone()),
-            RequeteApi(FiltreHistorique { limite: Some(1), avant: None }),
+            RequeteApi(FiltreHistorique {
+                limite: Some(1),
+                avant: None,
+            }),
         )
         .await
         .unwrap();
@@ -465,7 +635,10 @@ mod tests {
         let (s, Json(e)) = historique_parametres(
             membre(jeton.clone()).await,
             State(state.clone()),
-            RequeteApi(FiltreHistorique { limite: Some(101), avant: None }),
+            RequeteApi(FiltreHistorique {
+                limite: Some(101),
+                avant: None,
+            }),
         )
         .await
         .unwrap_err();
@@ -473,25 +646,47 @@ mod tests {
         let (s, Json(e)) = modifier_parametres(
             responsable(jeton_responsable.clone()).await.unwrap(),
             State(state.clone()),
-            JsonApi(Parametres { plafond_periode_fcfa: 0, ..nouveaux }),
+            JsonApi(Parametres {
+                plafond_periode_fcfa: 0,
+                ..nouveaux
+            }),
         )
         .await
         .unwrap_err();
-        assert_eq!((s, e.code), (StatusCode::UNPROCESSABLE_ENTITY, "donnees_invalides"));
+        assert_eq!(
+            (s, e.code),
+            (StatusCode::UNPROCESSABLE_ENTITY, "donnees_invalides")
+        );
 
         // Limite d'échecs : 5 couples faux, puis 429 avec Retry-After.
         let mut faux = corps;
         faux.date_naissance = chrono::NaiveDate::from_ymd_opt(1999, 12, 31).unwrap();
         faux.numero_carte = "0002/2026".into();
         for _ in 0..contrat::ECHECS_ADHESION_MAX {
-            let refus = adherer(agent().await, State(state.clone()), JsonApi(faux.clone())).await.unwrap_err();
+            let refus = adherer(agent().await, State(state.clone()), JsonApi(faux.clone()))
+                .await
+                .unwrap_err();
             assert_eq!(refus.status(), StatusCode::NOT_FOUND);
         }
-        let refus = adherer(agent().await, State(state.clone()), JsonApi(faux)).await.unwrap_err();
+        let refus = adherer(agent().await, State(state.clone()), JsonApi(faux))
+            .await
+            .unwrap_err();
         assert_eq!(refus.status(), StatusCode::TOO_MANY_REQUESTS);
-        let secondes: u64 = refus.headers().get(RETRY_AFTER).unwrap().to_str().unwrap().parse().unwrap();
+        let secondes: u64 = refus
+            .headers()
+            .get(RETRY_AFTER)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
         assert!((1..=15 * 60).contains(&secondes));
-        let corps_refus = axum::body::to_bytes(refus.into_body(), usize::MAX).await.unwrap();
-        assert_eq!(serde_json::from_slice::<serde_json::Value>(&corps_refus).unwrap()["code"], "trop_de_demandes");
+        let corps_refus = axum::body::to_bytes(refus.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&corps_refus).unwrap()["code"],
+            "trop_de_demandes"
+        );
     }
 }

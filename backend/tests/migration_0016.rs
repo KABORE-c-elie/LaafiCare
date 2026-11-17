@@ -46,7 +46,10 @@ async fn une_identite_ne_nait_jamais_verifiee(pool: PgPool) {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert!(!est_verifie(&pool, id).await, "la date fournie à la création est ignorée");
+    assert!(
+        !est_verifie(&pool, id).await,
+        "la date fournie à la création est ignorée"
+    );
 
     // La vérification se pose ensuite par un UPDATE.
     verifier(&pool, id).await;
@@ -83,7 +86,10 @@ async fn changer_l_email_annule_la_verification(pool: PgPool) {
         .execute(&pool)
         .await
         .unwrap();
-    assert!(!est_verifie(&pool, id).await, "changement et vérification ensemble");
+    assert!(
+        !est_verifie(&pool, id).await,
+        "changement et vérification ensemble"
+    );
 }
 
 #[sqlx::test]
@@ -113,10 +119,12 @@ async fn la_verification_reste_sans_changement_d_email(pool: PgPool) {
 #[sqlx::test]
 #[ignore]
 async fn une_verification_exige_un_email(pool: PgPool) {
-    let id: Uuid = sqlx::query_scalar("INSERT INTO utilisateur (telephone) VALUES ('+22670040004') RETURNING id")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO utilisateur (telephone) VALUES ('+22670040004') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     let erreur = sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1")
         .bind(id)
         .execute(&pool)

@@ -42,10 +42,14 @@ pub const FENETRE_REENROLEMENT_MINUTES: i32 = 10;
 #[derive(Debug)]
 pub enum ConnexionAdministrateur {
     /// TOTP actif : jeton `laaficare:second_facteur_administrateur`.
-    SecondFacteur { jeton_intermediaire: JetonIntermediaire },
+    SecondFacteur {
+        jeton_intermediaire: JetonIntermediaire,
+    },
     /// Pas de TOTP actif, fenêtre en cours : jeton
     /// `laaficare:reenrolement_administrateur`.
-    Reenrolement { jeton_reenrolement: JetonIntermediaire },
+    Reenrolement {
+        jeton_reenrolement: JetonIntermediaire,
+    },
 }
 
 /// Connexion d'un administrateur (`POST /api/administrateurs/connexion`).
@@ -56,8 +60,13 @@ pub async fn se_connecter(
     email: &str,
     mot_de_passe: &str,
 ) -> Result<ConnexionAdministrateur, ErreurAuthProfessionnel> {
-    let compte =
-        auth_professionnel::verifier_identifiants(pool, "administrateur_laaficare", email, mot_de_passe).await?;
+    let compte = auth_professionnel::verifier_identifiants(
+        pool,
+        "administrateur_laaficare",
+        email,
+        mot_de_passe,
+    )
+    .await?;
 
     let sorte = if compte.second_facteur {
         SorteJeton::SecondFacteurAdministrateur
@@ -73,8 +82,12 @@ pub async fn se_connecter(
             .map_err(|_| auth_professionnel::interne("émission du jeton administrateur"))?,
     );
     Ok(match sorte {
-        SorteJeton::SecondFacteurAdministrateur => ConnexionAdministrateur::SecondFacteur { jeton_intermediaire: jeton },
-        _ => ConnexionAdministrateur::Reenrolement { jeton_reenrolement: jeton },
+        SorteJeton::SecondFacteurAdministrateur => ConnexionAdministrateur::SecondFacteur {
+            jeton_intermediaire: jeton,
+        },
+        _ => ConnexionAdministrateur::Reenrolement {
+            jeton_reenrolement: jeton,
+        },
     })
 }
 
@@ -136,20 +149,35 @@ pub async fn confirmer_reenrolement(
     compte_id: Uuid,
     code: &str,
 ) -> Result<Vec<String>, ErreurReenrolement> {
-    let codes = totp::confirmer_activation(pool, cle.octets(), compte_id, code, Autorisation::ReenrolementAdministrateur)
-        .await
-        .map_err(|erreur| match erreur {
-            ErreurTotp::Refuse => ErreurReenrolement::CodeInvalide,
-            ErreurTotp::Interne(_) => interne("confirmation du réenrôlement"),
-        })?;
-    alerte_securite::prevenir(pool, email_sender, contact_securite, compte_id, Evenement::SecondFacteurEnregistre).await;
+    let codes = totp::confirmer_activation(
+        pool,
+        cle.octets(),
+        compte_id,
+        code,
+        Autorisation::ReenrolementAdministrateur,
+    )
+    .await
+    .map_err(|erreur| match erreur {
+        ErreurTotp::Refuse => ErreurReenrolement::CodeInvalide,
+        ErreurTotp::Interne(_) => interne("confirmation du réenrôlement"),
+    })?;
+    alerte_securite::prevenir(
+        pool,
+        email_sender,
+        contact_securite,
+        compte_id,
+        Evenement::SecondFacteurEnregistre,
+    )
+    .await;
     Ok(codes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth_professionnel::{ConnexionProfessionnelle, SaisieSecondFacteur, terminer_connexion};
+    use crate::auth_professionnel::{
+        ConnexionProfessionnelle, SaisieSecondFacteur, terminer_connexion,
+    };
     use crate::email::{EmailsRecus, ErreurEmail};
     use crate::mot_de_passe;
 
@@ -225,19 +253,23 @@ mod tests {
     }
 
     async fn fenetre_vide(pool: &PgPool, compte_id: Uuid) -> bool {
-        sqlx::query_scalar("SELECT reenrolement_autorise_jusqu_au IS NULL FROM compte WHERE id = $1")
-            .bind(compte_id)
-            .fetch_one(pool)
-            .await
-            .unwrap()
+        sqlx::query_scalar(
+            "SELECT reenrolement_autorise_jusqu_au IS NULL FROM compte WHERE id = $1",
+        )
+        .bind(compte_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
     }
 
     async fn statut_totp(pool: &PgPool, compte_id: Uuid) -> Vec<String> {
-        sqlx::query_scalar("SELECT statut FROM second_facteur_totp WHERE compte_id = $1 ORDER BY statut")
-            .bind(compte_id)
-            .fetch_all(pool)
-            .await
-            .unwrap()
+        sqlx::query_scalar(
+            "SELECT statut FROM second_facteur_totp WHERE compte_id = $1 ORDER BY statut",
+        )
+        .bind(compte_id)
+        .fetch_all(pool)
+        .await
+        .unwrap()
     }
 
     fn generateur(activation: &ActivationEnCours) -> totp_rs::Totp {
@@ -248,13 +280,18 @@ mod tests {
     }
 
     fn refuse(resultat: Result<ConnexionAdministrateur, ErreurAuthProfessionnel>) -> bool {
-        matches!(resultat, Err(ErreurAuthProfessionnel::IdentifiantsInvalides))
+        matches!(
+            resultat,
+            Err(ErreurAuthProfessionnel::IdentifiantsInvalides)
+        )
     }
 
     /// Réenrôlement complet par les fonctions publiques : renvoie le
     /// générateur du nouveau TOTP et les codes de secours.
     async fn reenroler(pool: &PgPool, compte_id: Uuid) -> (totp_rs::Totp, Vec<String>) {
-        let activation = commencer_reenrolement(pool, &cle(), compte_id, BON).await.unwrap();
+        let activation = commencer_reenrolement(pool, &cle(), compte_id, BON)
+            .await
+            .unwrap();
         let generateur = generateur(&activation);
         let codes = confirmer_reenrolement(
             pool,
@@ -277,7 +314,9 @@ mod tests {
     async fn alerte_envoyee_apres_la_confirmation(pool: PgPool) {
         let compte_id = administrateur(&pool, "+22670110010", "adm.alerte@example.org").await;
         ouvrir_fenetre(&pool, compte_id, FENETRE_REENROLEMENT_MINUTES).await;
-        let activation = commencer_reenrolement(&pool, &cle(), compte_id, BON).await.unwrap();
+        let activation = commencer_reenrolement(&pool, &cle(), compte_id, BON)
+            .await
+            .unwrap();
         let generateur = generateur(&activation);
         let emails = EmailsRecus::default();
 
@@ -288,9 +327,14 @@ mod tests {
             confirmer_reenrolement(&pool, &cle(), &emails, CONTACT, compte_id, faux).await,
             Err(ErreurReenrolement::CodeInvalide)
         ));
-        assert!(emails.0.lock().unwrap().is_empty(), "aucune alerte sans confirmation réussie");
+        assert!(
+            emails.0.lock().unwrap().is_empty(),
+            "aucune alerte sans confirmation réussie"
+        );
 
-        let codes = confirmer_reenrolement(&pool, &cle(), &emails, CONTACT, compte_id, &bon).await.unwrap();
+        let codes = confirmer_reenrolement(&pool, &cle(), &emails, CONTACT, compte_id, &bon)
+            .await
+            .unwrap();
         let envoyes = emails.0.lock().unwrap().clone();
         assert_eq!(envoyes.len(), 1);
         let (destinataire, corps) = &envoyes[0];
@@ -304,13 +348,19 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert!(corps.contains(&format!("le {quand} (heure du Burkina Faso)")), "{corps}");
+        assert!(
+            corps.contains(&format!("le {quand} (heure du Burkina Faso)")),
+            "{corps}"
+        );
         assert!(corps.contains(CONTACT), "{corps}");
         // Aucun secret : ni codes de secours, ni code saisi, ni clé, ni lien.
         for code in &codes {
             assert!(!corps.contains(code.as_str()));
         }
-        assert!(!corps.contains(&bon) && !corps.contains(&activation.cle_base32), "{corps}");
+        assert!(
+            !corps.contains(&bon) && !corps.contains(&activation.cle_base32),
+            "{corps}"
+        );
         assert!(!corps.contains("http"), "{corps}");
     }
 
@@ -322,7 +372,9 @@ mod tests {
         let jwt = jwt();
         let compte_id = administrateur(&pool, "+22670110011", "adm.echec@example.org").await;
         ouvrir_fenetre(&pool, compte_id, FENETRE_REENROLEMENT_MINUTES).await;
-        let activation = commencer_reenrolement(&pool, &cle(), compte_id, BON).await.unwrap();
+        let activation = commencer_reenrolement(&pool, &cle(), compte_id, BON)
+            .await
+            .unwrap();
         let generateur = generateur(&activation);
         let codes = confirmer_reenrolement(
             &pool,
@@ -347,12 +399,20 @@ mod tests {
     async fn sans_fenetre_ni_totp_aucun_jeton_meme_avec_le_bon_mot_de_passe(pool: PgPool) {
         let jwt = jwt();
         let compte_id = administrateur(&pool, "+22670110001", "adm.sans@example.org").await;
-        assert!(refuse(se_connecter(&pool, &jwt, "adm.sans@example.org", BON).await), "jamais autorisé");
+        assert!(
+            refuse(se_connecter(&pool, &jwt, "adm.sans@example.org", BON).await),
+            "jamais autorisé"
+        );
 
         ouvrir_fenetre(&pool, compte_id, -1).await;
-        assert!(refuse(se_connecter(&pool, &jwt, "adm.sans@example.org", BON).await), "fenêtre expirée");
+        assert!(
+            refuse(se_connecter(&pool, &jwt, "adm.sans@example.org", BON).await),
+            "fenêtre expirée"
+        );
         // Même réponse qu'un mauvais mot de passe.
-        assert!(refuse(se_connecter(&pool, &jwt, "adm.sans@example.org", MAUVAIS).await));
+        assert!(refuse(
+            se_connecter(&pool, &jwt, "adm.sans@example.org", MAUVAIS).await
+        ));
     }
 
     #[sqlx::test]
@@ -363,11 +423,18 @@ mod tests {
         ouvrir_fenetre(&pool, compte_id, FENETRE_REENROLEMENT_MINUTES).await;
 
         let ConnexionAdministrateur::Reenrolement { jeton_reenrolement } =
-            se_connecter(&pool, &jwt, "adm.fenetre@example.org", BON).await.unwrap()
+            se_connecter(&pool, &jwt, "adm.fenetre@example.org", BON)
+                .await
+                .unwrap()
         else {
             panic!("réenrôlement attendu");
         };
-        let claims = jwt.verifier(jeton_reenrolement.en_clair(), SorteJeton::ReenrolementAdministrateur).unwrap();
+        let claims = jwt
+            .verifier(
+                jeton_reenrolement.en_clair(),
+                SorteJeton::ReenrolementAdministrateur,
+            )
+            .unwrap();
         assert_eq!(claims.sub, compte_id);
         assert_eq!(format!("{jeton_reenrolement:?}"), "***");
     }
@@ -383,7 +450,10 @@ mod tests {
 
         let (generateur, codes) = reenroler(&pool, compte_id).await;
         assert_eq!(codes.len(), 10);
-        assert!(fenetre_vide(&pool, compte_id).await, "fenêtre vidée par la confirmation");
+        assert!(
+            fenetre_vide(&pool, compte_id).await,
+            "fenêtre vidée par la confirmation"
+        );
         assert_eq!(statut_totp(&pool, compte_id).await, ["actif"]);
         let sessions: i64 = sqlx::query_scalar("SELECT count(*) FROM session WHERE compte_id = $1")
             .bind(compte_id)
@@ -392,17 +462,39 @@ mod tests {
             .unwrap();
         assert_eq!(sessions, 0, "aucune session à la confirmation (A3)");
 
-        let ConnexionAdministrateur::SecondFacteur { jeton_intermediaire } =
-            se_connecter(&pool, &jwt, "adm.parcours@example.org", BON).await.unwrap()
+        let ConnexionAdministrateur::SecondFacteur {
+            jeton_intermediaire,
+        } = se_connecter(&pool, &jwt, "adm.parcours@example.org", BON)
+            .await
+            .unwrap()
         else {
             panic!("second facteur attendu");
         };
-        let iat = jwt.verifier(jeton_intermediaire.en_clair(), SorteJeton::SecondFacteurAdministrateur).unwrap().iat;
+        let iat = jwt
+            .verifier(
+                jeton_intermediaire.en_clair(),
+                SorteJeton::SecondFacteurAdministrateur,
+            )
+            .unwrap()
+            .iat;
         // Pas suivant : le code de confirmation ne peut pas resservir.
         let code = generateur.generate(maintenant() + 30).to_string();
-        let paire = terminer_connexion(&pool, &jwt, &cle(), compte_id, iat, &SaisieSecondFacteur::Code(code)).await;
-        let Ok(paire) = paire else { panic!("session attendue") };
-        assert!(jwt.verifier(&paire.jeton_acces, SorteJeton::Administrateur).is_ok());
+        let paire = terminer_connexion(
+            &pool,
+            &jwt,
+            &cle(),
+            compte_id,
+            iat,
+            &SaisieSecondFacteur::Code(code),
+        )
+        .await;
+        let Ok(paire) = paire else {
+            panic!("session attendue")
+        };
+        assert!(
+            jwt.verifier(&paire.jeton_acces, SorteJeton::Administrateur)
+                .is_ok()
+        );
     }
 
     async fn sessions(pool: &PgPool, compte_id: Uuid) -> i64 {
@@ -424,7 +516,11 @@ mod tests {
 
         // 1. Connexion sans TOTP ni fenêtre : refusée.
         assert!(refuse(se_connecter(&pool, &jwt, email, BON).await));
-        assert_eq!(sessions(&pool, compte_id).await, 0, "chemin 1 : sans TOTP ni fenêtre");
+        assert_eq!(
+            sessions(&pool, compte_id).await,
+            0,
+            "chemin 1 : sans TOTP ni fenêtre"
+        );
 
         // 2. Connexion pendant la fenêtre : jeton de réenrôlement seulement.
         ouvrir_fenetre(&pool, compte_id, FENETRE_REENROLEMENT_MINUTES).await;
@@ -432,10 +528,16 @@ mod tests {
             se_connecter(&pool, &jwt, email, BON).await,
             Ok(ConnexionAdministrateur::Reenrolement { .. })
         ));
-        assert_eq!(sessions(&pool, compte_id).await, 0, "chemin 2 : connexion pendant la fenêtre");
+        assert_eq!(
+            sessions(&pool, compte_id).await,
+            0,
+            "chemin 2 : connexion pendant la fenêtre"
+        );
 
         // 3. Début du réenrôlement.
-        let activation = commencer_reenrolement(&pool, &cle(), compte_id, BON).await.unwrap();
+        let activation = commencer_reenrolement(&pool, &cle(), compte_id, BON)
+            .await
+            .unwrap();
         assert_eq!(sessions(&pool, compte_id).await, 0, "chemin 3 : commencer");
 
         // 4. Confirmation.
@@ -453,18 +555,36 @@ mod tests {
         assert_eq!(sessions(&pool, compte_id).await, 0, "chemin 4 : confirmer");
 
         // 5. Connexion avec un TOTP actif : jeton intermédiaire seulement.
-        let ConnexionAdministrateur::SecondFacteur { jeton_intermediaire } =
-            se_connecter(&pool, &jwt, email, BON).await.unwrap()
+        let ConnexionAdministrateur::SecondFacteur {
+            jeton_intermediaire,
+        } = se_connecter(&pool, &jwt, email, BON).await.unwrap()
         else {
             panic!("second facteur attendu");
         };
-        assert_eq!(sessions(&pool, compte_id).await, 0, "chemin 5 : connexion avec TOTP actif");
+        assert_eq!(
+            sessions(&pool, compte_id).await,
+            0,
+            "chemin 5 : connexion avec TOTP actif"
+        );
 
         // 6. Second temps avec un code faux, puis un code de secours faux.
-        let iat = jwt.verifier(jeton_intermediaire.en_clair(), SorteJeton::SecondFacteurAdministrateur).unwrap().iat;
+        let iat = jwt
+            .verifier(
+                jeton_intermediaire.en_clair(),
+                SorteJeton::SecondFacteurAdministrateur,
+            )
+            .unwrap()
+            .iat;
         let bon_code = generateur.generate(maintenant() + 30).to_string();
-        let code_faux = if bon_code == "000000" { "000001" } else { "000000" };
-        for saisie in [SaisieSecondFacteur::Code(code_faux.into()), SaisieSecondFacteur::CodeSecours("AAAAA-AAAAA".into())] {
+        let code_faux = if bon_code == "000000" {
+            "000001"
+        } else {
+            "000000"
+        };
+        for saisie in [
+            SaisieSecondFacteur::Code(code_faux.into()),
+            SaisieSecondFacteur::CodeSecours("AAAAA-AAAAA".into()),
+        ] {
             assert!(matches!(
                 terminer_connexion(&pool, &jwt, &cle(), compte_id, iat, &saisie).await,
                 Err(crate::auth_professionnel::ErreurSecondFacteur::CodeInvalide)
@@ -473,7 +593,15 @@ mod tests {
         assert_eq!(sessions(&pool, compte_id).await, 0, "chemin 6 : codes faux");
 
         // Le bon code ouvre une session, une seule.
-        let Ok(_paire) = terminer_connexion(&pool, &jwt, &cle(), compte_id, iat, &SaisieSecondFacteur::Code(bon_code)).await
+        let Ok(_paire) = terminer_connexion(
+            &pool,
+            &jwt,
+            &cle(),
+            compte_id,
+            iat,
+            &SaisieSecondFacteur::Code(bon_code),
+        )
+        .await
         else {
             panic!("session attendue avec le bon code");
         };
@@ -524,7 +652,9 @@ mod tests {
     async fn fenetre_expiree_avant_la_confirmation(pool: PgPool) {
         let compte_id = administrateur(&pool, "+22670110005", "adm.expiree@example.org").await;
         ouvrir_fenetre(&pool, compte_id, FENETRE_REENROLEMENT_MINUTES).await;
-        let activation = commencer_reenrolement(&pool, &cle(), compte_id, BON).await.unwrap();
+        let activation = commencer_reenrolement(&pool, &cle(), compte_id, BON)
+            .await
+            .unwrap();
 
         ouvrir_fenetre(&pool, compte_id, -1).await;
         let code = generateur(&activation).generate(maintenant()).to_string();
@@ -533,7 +663,10 @@ mod tests {
             confirmer_reenrolement(&pool, &cle(), &emails, CONTACT, compte_id, &code).await,
             Err(ErreurReenrolement::CodeInvalide)
         ));
-        assert!(emails.0.lock().unwrap().is_empty(), "fenêtre expirée : aucune alerte");
+        assert!(
+            emails.0.lock().unwrap().is_empty(),
+            "fenêtre expirée : aucune alerte"
+        );
         assert_eq!(statut_totp(&pool, compte_id).await, ["en_attente"]);
         assert!(!fenetre_vide(&pool, compte_id).await, "rien n'est modifié");
     }
@@ -543,7 +676,10 @@ mod tests {
     async fn mot_de_passe_faux_au_debut_du_reenrolement(pool: PgPool) {
         let compte_id = administrateur(&pool, "+22670110006", "adm.mdp@example.org").await;
         ouvrir_fenetre(&pool, compte_id, FENETRE_REENROLEMENT_MINUTES).await;
-        let erreur = commencer_reenrolement(&pool, &cle(), compte_id, MAUVAIS).await.err().unwrap();
+        let erreur = commencer_reenrolement(&pool, &cle(), compte_id, MAUVAIS)
+            .await
+            .err()
+            .unwrap();
         assert!(matches!(erreur, ErreurReenrolement::MotDePasseIncorrect));
         assert_eq!(erreur.to_string(), "Mot de passe incorrect.");
         assert!(statut_totp(&pool, compte_id).await.is_empty());
@@ -555,15 +691,24 @@ mod tests {
     #[ignore]
     async fn chaque_compte_sur_sa_seule_route(pool: PgPool) {
         let jwt = jwt();
-        let administrateur_id = administrateur(&pool, "+22670110007", "adm.route@example.org").await;
+        let administrateur_id =
+            administrateur(&pool, "+22670110007", "adm.route@example.org").await;
         ouvrir_fenetre(&pool, administrateur_id, FENETRE_REENROLEMENT_MINUTES).await;
-        compte(&pool, "+22670110008", "pro.route@example.org", "professionnel").await;
+        compte(
+            &pool,
+            "+22670110008",
+            "pro.route@example.org",
+            "professionnel",
+        )
+        .await;
 
         assert!(matches!(
             auth_professionnel::se_connecter(&pool, &jwt, "adm.route@example.org", BON).await,
             Err(ErreurAuthProfessionnel::IdentifiantsInvalides)
         ));
-        assert!(refuse(se_connecter(&pool, &jwt, "pro.route@example.org", BON).await));
+        assert!(refuse(
+            se_connecter(&pool, &jwt, "pro.route@example.org", BON).await
+        ));
         // Contrôle : la route professionnelle accepte bien le professionnel.
         assert!(matches!(
             auth_professionnel::se_connecter(&pool, &jwt, "pro.route@example.org", BON).await,
@@ -577,15 +722,36 @@ mod tests {
     async fn erreur_interne_sans_donnee_saisie(pool: PgPool) {
         pool.close().await;
         let mot_de_passe = "MotDePasse#Secret1";
-        let erreur = commencer_reenrolement(&pool, &cle(), Uuid::from_u128(1), mot_de_passe).await.err().unwrap();
-        assert!(matches!(erreur, ErreurReenrolement::Interne(_)), "{erreur:?}");
-        let code = "123456";
-        let erreur_code = confirmer_reenrolement(&pool, &cle(), &EmailsRecus::default(), CONTACT, Uuid::from_u128(1), code)
+        let erreur = commencer_reenrolement(&pool, &cle(), Uuid::from_u128(1), mot_de_passe)
             .await
             .err()
             .unwrap();
-        for texte in [erreur.to_string(), format!("{erreur:?}"), erreur_code.to_string(), format!("{erreur_code:?}")] {
-            assert!(!texte.contains(mot_de_passe) && !texte.contains(code), "{texte}");
+        assert!(
+            matches!(erreur, ErreurReenrolement::Interne(_)),
+            "{erreur:?}"
+        );
+        let code = "123456";
+        let erreur_code = confirmer_reenrolement(
+            &pool,
+            &cle(),
+            &EmailsRecus::default(),
+            CONTACT,
+            Uuid::from_u128(1),
+            code,
+        )
+        .await
+        .err()
+        .unwrap();
+        for texte in [
+            erreur.to_string(),
+            format!("{erreur:?}"),
+            erreur_code.to_string(),
+            format!("{erreur_code:?}"),
+        ] {
+            assert!(
+                !texte.contains(mot_de_passe) && !texte.contains(code),
+                "{texte}"
+            );
         }
     }
 }

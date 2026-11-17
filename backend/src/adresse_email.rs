@@ -58,7 +58,10 @@ pub fn controler(email: &str) -> Result<(), EmailInvalide> {
         return Err(EmailInvalide);
     }
     // ASCII établi : on raisonne en octets, chacun est un caractère.
-    if email.bytes().any(|o| o.is_ascii_whitespace() || o.is_ascii_control()) {
+    if email
+        .bytes()
+        .any(|o| o.is_ascii_whitespace() || o.is_ascii_control())
+    {
         return Err(EmailInvalide);
     }
     if email.len() > LONGUEUR_MAX_OCTETS {
@@ -92,7 +95,10 @@ mod tests {
     #[test]
     fn adresse_normale_et_majuscules() {
         assert!(valide("awa.ouedraogo@example.org"));
-        assert!(valide("Awa.Ouedraogo@Example.ORG"), "les majuscules sont gardées telles quelles");
+        assert!(
+            valide("Awa.Ouedraogo@Example.ORG"),
+            "les majuscules sont gardées telles quelles"
+        );
         assert!(valide("prenom+munaseb@exemple.bf"));
     }
 
@@ -107,7 +113,14 @@ mod tests {
 
     #[test]
     fn espaces_retours_a_la_ligne_et_controle() {
-        for email in ["awa@example.org\r\nBcc: x@example.org", "awa@example.org\n", "awa ouedraogo@example.org", "awa@exa\tmple.org", "awa\u{0}@example.org", "awa\u{7f}@example.org"] {
+        for email in [
+            "awa@example.org\r\nBcc: x@example.org",
+            "awa@example.org\n",
+            "awa ouedraogo@example.org",
+            "awa@exa\tmple.org",
+            "awa\u{0}@example.org",
+            "awa\u{7f}@example.org",
+        ] {
             assert!(!valide(email), "{email:?}");
         }
     }
@@ -134,7 +147,14 @@ mod tests {
     fn adresse_254_octets_au_plus() {
         // 64 + 1 + 189 = 254 ; étiquettes de domaine de 63 caractères au
         // plus (règle du domaine de la crate).
-        let domaine = |dernier: usize| format!("{}.{}.{}", "a".repeat(63), "b".repeat(63), "c".repeat(dernier));
+        let domaine = |dernier: usize| {
+            format!(
+                "{}.{}.{}",
+                "a".repeat(63),
+                "b".repeat(63),
+                "c".repeat(dernier)
+            )
+        };
         let a_254 = format!("{}@{}", "d".repeat(64), domaine(61));
         let a_255 = format!("{}@{}", "d".repeat(64), domaine(62));
         assert_eq!((a_254.len(), a_255.len()), (254, 255));
@@ -144,7 +164,16 @@ mod tests {
 
     #[test]
     fn chaine_vide_et_formes_cassees() {
-        for email in ["", "@", "awa@", "@example.org", "awa", "awa@@example.org", "a@b@example.org", "\"awa\"@example.org"] {
+        for email in [
+            "",
+            "@",
+            "awa@",
+            "@example.org",
+            "awa",
+            "awa@@example.org",
+            "a@b@example.org",
+            "\"awa\"@example.org",
+        ] {
             assert!(!valide(email), "{email:?}");
         }
     }

@@ -46,7 +46,9 @@ pub enum ErreurComptePro {
     /// Compte existant : mot de passe faux, verrouillé ou désactivé (L1).
     #[error("Mot de passe professionnel incorrect.")]
     MotDePasseIncorrect,
-    #[error("Votre compte professionnel a un second facteur : cette opération ne le prend pas encore en charge.")]
+    #[error(
+        "Votre compte professionnel a un second facteur : cette opération ne le prend pas encore en charge."
+    )]
     SecondFacteurRequis,
     #[error("Votre identité a déjà un autre email : il ne peut pas être changé ici.")]
     EmailDifferent,
@@ -67,7 +69,11 @@ fn interne(etape: &'static str, erreur: &sqlx::Error) -> ErreurComptePro {
 
 enum Compte {
     Existant(Uuid),
-    Nouveau { email: String, hash: String, enregistrer_email: bool },
+    Nouveau {
+        email: String,
+        hash: String,
+        enregistrer_email: bool,
+    },
 }
 
 /// Résultat de `preparer`, à passer à `ecrire`.
@@ -92,7 +98,11 @@ pub struct CompteObtenu {
 }
 
 /// Premier temps, sans verrou ni transaction.
-pub async fn preparer(pool: &PgPool, patient_compte_id: Uuid, saisie: &Saisie<'_>) -> Result<Preparation, ErreurComptePro> {
+pub async fn preparer(
+    pool: &PgPool,
+    patient_compte_id: Uuid,
+    saisie: &Saisie<'_>,
+) -> Result<Preparation, ErreurComptePro> {
     let identite: Option<(Uuid, Option<String>, bool, Option<Uuid>)> = sqlx::query_as(
         "SELECT u.id, u.email, u.email_verifie_le IS NOT NULL, pro.id \
          FROM compte pat JOIN utilisateur u ON u.id = pat.utilisateur_id \
@@ -107,15 +117,26 @@ pub async fn preparer(pool: &PgPool, patient_compte_id: Uuid, saisie: &Saisie<'_
         identite.ok_or(ErreurComptePro::Interne("compte patient introuvable"))?;
 
     let compte = match professionnel {
-        Some(compte_id) => match verrouillage::verifier(pool, Some(compte_id), saisie.mot_de_passe).await {
-            Ok(Verification::Complete(_)) => Compte::Existant(compte_id),
-            Ok(Verification::SecondFacteurRequis(_)) => return Err(ErreurComptePro::SecondFacteurRequis),
-            Err(ErreurConnexion::IdentifiantsInvalides) => return Err(ErreurComptePro::MotDePasseIncorrect),
-            Err(ErreurConnexion::Interne(_)) => {
-                tracing::error!(etape = "mot de passe professionnel", "compte professionnel : erreur interne");
-                return Err(ErreurComptePro::Interne("vérification du mot de passe professionnel"));
+        Some(compte_id) => {
+            match verrouillage::verifier(pool, Some(compte_id), saisie.mot_de_passe).await {
+                Ok(Verification::Complete(_)) => Compte::Existant(compte_id),
+                Ok(Verification::SecondFacteurRequis(_)) => {
+                    return Err(ErreurComptePro::SecondFacteurRequis);
+                }
+                Err(ErreurConnexion::IdentifiantsInvalides) => {
+                    return Err(ErreurComptePro::MotDePasseIncorrect);
+                }
+                Err(ErreurConnexion::Interne(_)) => {
+                    tracing::error!(
+                        etape = "mot de passe professionnel",
+                        "compte professionnel : erreur interne"
+                    );
+                    return Err(ErreurComptePro::Interne(
+                        "vérification du mot de passe professionnel",
+                    ));
+                }
             }
-        },
+        }
         None => {
             let email = saisie
                 .email_professionnel
@@ -123,7 +144,8 @@ pub async fn preparer(pool: &PgPool, patient_compte_id: Uuid, saisie: &Saisie<'_
                 .filter(|e| !e.is_empty())
                 .ok_or(ErreurComptePro::EmailObligatoire)?;
             adresse_email::controler(email).map_err(|_| ErreurComptePro::EmailInvalide)?;
-            mot_de_passe::controler(saisie.mot_de_passe).map_err(ErreurComptePro::MotDePasseNonConforme)?;
+            mot_de_passe::controler(saisie.mot_de_passe)
+                .map_err(ErreurComptePro::MotDePasseNonConforme)?;
             let enregistrer_email = match &email_actuel {
                 None => true,
                 Some(actuel) if actuel.to_lowercase() == email.to_lowercase() => false,
@@ -134,10 +156,18 @@ pub async fn preparer(pool: &PgPool, patient_compte_id: Uuid, saisie: &Saisie<'_
             let hash = mot_de_passe::hacher_async(saisie.mot_de_passe)
                 .await
                 .map_err(|_| ErreurComptePro::Interne("hachage du mot de passe"))?;
-            Compte::Nouveau { email: email.to_string(), hash, enregistrer_email }
+            Compte::Nouveau {
+                email: email.to_string(),
+                hash,
+                enregistrer_email,
+            }
         }
     };
-    Ok(Preparation { utilisateur_id, compte, email_verifie })
+    Ok(Preparation {
+        utilisateur_id,
+        compte,
+        email_verifie,
+    })
 }
 
 /// Second temps, dans la transaction de l'appelant, **avant tout autre
@@ -157,20 +187,32 @@ pub async fn ecrire(
         .map_err(|e| interne("verrou du compte patient", &e))?;
 
     let (email, hash, enregistrer_email) = match preparation.compte {
-        Compte::Existant(compte_id) => return Ok(CompteObtenu { compte_id, verification: None }),
-        Compte::Nouveau { email, hash, enregistrer_email } => (email, hash, enregistrer_email),
+        Compte::Existant(compte_id) => {
+            return Ok(CompteObtenu {
+                compte_id,
+                verification: None,
+            });
+        }
+        Compte::Nouveau {
+            email,
+            hash,
+            enregistrer_email,
+        } => (email, hash, enregistrer_email),
     };
     if enregistrer_email {
         // `email IS NULL` : un email posé entre-temps n'est jamais écrasé.
-        let ecrit = sqlx::query("UPDATE utilisateur SET email = $2 WHERE id = $1 AND email IS NULL")
-            .bind(preparation.utilisateur_id)
-            .bind(&email)
-            .execute(&mut *conn)
-            .await
-            .map_err(|e| match e.as_database_error().and_then(|d| d.constraint()) {
-                Some("utilisateur_email_unique_idx") => ErreurComptePro::EmailDejaUtilise,
-                _ => interne("enregistrement de l'email", &e),
-            })?;
+        let ecrit =
+            sqlx::query("UPDATE utilisateur SET email = $2 WHERE id = $1 AND email IS NULL")
+                .bind(preparation.utilisateur_id)
+                .bind(&email)
+                .execute(&mut *conn)
+                .await
+                .map_err(
+                    |e| match e.as_database_error().and_then(|d| d.constraint()) {
+                        Some("utilisateur_email_unique_idx") => ErreurComptePro::EmailDejaUtilise,
+                        _ => interne("enregistrement de l'email", &e),
+                    },
+                )?;
         if ecrit.rows_affected() == 0 {
             return Err(ErreurComptePro::EmailDifferent);
         }
@@ -196,5 +238,8 @@ pub async fn ecrire(
             .await
             .map_err(|e| interne("émission du jeton d'email", &e))?
     };
-    Ok(CompteObtenu { compte_id, verification })
+    Ok(CompteObtenu {
+        compte_id,
+        verification,
+    })
 }

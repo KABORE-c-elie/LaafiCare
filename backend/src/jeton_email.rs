@@ -165,7 +165,9 @@ pub enum Renvoi {
     Emis(VerificationEmise),
     /// Un jeton a été émis il y a moins de `DELAI_RENVOI_SECONDES` : rien
     /// n'est émis ; secondes à attendre, arrondies au-dessus.
-    TropTot { attendre_secondes: i64 },
+    TropTot {
+        attendre_secondes: i64,
+    },
 }
 
 /// Renvoi d'un jeton de vérification (route de la 3.7), limité à un par
@@ -175,7 +177,10 @@ pub enum Renvoi {
 /// renvois simultanés se suivent, et le second voit le jeton du premier.
 /// Horloge de PostgreSQL, comme l'expiration. `None` si le compte n'a pas
 /// d'email.
-pub async fn renvoyer_verification(conn: &mut PgConnection, compte_id: Uuid) -> Result<Option<Renvoi>, sqlx::Error> {
+pub async fn renvoyer_verification(
+    conn: &mut PgConnection,
+    compte_id: Uuid,
+) -> Result<Option<Renvoi>, sqlx::Error> {
     sqlx::query("SELECT id FROM compte WHERE id = $1 FOR UPDATE")
         .bind(compte_id)
         .fetch_one(&mut *conn)
@@ -191,7 +196,9 @@ pub async fn renvoyer_verification(conn: &mut PgConnection, compte_id: Uuid) -> 
     if let Some(attendre_secondes) = attendre.filter(|secondes| *secondes > 0) {
         return Ok(Some(Renvoi::TropTot { attendre_secondes }));
     }
-    Ok(emettre_verification(conn, compte_id).await?.map(Renvoi::Emis))
+    Ok(emettre_verification(conn, compte_id)
+        .await?
+        .map(Renvoi::Emis))
 }
 
 /// Utilise un jeton de vérification : en une seule requête, il est marqué
@@ -210,7 +217,11 @@ pub async fn renvoyer_verification(conn: &mut PgConnection, compte_id: Uuid) -> 
 /// outils locaux savent pour quel compte ils attendent le jeton ; un jeton
 /// d'un autre compte reste alors inutilisé). La route de la 3.7 ne reçoit
 /// que le jeton et passe `None`.
-pub async fn verifier_email(pool: &PgPool, jeton: &str, compte: Option<Uuid>) -> Result<Option<Uuid>, sqlx::Error> {
+pub async fn verifier_email(
+    pool: &PgPool,
+    jeton: &str,
+    compte: Option<Uuid>,
+) -> Result<Option<Uuid>, sqlx::Error> {
     let Some(octets) = session::decoder(jeton) else {
         return Ok(None);
     };
@@ -241,13 +252,14 @@ mod tests {
     // Base temporaire par test ; données fictives.
 
     async fn compte(pool: &PgPool, telephone: &str, email: &str, type_compte: &str) -> Uuid {
-        let utilisateur_id: Uuid =
-            sqlx::query_scalar("INSERT INTO utilisateur (telephone, email) VALUES ($1, $2) RETURNING id")
-                .bind(telephone)
-                .bind(email)
-                .fetch_one(pool)
-                .await
-                .unwrap();
+        let utilisateur_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO utilisateur (telephone, email) VALUES ($1, $2) RETURNING id",
+        )
+        .bind(telephone)
+        .bind(email)
+        .fetch_one(pool)
+        .await
+        .unwrap();
         sqlx::query_scalar(
             "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, $2, 'x') RETURNING id",
         )
@@ -260,7 +272,10 @@ mod tests {
 
     async fn emettre(pool: &PgPool, compte_id: Uuid) -> VerificationEmise {
         let mut tx = pool.begin().await.unwrap();
-        let emise = emettre_verification(&mut tx, compte_id).await.unwrap().unwrap();
+        let emise = emettre_verification(&mut tx, compte_id)
+            .await
+            .unwrap()
+            .unwrap();
         tx.commit().await.unwrap();
         emise
     }
@@ -279,47 +294,93 @@ mod tests {
     #[sqlx::test]
     #[ignore]
     async fn verification_a_usage_unique(pool: PgPool) {
-        let compte_id = compte(&pool, "+22670130001", "jeton.unique@example.org", "administrateur_laaficare").await;
+        let compte_id = compte(
+            &pool,
+            "+22670130001",
+            "jeton.unique@example.org",
+            "administrateur_laaficare",
+        )
+        .await;
         let emise = emettre(&pool, compte_id).await;
         assert_eq!(emise.email, "jeton.unique@example.org");
         assert_eq!(emise.jeton.en_clair().len(), 64);
         assert_eq!(format!("{:?}", emise.jeton), "***");
         assert!(!email_verifie(&pool, compte_id).await);
 
-        assert_eq!(verifier_email(&pool, emise.jeton.en_clair(), None).await.unwrap(), Some(compte_id));
+        assert_eq!(
+            verifier_email(&pool, emise.jeton.en_clair(), None)
+                .await
+                .unwrap(),
+            Some(compte_id)
+        );
         assert!(email_verifie(&pool, compte_id).await);
-        assert_eq!(verifier_email(&pool, emise.jeton.en_clair(), None).await.unwrap(), None, "déjà utilisé");
+        assert_eq!(
+            verifier_email(&pool, emise.jeton.en_clair(), None)
+                .await
+                .unwrap(),
+            None,
+            "déjà utilisé"
+        );
     }
 
     /// Un nouveau jeton annule le précédent, qui ne vérifie plus rien.
     #[sqlx::test]
     #[ignore]
     async fn nouveau_jeton_annule_le_precedent(pool: PgPool) {
-        let compte_id = compte(&pool, "+22670130002", "jeton.annule@example.org", "professionnel").await;
+        let compte_id = compte(
+            &pool,
+            "+22670130002",
+            "jeton.annule@example.org",
+            "professionnel",
+        )
+        .await;
         let ancien = emettre(&pool, compte_id).await;
         let nouveau = emettre(&pool, compte_id).await;
-        let annules: i64 = sqlx::query_scalar("SELECT count(*) FROM jeton_email WHERE compte_id = $1 AND annule_le IS NOT NULL")
-            .bind(compte_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let annules: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM jeton_email WHERE compte_id = $1 AND annule_le IS NOT NULL",
+        )
+        .bind(compte_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(annules, 1);
-        assert_eq!(verifier_email(&pool, ancien.jeton.en_clair(), None).await.unwrap(), None);
-        assert_eq!(verifier_email(&pool, nouveau.jeton.en_clair(), None).await.unwrap(), Some(compte_id));
+        assert_eq!(
+            verifier_email(&pool, ancien.jeton.en_clair(), None)
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            verifier_email(&pool, nouveau.jeton.en_clair(), None)
+                .await
+                .unwrap(),
+            Some(compte_id)
+        );
     }
 
     /// R0 : un jeton envoyé à l'ancienne adresse ne vérifie pas la nouvelle.
     #[sqlx::test]
     #[ignore]
     async fn email_change_depuis_l_envoi_refuse(pool: PgPool) {
-        let compte_id = compte(&pool, "+22670130003", "ancienne@example.org", "professionnel").await;
+        let compte_id = compte(
+            &pool,
+            "+22670130003",
+            "ancienne@example.org",
+            "professionnel",
+        )
+        .await;
         let emise = emettre(&pool, compte_id).await;
         sqlx::query("UPDATE utilisateur SET email = 'nouvelle@example.org' FROM compte c WHERE c.id = $1 AND utilisateur.id = c.utilisateur_id")
             .bind(compte_id)
             .execute(&pool)
             .await
             .unwrap();
-        assert_eq!(verifier_email(&pool, emise.jeton.en_clair(), None).await.unwrap(), None);
+        assert_eq!(
+            verifier_email(&pool, emise.jeton.en_clair(), None)
+                .await
+                .unwrap(),
+            None
+        );
         assert!(!email_verifie(&pool, compte_id).await);
     }
 
@@ -327,15 +388,32 @@ mod tests {
     #[sqlx::test]
     #[ignore]
     async fn majuscules_de_l_adresse_ignorees(pool: PgPool) {
-        let compte_id = compte(&pool, "+22670130004", "Majuscules@Example.org", "professionnel").await;
+        let compte_id = compte(
+            &pool,
+            "+22670130004",
+            "Majuscules@Example.org",
+            "professionnel",
+        )
+        .await;
         let emise = emettre(&pool, compte_id).await;
-        assert_eq!(verifier_email(&pool, emise.jeton.en_clair(), None).await.unwrap(), Some(compte_id));
+        assert_eq!(
+            verifier_email(&pool, emise.jeton.en_clair(), None)
+                .await
+                .unwrap(),
+            Some(compte_id)
+        );
     }
 
     #[sqlx::test]
     #[ignore]
     async fn jeton_expire_ou_mal_forme_refuse(pool: PgPool) {
-        let compte_id = compte(&pool, "+22670130005", "jeton.expire@example.org", "professionnel").await;
+        let compte_id = compte(
+            &pool,
+            "+22670130005",
+            "jeton.expire@example.org",
+            "professionnel",
+        )
+        .await;
         let emise = emettre(&pool, compte_id).await;
         sqlx::query(
             "UPDATE jeton_email SET date_creation = now() - interval '2 days', expire_le = now() - interval '1 day' \
@@ -345,9 +423,19 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        assert_eq!(verifier_email(&pool, emise.jeton.en_clair(), None).await.unwrap(), None, "expiré");
+        assert_eq!(
+            verifier_email(&pool, emise.jeton.en_clair(), None)
+                .await
+                .unwrap(),
+            None,
+            "expiré"
+        );
         for faux in ["", "abc", &"z".repeat(64), &"0".repeat(64)] {
-            assert_eq!(verifier_email(&pool, faux, None).await.unwrap(), None, "{faux}");
+            assert_eq!(
+                verifier_email(&pool, faux, None).await.unwrap(),
+                None,
+                "{faux}"
+            );
         }
     }
 
@@ -356,12 +444,28 @@ mod tests {
     #[sqlx::test]
     #[ignore]
     async fn jeton_d_un_autre_compte_refuse(pool: PgPool) {
-        let premier = compte(&pool, "+22670130007", "premier@example.org", "professionnel").await;
+        let premier = compte(
+            &pool,
+            "+22670130007",
+            "premier@example.org",
+            "professionnel",
+        )
+        .await;
         let second = compte(&pool, "+22670130008", "second@example.org", "professionnel").await;
         let emise = emettre(&pool, second).await;
-        assert_eq!(verifier_email(&pool, emise.jeton.en_clair(), Some(premier)).await.unwrap(), None);
+        assert_eq!(
+            verifier_email(&pool, emise.jeton.en_clair(), Some(premier))
+                .await
+                .unwrap(),
+            None
+        );
         assert!(!email_verifie(&pool, premier).await && !email_verifie(&pool, second).await);
-        assert_eq!(verifier_email(&pool, emise.jeton.en_clair(), Some(second)).await.unwrap(), Some(second));
+        assert_eq!(
+            verifier_email(&pool, emise.jeton.en_clair(), Some(second))
+                .await
+                .unwrap(),
+            Some(second)
+        );
     }
 
     /// E7 : un renvoi moins d'une minute après le dernier jeton est refusé,
@@ -373,7 +477,10 @@ mod tests {
         let premier = emettre(&pool, compte_id).await;
 
         let mut tx = pool.begin().await.unwrap();
-        let renvoi = renvoyer_verification(&mut tx, compte_id).await.unwrap().unwrap();
+        let renvoi = renvoyer_verification(&mut tx, compte_id)
+            .await
+            .unwrap()
+            .unwrap();
         tx.commit().await.unwrap();
         let Renvoi::TropTot { attendre_secondes } = renvoi else {
             panic!("renvoi trop tôt attendu");
@@ -386,22 +493,38 @@ mod tests {
             .await
             .unwrap();
         let mut tx = pool.begin().await.unwrap();
-        let renvoi = renvoyer_verification(&mut tx, compte_id).await.unwrap().unwrap();
+        let renvoi = renvoyer_verification(&mut tx, compte_id)
+            .await
+            .unwrap()
+            .unwrap();
         tx.commit().await.unwrap();
         let Renvoi::Emis(nouveau) = renvoi else {
             panic!("nouveau jeton attendu");
         };
-        assert_eq!(verifier_email(&pool, premier.jeton.en_clair(), None).await.unwrap(), None, "ancien annulé");
-        assert_eq!(verifier_email(&pool, nouveau.jeton.en_clair(), None).await.unwrap(), Some(compte_id));
+        assert_eq!(
+            verifier_email(&pool, premier.jeton.en_clair(), None)
+                .await
+                .unwrap(),
+            None,
+            "ancien annulé"
+        );
+        assert_eq!(
+            verifier_email(&pool, nouveau.jeton.en_clair(), None)
+                .await
+                .unwrap(),
+            Some(compte_id)
+        );
     }
 
     #[sqlx::test]
     #[ignore]
     async fn compte_sans_email_aucun_jeton(pool: PgPool) {
-        let utilisateur_id: Uuid = sqlx::query_scalar("INSERT INTO utilisateur (telephone) VALUES ('+22670130006') RETURNING id")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let utilisateur_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO utilisateur (telephone) VALUES ('+22670130006') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         let compte_id: Uuid = sqlx::query_scalar(
             "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'professionnel', 'x') RETURNING id",
         )
@@ -410,6 +533,11 @@ mod tests {
         .await
         .unwrap();
         let mut tx = pool.begin().await.unwrap();
-        assert!(emettre_verification(&mut tx, compte_id).await.unwrap().is_none());
+        assert!(
+            emettre_verification(&mut tx, compte_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }

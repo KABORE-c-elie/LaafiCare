@@ -101,7 +101,9 @@ pub async fn desactiver(
         return Err(ErreurDesactivation::AffectationInconnue);
     };
     if statut != "active" {
-        return Err(ErreurDesactivation::TransitionInvalide { statut_actuel: statut });
+        return Err(ErreurDesactivation::TransitionInvalide {
+            statut_actuel: statut,
+        });
     }
     if role == "responsable" {
         let responsables: i64 = sqlx::query_scalar(
@@ -135,10 +137,19 @@ pub async fn desactiver(
     .execute(&mut *tx)
     .await
     .map_err(|e| interne("fermeture des sessions", &e))?;
-    tx.commit().await.map_err(|e| interne("validation de la transaction", &e))?;
+    tx.commit()
+        .await
+        .map_err(|e| interne("validation de la transaction", &e))?;
 
     // DS8, après la validation en base ; un échec n'annule rien.
-    alerte_securite::prevenir(pool, email_sender, contact_securite, compte_vise, Evenement::AccesRetire).await;
+    alerte_securite::prevenir(
+        pool,
+        email_sender,
+        contact_securite,
+        compte_vise,
+        Evenement::AccesRetire,
+    )
+    .await;
     Ok(())
 }
 
@@ -164,7 +175,11 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap();
-        sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1").bind(u).execute(pool).await.unwrap();
+        sqlx::query("UPDATE utilisateur SET email_verifie_le = now() WHERE id = $1")
+            .bind(u)
+            .execute(pool)
+            .await
+            .unwrap();
         sqlx::query_scalar("INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'professionnel', 'x') RETURNING id")
             .bind(u)
             .fetch_one(pool)
@@ -202,7 +217,11 @@ mod tests {
     }
 
     async fn statut(pool: &PgPool, affectation_id: Uuid) -> String {
-        sqlx::query_scalar("SELECT statut FROM affectation WHERE id = $1").bind(affectation_id).fetch_one(pool).await.unwrap()
+        sqlx::query_scalar("SELECT statut FROM affectation WHERE id = $1")
+            .bind(affectation_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
     }
 
     /// Désactivation d'un agent : affectation close (date, auteur), session
@@ -217,57 +236,94 @@ mod tests {
         affecter(&pool, resp, s, "responsable").await;
         let agent = professionnel(&pool, "+22670400002").await;
         let aff_agent = affecter(&pool, agent, s, "agent_assurance_munaseb").await;
-        let session_agent = session::ouvrir(&pool, agent, Some(aff_agent)).await.unwrap();
+        let session_agent = session::ouvrir(&pool, agent, Some(aff_agent))
+            .await
+            .unwrap();
         let autre_session = session::ouvrir(&pool, agent, None).await.unwrap();
         assert!(matches!(
-            affectation::controler_exercice(&pool, agent, session_agent.version_jeton, session_agent.session_id, aff_agent)
-                .await
-                .unwrap(),
+            affectation::controler_exercice(
+                &pool,
+                agent,
+                session_agent.version_jeton,
+                session_agent.session_id,
+                aff_agent
+            )
+            .await
+            .unwrap(),
             affectation::ControleExercice::Valide(_)
         ));
 
         let membres = lister(&pool, s).await.unwrap();
         assert_eq!(membres.len(), 2);
         let json = serde_json::to_string(&membres).unwrap();
-        assert!(!json.contains("+2267") && !json.contains("@example.org"), "ni téléphone ni email : {json}");
+        assert!(
+            !json.contains("+2267") && !json.contains("@example.org"),
+            "ni téléphone ni email : {json}"
+        );
 
-        desactiver(&pool, &emails, CONTACT, resp, s, aff_agent).await.unwrap();
-        assert_eq!(statut(&pool, aff_agent).await, "desactivee");
-        let par: Option<Uuid> = sqlx::query_scalar("SELECT desactivee_par_compte_id FROM affectation WHERE id = $1")
-            .bind(aff_agent)
-            .fetch_one(&pool)
+        desactiver(&pool, &emails, CONTACT, resp, s, aff_agent)
             .await
             .unwrap();
+        assert_eq!(statut(&pool, aff_agent).await, "desactivee");
+        let par: Option<Uuid> =
+            sqlx::query_scalar("SELECT desactivee_par_compte_id FROM affectation WHERE id = $1")
+                .bind(aff_agent)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(par, Some(resp));
 
         // Session de l'affectation fermée ; l'autre intacte.
-        let motifs: Vec<Option<String>> = sqlx::query_scalar("SELECT motif_revocation FROM session WHERE compte_id = $1 ORDER BY creee_le")
-            .bind(agent)
-            .fetch_all(&pool)
-            .await
-            .unwrap();
-        assert_eq!(motifs, [Some("desactivation_affectation".to_string()), None]);
+        let motifs: Vec<Option<String>> = sqlx::query_scalar(
+            "SELECT motif_revocation FROM session WHERE compte_id = $1 ORDER BY creee_le",
+        )
+        .bind(agent)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            motifs,
+            [Some("desactivation_affectation".to_string()), None]
+        );
         // Le jeton d'accès déjà émis ne sert plus (D4, session fermée) ; la
         // session sans affectation reste ouverte.
         assert!(matches!(
-            affectation::controler_exercice(&pool, agent, session_agent.version_jeton, session_agent.session_id, aff_agent)
-                .await
-                .unwrap(),
+            affectation::controler_exercice(
+                &pool,
+                agent,
+                session_agent.version_jeton,
+                session_agent.session_id,
+                aff_agent
+            )
+            .await
+            .unwrap(),
             affectation::ControleExercice::JetonInvalide
         ));
-        let autre_ouverte: bool = sqlx::query_scalar("SELECT revoquee_le IS NULL FROM session WHERE id = $1")
-            .bind(autre_session.session_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let autre_ouverte: bool =
+            sqlx::query_scalar("SELECT revoquee_le IS NULL FROM session WHERE id = $1")
+                .bind(autre_session.session_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert!(autre_ouverte);
-        assert!(affectation::lister(&pool, agent).await.unwrap().is_empty(), "plus aucune affectation active");
+        assert!(
+            affectation::lister(&pool, agent).await.unwrap().is_empty(),
+            "plus aucune affectation active"
+        );
 
         assert_eq!(lister(&pool, s).await.unwrap().len(), 1);
         let (dest, corps) = emails.0.lock().unwrap()[0].clone();
         assert_eq!(dest, "p70400002@example.org");
-        assert!(corps.contains("(heure du Burkina Faso)") && corps.contains(CONTACT) && !corps.contains('\u{2014}'), "{corps}");
-        assert!(!corps.contains("MUNASEB (test)"), "sans le nom de la structure");
+        assert!(
+            corps.contains("(heure du Burkina Faso)")
+                && corps.contains(CONTACT)
+                && !corps.contains('\u{2014}'),
+            "{corps}"
+        );
+        assert!(
+            !corps.contains("MUNASEB (test)"),
+            "sans le nom de la structure"
+        );
 
         // Déjà désactivée.
         assert!(matches!(
@@ -285,18 +341,26 @@ mod tests {
         let r1 = professionnel(&pool, "+22670400011").await;
         let s = structure(&pool, r1).await;
         let a1 = affecter(&pool, r1, s, "responsable").await;
-        assert!(matches!(desactiver(&pool, &emails, CONTACT, r1, s, a1).await, Err(ErreurDesactivation::DernierResponsable)));
+        assert!(matches!(
+            desactiver(&pool, &emails, CONTACT, r1, s, a1).await,
+            Err(ErreurDesactivation::DernierResponsable)
+        ));
 
         let r2 = professionnel(&pool, "+22670400012").await;
         affecter(&pool, r2, s, "responsable").await;
-        desactiver(&pool, &emails, CONTACT, r1, s, a1).await.unwrap();
+        desactiver(&pool, &emails, CONTACT, r1, s, a1)
+            .await
+            .unwrap();
         assert_eq!(statut(&pool, a1).await, "desactivee");
 
         // Une affectation d'une autre structure n'existe pas pour celle-ci.
         let r3 = professionnel(&pool, "+22670400013").await;
         let autre = structure_au_statut(&pool, r3, "en_attente").await;
         let a3 = affecter(&pool, r3, autre, "responsable").await;
-        assert!(matches!(desactiver(&pool, &emails, CONTACT, r2, s, a3).await, Err(ErreurDesactivation::AffectationInconnue)));
+        assert!(matches!(
+            desactiver(&pool, &emails, CONTACT, r2, s, a3).await,
+            Err(ErreurDesactivation::AffectationInconnue)
+        ));
         assert_eq!(statut(&pool, a3).await, "active");
     }
 
@@ -311,12 +375,19 @@ mod tests {
         let r2 = professionnel(&pool, "+22670400022").await;
         let a2 = affecter(&pool, r2, s, "responsable").await;
         let (p1, p2) = (pool.clone(), pool.clone());
-        let t1 = tokio::spawn(async move { desactiver(&p1, &EmailsRecus::default(), CONTACT, r1, s, a2).await });
-        let t2 = tokio::spawn(async move { desactiver(&p2, &EmailsRecus::default(), CONTACT, r2, s, a1).await });
+        let t1 = tokio::spawn(async move {
+            desactiver(&p1, &EmailsRecus::default(), CONTACT, r1, s, a2).await
+        });
+        let t2 = tokio::spawn(async move {
+            desactiver(&p2, &EmailsRecus::default(), CONTACT, r2, s, a1).await
+        });
         let (x, y) = (t1.await.unwrap(), t2.await.unwrap());
         assert!(x.is_ok() != y.is_ok(), "{x:?} / {y:?}");
         for e in [&x, &y].into_iter().filter_map(|r| r.as_ref().err()) {
-            assert!(matches!(e, ErreurDesactivation::DernierResponsable), "{e:?}");
+            assert!(
+                matches!(e, ErreurDesactivation::DernierResponsable),
+                "{e:?}"
+            );
         }
     }
 
@@ -332,11 +403,17 @@ mod tests {
         affecter(&pool, resp, s, "responsable").await;
         let agent = professionnel(&pool, "+22670400032").await;
         let aff = affecter(&pool, agent, s, "agent_assurance_munaseb").await;
-        let paire = session::ouvrir(&pool, agent, Some(aff)).await.unwrap().en_paire(&jwt).unwrap();
+        let paire = session::ouvrir(&pool, agent, Some(aff))
+            .await
+            .unwrap()
+            .en_paire(&jwt)
+            .unwrap();
         let jeton = paire.jeton_renouvellement.en_clair().to_string();
 
         let (p1, p2) = (pool.clone(), pool.clone());
-        let t1 = tokio::spawn(async move { desactiver(&p1, &EmailsRecus::default(), CONTACT, resp, s, aff).await });
+        let t1 = tokio::spawn(async move {
+            desactiver(&p1, &EmailsRecus::default(), CONTACT, resp, s, aff).await
+        });
         let t2 = tokio::spawn(async move { session::renouveler(&p2, &jeton).await });
         t1.await.unwrap().unwrap();
         // Renouvelé avant la fermeture, ou refusé après : jamais une erreur
@@ -345,11 +422,16 @@ mod tests {
             Ok(_) | Err(session::ErreurSession::JetonInvalide) => {}
             Err(e) => panic!("{e:?}"),
         }
-        let ouvertes: i64 = sqlx::query_scalar("SELECT count(*) FROM session WHERE affectation_id = $1 AND revoquee_le IS NULL")
-            .bind(aff)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(ouvertes, 0, "aucune session ouverte sur l'affectation désactivée");
+        let ouvertes: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM session WHERE affectation_id = $1 AND revoquee_le IS NULL",
+        )
+        .bind(aff)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            ouvertes, 0,
+            "aucune session ouverte sur l'affectation désactivée"
+        );
     }
 }

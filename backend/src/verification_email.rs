@@ -22,7 +22,11 @@ use crate::jeton_email::{self, Renvoi, VerificationEmise};
 /// Construit le lien et envoie l'email. Un échec d'envoi est journalisé
 /// sans le jeton ni l'adresse, et n'annule rien : la personne demande un
 /// nouveau lien par la route de renvoi.
-pub fn envoyer_lien(email_sender: &dyn EmailSender, url_application_web: &str, emise: &VerificationEmise) {
+pub fn envoyer_lien(
+    email_sender: &dyn EmailSender,
+    url_application_web: &str,
+    emise: &VerificationEmise,
+) {
     let corps = format!(
         "Bonjour,\n\n\
          Pour vérifier votre adresse email LaafiCare, ouvrez ce lien puis confirmez sur la page qui s'affiche :\n\n\
@@ -33,7 +37,11 @@ pub fn envoyer_lien(email_sender: &dyn EmailSender, url_application_web: &str, e
         jeton_email::DUREE_VERIFICATION_HEURES,
     );
     if email_sender
-        .envoyer(&emise.email, "LaafiCare : vérification de votre adresse email", &corps)
+        .envoyer(
+            &emise.email,
+            "LaafiCare : vérification de votre adresse email",
+            &corps,
+        )
         .is_err()
     {
         tracing::error!("échec d'envoi de l'email de vérification");
@@ -44,7 +52,9 @@ pub fn envoyer_lien(email_sender: &dyn EmailSender, url_application_web: &str, e
 /// une adresse. Faux dans tous les cas de refus, jamais distingués (E6).
 pub async fn verifier(pool: &PgPool, jeton: &str) -> Result<bool, sqlx::Error> {
     // `None` : la route n'est liée à aucun compte, seul le jeton compte.
-    Ok(jeton_email::verifier_email(pool, jeton.trim(), None).await?.is_some())
+    Ok(jeton_email::verifier_email(pool, jeton.trim(), None)
+        .await?
+        .is_some())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -70,10 +80,14 @@ pub async fn renvoyer(
     email: &str,
     mot_de_passe: &str,
 ) -> Result<(), ErreurRenvoi> {
-    match auth_professionnel::verifier_identifiants(pool, "professionnel", email, mot_de_passe).await {
+    match auth_professionnel::verifier_identifiants(pool, "professionnel", email, mot_de_passe)
+        .await
+    {
         Ok(_) => return Ok(()),
         Err(ErreurAuthProfessionnel::EmailNonVerifie) => {}
-        Err(ErreurAuthProfessionnel::IdentifiantsInvalides) => return Err(ErreurRenvoi::IdentifiantsInvalides),
+        Err(ErreurAuthProfessionnel::IdentifiantsInvalides) => {
+            return Err(ErreurRenvoi::IdentifiantsInvalides);
+        }
         Err(ErreurAuthProfessionnel::Interne(etape)) => return Err(ErreurRenvoi::Interne(etape)),
     }
 
@@ -95,7 +109,9 @@ pub async fn renvoyer(
     let renvoi = jeton_email::renvoyer_verification(&mut tx, compte_id)
         .await
         .map_err(|e| interne("émission du jeton", e))?;
-    tx.commit().await.map_err(|e| interne("validation de la transaction", e))?;
+    tx.commit()
+        .await
+        .map_err(|e| interne("validation de la transaction", e))?;
 
     match renvoi {
         Some(Renvoi::Emis(emise)) => {
@@ -103,7 +119,9 @@ pub async fn renvoyer(
             envoyer_lien(email_sender, url_application_web, &emise);
             Ok(())
         }
-        Some(Renvoi::TropTot { attendre_secondes }) => Err(ErreurRenvoi::TropTot { attendre_secondes }),
+        Some(Renvoi::TropTot { attendre_secondes }) => {
+            Err(ErreurRenvoi::TropTot { attendre_secondes })
+        }
         None => Err(ErreurRenvoi::Interne("compte sans email")),
     }
 }
@@ -121,12 +139,14 @@ mod tests {
     const BON: &str = "Exemple#2026";
 
     async fn professionnel(pool: &PgPool, telephone: &str, email: &str) -> Uuid {
-        let utilisateur_id: Uuid = sqlx::query_scalar("INSERT INTO utilisateur (telephone, email) VALUES ($1, $2) RETURNING id")
-            .bind(telephone)
-            .bind(email)
-            .fetch_one(pool)
-            .await
-            .unwrap();
+        let utilisateur_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO utilisateur (telephone, email) VALUES ($1, $2) RETURNING id",
+        )
+        .bind(telephone)
+        .bind(email)
+        .fetch_one(pool)
+        .await
+        .unwrap();
         sqlx::query_scalar(
             "INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) VALUES ($1, 'professionnel', $2) RETURNING id",
         )
@@ -144,19 +164,47 @@ mod tests {
         let compte_id = professionnel(&pool, "+22670140001", "renvoi.route@example.org").await;
 
         assert!(matches!(
-            renvoyer(&pool, &emails, "http://localhost:4200", "renvoi.route@example.org", "Mauvais#2026").await,
+            renvoyer(
+                &pool,
+                &emails,
+                "http://localhost:4200",
+                "renvoi.route@example.org",
+                "Mauvais#2026"
+            )
+            .await,
             Err(ErreurRenvoi::IdentifiantsInvalides)
         ));
-        assert!(emails.0.lock().unwrap().is_empty(), "rien sans le bon mot de passe");
+        assert!(
+            emails.0.lock().unwrap().is_empty(),
+            "rien sans le bon mot de passe"
+        );
 
-        renvoyer(&pool, &emails, "http://localhost:4200", " Renvoi.Route@Example.org ", BON).await.unwrap();
+        renvoyer(
+            &pool,
+            &emails,
+            "http://localhost:4200",
+            " Renvoi.Route@Example.org ",
+            BON,
+        )
+        .await
+        .unwrap();
         let (destinataire, corps) = emails.0.lock().unwrap()[0].clone();
         assert_eq!(destinataire, "renvoi.route@example.org");
-        assert!(corps.contains("http://localhost:4200/verifier-email#jeton="), "{corps}");
+        assert!(
+            corps.contains("http://localhost:4200/verifier-email#jeton="),
+            "{corps}"
+        );
 
         // Second renvoi dans la minute : refusé, rien n'est envoyé.
         assert!(matches!(
-            renvoyer(&pool, &emails, "http://localhost:4200", "renvoi.route@example.org", BON).await,
+            renvoyer(
+                &pool,
+                &emails,
+                "http://localhost:4200",
+                "renvoi.route@example.org",
+                BON
+            )
+            .await,
             Err(ErreurRenvoi::TropTot { .. })
         ));
         assert_eq!(emails.0.lock().unwrap().len(), 1);
@@ -174,7 +222,15 @@ mod tests {
         assert!(verifie);
 
         // Email vérifié : la même réponse, sans aucun envoi.
-        renvoyer(&pool, &emails, "http://localhost:4200", "renvoi.route@example.org", BON).await.unwrap();
+        renvoyer(
+            &pool,
+            &emails,
+            "http://localhost:4200",
+            "renvoi.route@example.org",
+            BON,
+        )
+        .await
+        .unwrap();
         assert_eq!(emails.0.lock().unwrap().len(), 1);
     }
 
@@ -184,8 +240,24 @@ mod tests {
     async fn email_inconnu_meme_reponse_que_mot_de_passe_faux(pool: PgPool) {
         let emails = EmailsRecus::default();
         professionnel(&pool, "+22670140002", "connu@example.org").await;
-        let inconnu = renvoyer(&pool, &emails, "http://localhost:4200", "inconnu@example.org", BON).await.unwrap_err();
-        let faux = renvoyer(&pool, &emails, "http://localhost:4200", "connu@example.org", "Mauvais#2026").await.unwrap_err();
+        let inconnu = renvoyer(
+            &pool,
+            &emails,
+            "http://localhost:4200",
+            "inconnu@example.org",
+            BON,
+        )
+        .await
+        .unwrap_err();
+        let faux = renvoyer(
+            &pool,
+            &emails,
+            "http://localhost:4200",
+            "connu@example.org",
+            "Mauvais#2026",
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(inconnu, ErreurRenvoi::IdentifiantsInvalides));
         assert!(matches!(faux, ErreurRenvoi::IdentifiantsInvalides));
         assert_eq!(inconnu.to_string(), faux.to_string());
@@ -201,7 +273,14 @@ mod tests {
         let compte_id = professionnel(&pool, "+22670140003", "verrou.renvoi@example.org").await;
         for _ in 0..5 {
             assert!(matches!(
-                renvoyer(&pool, &emails, "http://localhost:4200", "verrou.renvoi@example.org", "Mauvais#2026").await,
+                renvoyer(
+                    &pool,
+                    &emails,
+                    "http://localhost:4200",
+                    "verrou.renvoi@example.org",
+                    "Mauvais#2026"
+                )
+                .await,
                 Err(ErreurRenvoi::IdentifiantsInvalides)
             ));
         }
@@ -213,7 +292,14 @@ mod tests {
                 .unwrap();
         assert!(verrouille);
         assert!(matches!(
-            renvoyer(&pool, &emails, "http://localhost:4200", "verrou.renvoi@example.org", BON).await,
+            renvoyer(
+                &pool,
+                &emails,
+                "http://localhost:4200",
+                "verrou.renvoi@example.org",
+                BON
+            )
+            .await,
             Err(ErreurRenvoi::IdentifiantsInvalides)
         ));
         assert!(emails.0.lock().unwrap().is_empty());

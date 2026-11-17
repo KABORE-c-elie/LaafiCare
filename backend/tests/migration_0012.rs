@@ -39,7 +39,11 @@ async fn creer_compte(pool: &PgPool, telephone: &str, type_compte: &str) -> Uuid
     .unwrap()
 }
 
-async fn inserer_structure(pool: &PgPool, createur: Uuid, type_structure: &str) -> Result<Uuid, sqlx::Error> {
+async fn inserer_structure(
+    pool: &PgPool,
+    createur: Uuid,
+    type_structure: &str,
+) -> Result<Uuid, sqlx::Error> {
     sqlx::query_scalar(
         "INSERT INTO structure (type_structure, nom, telephone, telephone_urgence, region, email, commune, province, latitude, longitude, \
                                 createur_compte_id) \
@@ -52,7 +56,11 @@ async fn inserer_structure(pool: &PgPool, createur: Uuid, type_structure: &str) 
     .await
 }
 
-async fn changer_statut(pool: &PgPool, structure_id: Uuid, statut: &str) -> Result<(), sqlx::Error> {
+async fn changer_statut(
+    pool: &PgPool,
+    structure_id: Uuid,
+    statut: &str,
+) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE structure SET statut = $1 WHERE id = $2")
         .bind(statut)
         .bind(structure_id)
@@ -70,18 +78,28 @@ async fn deuxieme_munaseb_acceptee_en_brouillon_refusee_a_la_validation(pool: Pg
     // Deux demandes MUNASEB en brouillon : aucun blocage (M6).
     let munaseb_a = inserer_structure(&pool, chef_a, "munaseb").await.unwrap();
     let munaseb_b = inserer_structure(&pool, chef_b, "munaseb").await.unwrap();
-    changer_statut(&pool, munaseb_a, "en_attente").await.unwrap();
-    changer_statut(&pool, munaseb_b, "en_attente").await.unwrap();
+    changer_statut(&pool, munaseb_a, "en_attente")
+        .await
+        .unwrap();
+    changer_statut(&pool, munaseb_b, "en_attente")
+        .await
+        .unwrap();
 
     changer_statut(&pool, munaseb_a, "validee").await.unwrap();
     for statut in ["validee", "suspendue"] {
         let erreur = changer_statut(&pool, munaseb_b, statut).await.unwrap_err();
-        assert_eq!(contrainte(erreur), "structure_une_seule_munaseb_validee", "{statut}");
+        assert_eq!(
+            contrainte(erreur),
+            "structure_une_seule_munaseb_validee",
+            "{statut}"
+        );
     }
 
     // Une MUNASEB suspendue garde la place.
     changer_statut(&pool, munaseb_a, "suspendue").await.unwrap();
-    let erreur = changer_statut(&pool, munaseb_b, "validee").await.unwrap_err();
+    let erreur = changer_statut(&pool, munaseb_b, "validee")
+        .await
+        .unwrap_err();
     assert_eq!(contrainte(erreur), "structure_une_seule_munaseb_validee");
 }
 
@@ -89,25 +107,37 @@ async fn deuxieme_munaseb_acceptee_en_brouillon_refusee_a_la_validation(pool: Pg
 #[ignore]
 async fn une_seule_structure_non_validee_par_personne(pool: PgPool) {
     let createur = creer_compte(&pool, "+22670100003", "professionnel").await;
-    let premiere = inserer_structure(&pool, createur, "clinique").await.unwrap();
+    let premiere = inserer_structure(&pool, createur, "clinique")
+        .await
+        .unwrap();
 
     // Brouillon, en attente ou refusée : la place reste prise (M5).
     for statut in ["brouillon", "en_attente", "refusee"] {
         changer_statut(&pool, premiere, statut).await.unwrap();
-        let erreur = inserer_structure(&pool, createur, "clinique").await.unwrap_err();
-        assert_eq!(contrainte(erreur), "structure_une_non_validee_par_createur", "{statut}");
+        let erreur = inserer_structure(&pool, createur, "clinique")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            contrainte(erreur),
+            "structure_une_non_validee_par_createur",
+            "{statut}"
+        );
     }
 
     // Une structure validée ne compte plus : une nouvelle demande est permise.
     changer_statut(&pool, premiere, "validee").await.unwrap();
-    inserer_structure(&pool, createur, "pharmacie").await.unwrap();
+    inserer_structure(&pool, createur, "pharmacie")
+        .await
+        .unwrap();
 }
 
 #[sqlx::test]
 #[ignore]
 async fn structure_abandonnee_libere_la_place(pool: PgPool) {
     let createur = creer_compte(&pool, "+22670100004", "professionnel").await;
-    let abandonnee = inserer_structure(&pool, createur, "clinique").await.unwrap();
+    let abandonnee = inserer_structure(&pool, createur, "clinique")
+        .await
+        .unwrap();
     sqlx::query(
         "INSERT INTO piece_justificative (structure_id, type_piece, numero, date_piece, type_mime, taille, sha256) \
          VALUES ($1, 'autorisation_creation', 'A-1', '2026-01-01', 'application/pdf', 10, decode(repeat('00', 32), 'hex'))",
@@ -117,8 +147,12 @@ async fn structure_abandonnee_libere_la_place(pool: PgPool) {
     .await
     .unwrap();
 
-    changer_statut(&pool, abandonnee, "abandonnee").await.unwrap();
-    inserer_structure(&pool, createur, "clinique").await.unwrap();
+    changer_statut(&pool, abandonnee, "abandonnee")
+        .await
+        .unwrap();
+    inserer_structure(&pool, createur, "clinique")
+        .await
+        .unwrap();
 
     // Rien n'est effacé : la structure abandonnée et sa pièce restent.
     let pieces: i64 = sqlx::query_scalar(
@@ -137,8 +171,12 @@ async fn structure_abandonnee_libere_la_place(pool: PgPool) {
 async fn un_numero_d_autorisation_n_est_valide_qu_une_fois(pool: PgPool) {
     let createur_a = creer_compte(&pool, "+22670100005", "professionnel").await;
     let createur_b = creer_compte(&pool, "+22670100006", "professionnel").await;
-    let structure_a = inserer_structure(&pool, createur_a, "clinique").await.unwrap();
-    let structure_b = inserer_structure(&pool, createur_b, "clinique").await.unwrap();
+    let structure_a = inserer_structure(&pool, createur_a, "clinique")
+        .await
+        .unwrap();
+    let structure_b = inserer_structure(&pool, createur_b, "clinique")
+        .await
+        .unwrap();
 
     let mut pieces = Vec::new();
     for (structure_id, numero) in [(structure_a, "n° 12 ab"), (structure_b, "12AB")] {
@@ -186,7 +224,9 @@ async fn un_numero_d_autorisation_n_est_valide_qu_une_fois(pool: PgPool) {
 #[ignore]
 async fn normalisation_du_numero_d_autorisation(pool: PgPool) {
     let createur = creer_compte(&pool, "+22670100015", "professionnel").await;
-    let structure_id = inserer_structure(&pool, createur, "clinique").await.unwrap();
+    let structure_id = inserer_structure(&pool, createur, "clinique")
+        .await
+        .unwrap();
 
     let inserer_piece = |numero: &'static str| {
         sqlx::query_scalar::<_, String>(
@@ -202,30 +242,39 @@ async fn normalisation_du_numero_d_autorisation(pool: PgPool) {
     // structure, sans heurter l'index d'une seule pièce active par type.
 
     for (saisie, attendu) in [
-        ("2018-628/MS/CAB", "2018-628/MS/CAB"),                       // tiret simple gardé
-        ("N\u{b0} 2018-628/MS/CAB", "2018-628/MS/CAB"),               // signe degré
-        ("n\u{ba}2018-628/ms/cab", "2018-628/MS/CAB"),                // indicateur ordinal, minuscules
-        ("No 2018\u{2010}628/MS/CAB", "2018-628/MS/CAB"),             // « No », trait d'union
-        ("N. 2018\u{2013}628/MS/CAB", "2018-628/MS/CAB"),             // « N. », demi-cadratin
-        ("n \u{b0} 2018\u{2212}628 / MS / CAB", "2018-628/MS/CAB"),   // espaces autour, signe moins
-        ("N\u{b0}\u{a0}2018\u{2014}628/MS/CAB", "2018-628/MS/CAB"),   // espace insécable, cadratin
-        ("no2018\u{10ead}628/ms/cab", "2018-628/MS/CAB"),             // « o » minuscule, tiret hors BMP
-        ("2018-628/N\u{b0}/CAB", "2018-628/N\u{b0}/CAB"),             // « N° » au milieu : gardé
-        ("2018-628/ms/caf\u{e9}", "2018-628/MS/CAF\u{e9}"),           // COLLATE "C" : « é » non ASCII inchangé
+        ("2018-628/MS/CAB", "2018-628/MS/CAB"), // tiret simple gardé
+        ("N\u{b0} 2018-628/MS/CAB", "2018-628/MS/CAB"), // signe degré
+        ("n\u{ba}2018-628/ms/cab", "2018-628/MS/CAB"), // indicateur ordinal, minuscules
+        ("No 2018\u{2010}628/MS/CAB", "2018-628/MS/CAB"), // « No », trait d'union
+        ("N. 2018\u{2013}628/MS/CAB", "2018-628/MS/CAB"), // « N. », demi-cadratin
+        ("n \u{b0} 2018\u{2212}628 / MS / CAB", "2018-628/MS/CAB"), // espaces autour, signe moins
+        ("N\u{b0}\u{a0}2018\u{2014}628/MS/CAB", "2018-628/MS/CAB"), // espace insécable, cadratin
+        ("no2018\u{10ead}628/ms/cab", "2018-628/MS/CAB"), // « o » minuscule, tiret hors BMP
+        ("2018-628/N\u{b0}/CAB", "2018-628/N\u{b0}/CAB"), // « N° » au milieu : gardé
+        ("2018-628/ms/caf\u{e9}", "2018-628/MS/CAF\u{e9}"), // COLLATE "C" : « é » non ASCII inchangé
     ] {
-        assert_eq!(inserer_piece(saisie).await.unwrap(), attendu, "saisie : {saisie:?}");
+        assert_eq!(
+            inserer_piece(saisie).await.unwrap(),
+            attendu,
+            "saisie : {saisie:?}"
+        );
     }
 
     // N2 : un numéro réduit au seul préfixe est refusé.
     let erreur = inserer_piece("N\u{b0}").await.unwrap_err();
-    assert_eq!(contrainte(erreur), "piece_justificative_numero_normalise_non_vide");
+    assert_eq!(
+        contrainte(erreur),
+        "piece_justificative_numero_normalise_non_vide"
+    );
 }
 
 #[sqlx::test]
 #[ignore]
 async fn une_affectation_exige_un_compte_professionnel(pool: PgPool) {
     let responsable = creer_compte(&pool, "+22670100007", "professionnel").await;
-    let structure_id = inserer_structure(&pool, responsable, "munaseb").await.unwrap();
+    let structure_id = inserer_structure(&pool, responsable, "munaseb")
+        .await
+        .unwrap();
     let compte_patient = creer_compte(&pool, "+22670100008", "patient").await;
 
     let erreur = sqlx::query("INSERT INTO affectation (compte_id, structure_id, role) VALUES ($1, $2, 'agent_assurance_munaseb')")
@@ -253,7 +302,9 @@ async fn une_affectation_exige_un_compte_professionnel(pool: PgPool) {
 async fn une_decision_n_est_jamais_modifiee_ni_supprimee(pool: PgPool) {
     let responsable = creer_compte(&pool, "+22670100009", "professionnel").await;
     let administrateur = creer_compte(&pool, "+22670100010", "administrateur_laaficare").await;
-    let structure_id = inserer_structure(&pool, responsable, "clinique").await.unwrap();
+    let structure_id = inserer_structure(&pool, responsable, "clinique")
+        .await
+        .unwrap();
 
     // Un refus sans motif est refusé.
     let erreur = sqlx::query(
@@ -292,8 +343,15 @@ async fn une_decision_n_est_jamais_modifiee_ni_supprimee(pool: PgPool) {
         "DELETE FROM decision_structure",
         "TRUNCATE decision_structure",
     ] {
-        let erreur = sqlx::query(requete).execute(&pool).await.unwrap_err().to_string();
-        assert!(erreur.contains("jamais modifiées ni supprimées"), "{requete} : {erreur}");
+        let erreur = sqlx::query(requete)
+            .execute(&pool)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            erreur.contains("jamais modifiées ni supprimées"),
+            "{requete} : {erreur}"
+        );
     }
 }
 
@@ -316,8 +374,12 @@ async fn une_invitation_sans_cible_est_refusee(pool: PgPool) {
 async fn une_invitation_acceptee_reference_son_affectation(pool: PgPool) {
     let responsable = creer_compte(&pool, "+22670100013", "professionnel").await;
     let invite = creer_compte(&pool, "+22670100014", "professionnel").await;
-    let structure_id = inserer_structure(&pool, responsable, "munaseb").await.unwrap();
-    changer_statut(&pool, structure_id, "validee").await.unwrap();
+    let structure_id = inserer_structure(&pool, responsable, "munaseb")
+        .await
+        .unwrap();
+    changer_statut(&pool, structure_id, "validee")
+        .await
+        .unwrap();
 
     let inviter = || {
         sqlx::query_scalar::<_, Uuid>(
@@ -353,25 +415,30 @@ async fn une_invitation_acceptee_reference_son_affectation(pool: PgPool) {
 
     // Une affectation d'un autre rôle ne peut pas être liée.
     let mauvais_role = affecter("responsable").await.unwrap();
-    let erreur = accepter(invitation_id, Some(mauvais_role)).await.unwrap_err();
+    let erreur = accepter(invitation_id, Some(mauvais_role))
+        .await
+        .unwrap_err();
     assert_eq!(contrainte(erreur), "invitation_affectation");
 
     let affectation_id = affecter("agent_assurance_munaseb").await.unwrap();
     accepter(invitation_id, Some(affectation_id)).await.unwrap();
 
     // Qui a fait entrer ce professionnel, et quand.
-    let (invite_par, date_reponse): (Uuid, Option<chrono::DateTime<chrono::Utc>>) =
-        sqlx::query_as("SELECT invite_par_compte_id, date_reponse FROM invitation WHERE affectation_id = $1")
-            .bind(affectation_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (invite_par, date_reponse): (Uuid, Option<chrono::DateTime<chrono::Utc>>) = sqlx::query_as(
+        "SELECT invite_par_compte_id, date_reponse FROM invitation WHERE affectation_id = $1",
+    )
+    .bind(affectation_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(invite_par, responsable);
     assert!(date_reponse.is_some());
 
     // Une affectation naît d'une seule invitation.
     let autre_invitation = inviter().await.unwrap();
-    let erreur = accepter(autre_invitation, Some(affectation_id)).await.unwrap_err();
+    let erreur = accepter(autre_invitation, Some(affectation_id))
+        .await
+        .unwrap_err();
     assert_eq!(contrainte(erreur), "invitation_affectation_id_key");
 }
 
@@ -382,9 +449,13 @@ async fn une_invitation_acceptee_reference_son_affectation(pool: PgPool) {
 async fn une_affectation_ne_se_supprime_ni_ne_se_reactive(pool: PgPool) {
     let responsable = creer_compte(&pool, "+22670100016", "professionnel").await;
     let professionnel = creer_compte(&pool, "+22670100017", "professionnel").await;
-    let structure_id = inserer_structure(&pool, responsable, "munaseb").await.unwrap();
+    let structure_id = inserer_structure(&pool, responsable, "munaseb")
+        .await
+        .unwrap();
     // Une seconde structure, cible de la tentative de changement de structure.
-    inserer_structure(&pool, professionnel, "clinique").await.unwrap();
+    inserer_structure(&pool, professionnel, "clinique")
+        .await
+        .unwrap();
 
     let affecter = || {
         sqlx::query_scalar::<_, Uuid>(
@@ -399,13 +470,23 @@ async fn une_affectation_ne_se_supprime_ni_ne_se_reactive(pool: PgPool) {
     let message = |erreur: sqlx::Error| erreur.to_string();
 
     // 1. Suppression directe.
-    let erreur = modifier("DELETE FROM affectation WHERE id = $1").await.unwrap_err();
+    let erreur = modifier("DELETE FROM affectation WHERE id = $1")
+        .await
+        .unwrap_err();
     assert!(message(erreur).contains("jamais supprimée"));
 
     // 2. Troncature : sans CASCADE, PostgreSQL refuse déjà (clé étrangère
     //    depuis invitation) ; avec CASCADE, le trigger refuse.
-    assert!(sqlx::query("TRUNCATE affectation").execute(&pool).await.is_err());
-    let erreur = sqlx::query("TRUNCATE affectation CASCADE").execute(&pool).await.unwrap_err();
+    assert!(
+        sqlx::query("TRUNCATE affectation")
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+    let erreur = sqlx::query("TRUNCATE affectation CASCADE")
+        .execute(&pool)
+        .await
+        .unwrap_err();
     assert!(message(erreur).contains("jamais supprimée"));
 
     // 3. Sur une affectation active, aucune autre colonne ne change.
@@ -422,12 +503,18 @@ async fn une_affectation_ne_se_supprime_ni_ne_se_reactive(pool: PgPool) {
     // 5. Clôture sans auteur : le trigger la laisse passer, un CHECK refuse.
     //    Elle viole les deux CHECK de la clôture à la fois ; PostgreSQL ne
     //    signale que l'un d'eux.
-    let erreur = modifier("UPDATE affectation SET statut = 'desactivee', desactivee_le = now() WHERE id = $1")
-        .await
-        .unwrap_err();
+    let erreur = modifier(
+        "UPDATE affectation SET statut = 'desactivee', desactivee_le = now() WHERE id = $1",
+    )
+    .await
+    .unwrap_err();
     let refusee_par = contrainte(erreur);
     assert!(
-        ["affectation_desactivation_tracee", "affectation_desactivation_complete"].contains(&refusee_par.as_str()),
+        [
+            "affectation_desactivation_tracee",
+            "affectation_desactivation_complete"
+        ]
+        .contains(&refusee_par.as_str()),
         "{refusee_par}"
     );
 
@@ -471,12 +558,14 @@ async fn une_affectation_ne_se_supprime_ni_ne_se_reactive(pool: PgPool) {
     // Un compte que seule une affectation retient (les deux autres ont créé
     // une structure, qui les retient aussi).
     let invite = creer_compte(&pool, "+22670100018", "professionnel").await;
-    sqlx::query("INSERT INTO affectation (compte_id, structure_id, role) VALUES ($1, $2, 'responsable')")
-        .bind(invite)
-        .bind(structure_id)
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO affectation (compte_id, structure_id, role) VALUES ($1, $2, 'responsable')",
+    )
+    .bind(invite)
+    .bind(structure_id)
+    .execute(&pool)
+    .await
+    .unwrap();
     let erreur = sqlx::query("DELETE FROM compte WHERE id = $1")
         .bind(invite)
         .execute(&pool)
@@ -484,8 +573,14 @@ async fn une_affectation_ne_se_supprime_ni_ne_se_reactive(pool: PgPool) {
         .unwrap_err();
     assert_eq!(contrainte(erreur), "affectation_compte_professionnel");
 
-    let erreur = sqlx::query("TRUNCATE structure CASCADE").execute(&pool).await.unwrap_err();
-    assert!(message(erreur).contains("jamais"), "TRUNCATE structure CASCADE");
+    let erreur = sqlx::query("TRUNCATE structure CASCADE")
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    assert!(
+        message(erreur).contains("jamais"),
+        "TRUNCATE structure CASCADE"
+    );
     let restantes: i64 = sqlx::query_scalar("SELECT count(*) FROM affectation")
         .fetch_one(&pool)
         .await
