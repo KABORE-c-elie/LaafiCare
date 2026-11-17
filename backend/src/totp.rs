@@ -284,7 +284,7 @@ async fn confirmer_activation_a(
 
     // Hachés avant la transaction : 10 hachages Argon2id ne doivent pas
     // garder des verrous ouverts.
-    let (codes, hachages) = generer_codes_secours()?;
+    let (codes, hachages) = generer_codes_secours().await?;
 
     let mut transaction = pool.begin().await?;
     // Réenrôlement : la fenêtre est vidée en premier, en une requête
@@ -409,17 +409,25 @@ async fn verifier_code_a(
 /// cryptographique selon la doc de rand 0.10, comme dans `otp.rs`). Affichés
 /// `XXXXX-XXXXX` ; hachés sans le tiret, en Argon2id (NIST §3.1.2 : sous
 /// 112 bits, hachage de mot de passe salé exigé).
-fn generer_codes_secours() -> Result<(Vec<String>, Vec<String>), ErreurTotp> {
-    let mut codes = Vec::with_capacity(NOMBRE_CODES_SECOURS);
-    let mut hachages = Vec::with_capacity(NOMBRE_CODES_SECOURS);
-    for _ in 0..NOMBRE_CODES_SECOURS {
-        let brut: String = (0..LONGUEUR_CODE_SECOURS)
-            .map(|_| ALPHABET_BASE32[random_range(0..ALPHABET_BASE32.len())] as char)
-            .collect();
-        hachages.push(mot_de_passe::hacher(&brut).map_err(interne)?);
-        codes.push(format!("{}-{}", &brut[..5], &brut[5..]));
-    }
-    Ok((codes, hachages))
+///
+/// Les 10 hachages Argon2id sont faits hors des fils de tokio
+/// (`spawn_blocking`, même raison que `mot_de_passe::hacher_async`) : ils
+/// occuperaient sinon un fil du moteur pendant une à deux secondes.
+async fn generer_codes_secours() -> Result<(Vec<String>, Vec<String>), ErreurTotp> {
+    tokio::task::spawn_blocking(|| {
+        let mut codes = Vec::with_capacity(NOMBRE_CODES_SECOURS);
+        let mut hachages = Vec::with_capacity(NOMBRE_CODES_SECOURS);
+        for _ in 0..NOMBRE_CODES_SECOURS {
+            let brut: String = (0..LONGUEUR_CODE_SECOURS)
+                .map(|_| ALPHABET_BASE32[random_range(0..ALPHABET_BASE32.len())] as char)
+                .collect();
+            hachages.push(mot_de_passe::hacher(&brut).map_err(interne)?);
+            codes.push(format!("{}-{}", &brut[..5], &brut[5..]));
+        }
+        Ok((codes, hachages))
+    })
+    .await
+    .map_err(|e| ErreurTotp::Interne(e.to_string()))?
 }
 
 /// Accepte la saisie avec ou sans tiret ni espaces, en minuscules ou en
@@ -438,6 +446,16 @@ fn normaliser_code_secours(saisie: &str) -> Option<String> {
 /// les codes non utilisés (au plus 10 vérifications Argon2id), sans
 /// s'arrêter au premier trouvé. Usage unique garanti par la base : la
 /// condition `utilise_le IS NULL` de la mise à jour.
+///
+/// Remédiation de l'audit (reprise le 2026-11-17) :
+/// - la boucle entière tourne hors des fils de tokio (`spawn_blocking`) :
+///   jusqu'à 10 vérifications Argon2id d'affilée bloqueraient sinon un fil
+///   du moteur, et avec lui les autres requêtes ;
+/// - un hachage illisible en base n'arrête plus la boucle : il est compté
+///   comme « ne correspond pas » et signalé dans les journaux par son seul
+///   identifiant. Avant, l'erreur sortait au milieu de la boucle : le temps
+///   de réponse dépendait de la position de ce code, et un seul code abîmé
+///   rendait tous les autres codes du compte inutilisables.
 pub async fn verifier_code_secours(pool: &PgPool, compte_id: Uuid, saisie: &str) -> Result<(), ErreurTotp> {
     compter_essai(pool, compte_id).await?;
     let Some(code) = normaliser_code_secours(saisie) else {
@@ -453,12 +471,22 @@ pub async fn verifier_code_secours(pool: &PgPool, compte_id: Uuid, saisie: &str)
     .fetch_all(pool)
     .await?;
 
-    let mut trouve = None;
-    for (id, hachage) in &disponibles {
-        if mot_de_passe::verifier(&code, hachage).map_err(interne)? {
-            trouve = Some(*id);
+    // Le code saisi est un secret : sa copie est effacée de la mémoire à la
+    // fin du calcul (crate `zeroize`).
+    let code = zeroize::Zeroizing::new(code);
+    let trouve = tokio::task::spawn_blocking(move || {
+        let mut trouve = None;
+        for (id, hachage) in &disponibles {
+            match mot_de_passe::verifier(&code, hachage) {
+                Ok(true) => trouve = Some(*id),
+                Ok(false) => {}
+                Err(_) => tracing::error!(code_secours_id = %id, "hachage de code de secours illisible"),
+            }
         }
-    }
+        trouve
+    })
+    .await
+    .map_err(|e| ErreurTotp::Interne(e.to_string()))?;
     let Some(id) = trouve else {
         return Err(ErreurTotp::Refuse);
     };
@@ -544,9 +572,9 @@ mod tests {
         assert!(url.contains("issuer=LaafiCare"), "{url}");
     }
 
-    #[test]
-    fn codes_de_secours_formats_et_saisie() {
-        let (codes, hachages) = generer_codes_secours().unwrap();
+    #[tokio::test]
+    async fn codes_de_secours_formats_et_saisie() {
+        let (codes, hachages) = generer_codes_secours().await.unwrap();
         assert_eq!(codes.len(), NOMBRE_CODES_SECOURS);
         assert_eq!(hachages.len(), NOMBRE_CODES_SECOURS);
         for code in &codes {
@@ -678,6 +706,19 @@ mod tests {
         assert!(refuse(verifier_code_secours(&pool, compte, &codes[0]).await));
         verifier_code_secours(&pool, compte, &codes[1]).await.unwrap();
         assert!(refuse(verifier_code_secours(&pool, compte, "AAAAA-AAAAA").await));
+
+        // Un hachage illisible en base (remédiation de l'audit) n'empêche
+        // plus les autres codes de servir, et ne donne aucun accès.
+        sqlx::query(
+            "INSERT INTO code_secours (second_facteur_id, hash) \
+             SELECT id, 'hachage-abime' FROM second_facteur_totp WHERE compte_id = $1",
+        )
+        .bind(compte)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(refuse(verifier_code_secours(&pool, compte, "AAAAA-AAAAA").await));
+        verifier_code_secours(&pool, compte, &codes[2]).await.unwrap();
     }
 
     #[sqlx::test]

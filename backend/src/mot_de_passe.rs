@@ -179,6 +179,40 @@ pub fn verifier(mot_de_passe: &str, hash: &str) -> Result<bool, Error> {
     }
 }
 
+/// Erreur des versions asynchrones : celle d'Argon2, ou la tâche bloquante
+/// interrompue (panique ou arrêt du moteur d'exécution).
+#[derive(Debug, thiserror::Error)]
+pub enum ErreurHachage {
+    #[error("argon2 : {0}")]
+    Argon2(#[from] Error),
+    #[error("tâche de hachage interrompue : {0}")]
+    TacheInterrompue(#[from] tokio::task::JoinError),
+}
+
+/// `hacher`, hors des fils du moteur asynchrone (remédiation de l'audit,
+/// reprise le 2026-11-17). Argon2id avec m = 19 MiB et t = 2 est un calcul
+/// long, sans point d'attente : exécuté dans une requête, il occupe un fil de
+/// tokio et retarde toutes les autres requêtes de ce fil. Source : doc de
+/// tokio, `tokio::task::spawn_blocking` (« runs the provided closure on a
+/// thread where blocking is acceptable ») et chapitre « CPU-bound tasks and
+/// blocking code » du module `tokio::task`.
+///
+/// La copie du mot de passe (la fermeture doit posséder ses données) est
+/// gardée dans `Zeroizing` : effacée de la mémoire à la fin du calcul (crate
+/// `zeroize`, déjà utilisée pour les secrets).
+pub async fn hacher_async(mot_de_passe: &str) -> Result<String, ErreurHachage> {
+    let copie = zeroize::Zeroizing::new(mot_de_passe.to_owned());
+    Ok(tokio::task::spawn_blocking(move || hacher(&copie)).await??)
+}
+
+/// `verifier`, hors des fils du moteur asynchrone (même raison que
+/// `hacher_async`).
+pub async fn verifier_async(mot_de_passe: &str, hash: &str) -> Result<bool, ErreurHachage> {
+    let copie = zeroize::Zeroizing::new(mot_de_passe.to_owned());
+    let hash = hash.to_owned();
+    Ok(tokio::task::spawn_blocking(move || verifier(&copie, &hash)).await??)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,5 +334,19 @@ mod tests {
     fn hachage_corrompu_renvoie_une_erreur_pas_un_faux() {
         let resultat = verifier("peu-importe", "pas-un-hachage-valide");
         assert!(resultat.is_err());
+    }
+
+    /// Les versions asynchrones donnent les mêmes résultats, normalisation
+    /// NFC comprise (« é » composé et décomposé).
+    #[tokio::test]
+    async fn versions_asynchrones() {
+        let hash = hacher_async("Caf\u{e9}#2026").await.unwrap();
+        assert!(verifier_async("Cafe\u{301}#2026", &hash).await.unwrap());
+        assert!(!verifier_async("Autre#2026", &hash).await.unwrap());
+        assert!(verifier("Caf\u{e9}#2026", &hash).unwrap(), "compatible avec la version synchrone");
+        assert!(matches!(
+            verifier_async("x", "pas-un-hachage-valide").await,
+            Err(ErreurHachage::Argon2(_))
+        ));
     }
 }

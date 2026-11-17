@@ -52,17 +52,21 @@ impl From<sqlx::Error> for ErreurConnexion {
 /// changent.
 static FAUX_HACHAGE: OnceLock<String> = OnceLock::new();
 
-fn verifier_faux_hachage(mot_de_passe_saisi: &str) -> Result<(), ErreurConnexion> {
+async fn verifier_faux_hachage(mot_de_passe_saisi: &str) -> Result<(), ErreurConnexion> {
     let faux = match FAUX_HACHAGE.get() {
-        Some(faux) => faux,
+        Some(faux) => faux.clone(),
         None => {
-            let calcule = mot_de_passe::hacher("faux-hachage-egalisation-du-temps")
+            // Premier appel seulement : calculé hors des fils de tokio, comme
+            // tout hachage Argon2id (`mot_de_passe::hacher_async`).
+            let calcule = mot_de_passe::hacher_async("faux-hachage-egalisation-du-temps")
+                .await
                 .map_err(|e| ErreurConnexion::Interne(e.to_string()))?;
-            FAUX_HACHAGE.get_or_init(|| calcule)
+            FAUX_HACHAGE.get_or_init(|| calcule).clone()
         }
     };
-    // Le résultat n'a pas d'importance : seul compte le temps passé.
-    let _ = mot_de_passe::verifier(mot_de_passe_saisi, faux);
+    // Le résultat n'a pas d'importance : seul compte le temps passé, le même
+    // qu'une vraie vérification (même fonction, même file de fils).
+    let _ = mot_de_passe::verifier_async(mot_de_passe_saisi, &faux).await;
     Ok(())
 }
 
@@ -139,18 +143,19 @@ pub async fn verifier(
     mot_de_passe_saisi: &str,
 ) -> Result<Verification, ErreurConnexion> {
     let Some(compte_id) = compte_id else {
-        verifier_faux_hachage(mot_de_passe_saisi)?;
+        verifier_faux_hachage(mot_de_passe_saisi).await?;
         return Err(ErreurConnexion::IdentifiantsInvalides);
     };
 
     // Aucune ligne : compte verrouillé (ou disparu). Même réponse et même
     // temps qu'un compte inconnu (décision L1).
     let Some(tentative) = compter_tentative(pool, compte_id).await? else {
-        verifier_faux_hachage(mot_de_passe_saisi)?;
+        verifier_faux_hachage(mot_de_passe_saisi).await?;
         return Err(ErreurConnexion::IdentifiantsInvalides);
     };
 
-    let correct = mot_de_passe::verifier(mot_de_passe_saisi, &tentative.mot_de_passe_hash)
+    let correct = mot_de_passe::verifier_async(mot_de_passe_saisi, &tentative.mot_de_passe_hash)
+        .await
         .map_err(|e| ErreurConnexion::Interne(e.to_string()))?;
 
     // Compte désactivé : le mot de passe a été vérifié quand même, pour que

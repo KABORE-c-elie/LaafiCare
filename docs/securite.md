@@ -29,6 +29,9 @@ Les fichiers de code cités sont dans [`backend/src/`](../backend/src/) et [`bac
 **L'algorithme : Argon2id.** C'est celui que recommande l'OWASP (*Password Storage Cheat Sheet*). Il est volontairement lent et gourmand en mémoire : un attaquant qui voudrait essayer des milliards de mots de passe sur une empreinte volée devrait y consacrer énormément de calcul. Paramètres : 19 Mio de mémoire, 2 passes, 1 fil d'exécution (le minimum OWASP). Chaque empreinte contient un *sel*, une valeur aléatoire propre à chaque compte, pour que deux personnes ayant le même mot de passe n'aient pas la même empreinte.
 Fichier : [`mot_de_passe.rs`](../backend/src/mot_de_passe.rs). Source : OWASP, documentation de la bibliothèque `argon2` 0.6.
 
+**Le calcul ne bloque pas le serveur** (2026-11-17). Un hachage Argon2id prend du temps de calcul sans pause. Fait au milieu d'une requête, il occuperait un des fils du serveur et ferait attendre les autres utilisateurs ; dix vérifications d'affilée (codes de secours) bloqueraient ce fil plus d'une seconde. Chaque hachage et chaque vérification du serveur se font donc sur des fils réservés aux calculs longs (`spawn_blocking` de la bibliothèque `tokio`, qui le recommande pour ce cas). La copie du mot de passe passée à ce calcul est effacée de la mémoire ensuite. Un code de secours abîmé en base n'empêche plus les autres codes du compte de servir, et ne change plus le temps de réponse.
+Source : documentation de `tokio`, `tokio::task::spawn_blocking`.
+
 **Les règles** (source : NIST SP 800-63B, révision 4, §3.1.1.2) :
 
 - de **8 à 128 caractères**, comptés en caractères et non en octets (une lettre accentuée compte pour un) ;
