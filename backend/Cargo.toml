@@ -30,7 +30,9 @@ serde_json = "1.0.151"
 sha2 = "0.11.0"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "migrate", "macros"] }
 thiserror = "2.0.20"
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
+# signal : Ctrl+C et SIGTERM pour l'arrêt propre du serveur (doc de tokio,
+# module `tokio::signal`, fonctionnalité `signal`).
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal"] }
 # Second facteur TOTP, RFC 6238 (décision Z1). 6.0.0 stable, vérifiée sur
 # crates.io le 2026-10-05. otpauth : URL `otpauth://` (Z2) ; gen_secret :
 # secret de 160 bits généré par la crate ; zeroize : secret effacé de la

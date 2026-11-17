@@ -272,7 +272,7 @@ Chaque `\password` demande le mot de passe deux fois, **sans l'afficher**. Chois
 
 Au démarrage, le serveur vérifie que la base est à jour. Pour vérifier qu'il répond, ouvrir `http://127.0.0.1:8080/health` dans un navigateur (avec le port choisi) : la page affiche `"status":"ok"`.
 
-Le serveur s'arrête avec `Ctrl+C` dans le terminal où il tourne. PostgreSQL s'arrête avec `docker compose down` ; les données sont gardées pour la prochaine fois.
+Le serveur s'arrête avec `Ctrl+C` dans le terminal où il tourne (ou le signal d'arrêt de Docker ou de systemd) : il n'accepte plus de nouvelle demande, laisse finir celles en cours, ferme ses connexions à la base, puis écrit « serveur arrêté proprement ». PostgreSQL s'arrête avec `docker compose down` ; les données sont gardées pour la prochaine fois.
 
 > ⚠️ **`docker compose down -v` efface toute la base de développement**, comptes de test compris : identités, comptes patients, contrats, demandes, tout. Rien ne peut être récupéré. À n'utiliser que pour repartir volontairement d'une base vide.
 

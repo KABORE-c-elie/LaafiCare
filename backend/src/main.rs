@@ -332,7 +332,7 @@ async fn main() {
         )
         .route("/api/pharmacie/rapport", get(routes_pharmacie::rapport))
         .with_state(AppState {
-            db: pool,
+            db: pool.clone(),
             jwt,
             sms,
             cle_totp: Arc::new(config.totp_cle_chiffrement),
@@ -355,9 +355,57 @@ async fn main() {
 
     tracing::info!(%adresse, "serveur démarré");
 
-    // Exemple officiel d'axum::serve (docs.rs, axum 0.8.9).
-    if let Err(erreur) = axum::serve(listener, app).await {
+    // Arrêt propre (remédiation de l'audit, reprise le 2026-11-17) : doc
+    // d'axum 0.8.9, `serve::Serve::with_graceful_shutdown`, et exemple
+    // officiel `examples/graceful-shutdown`. Au signal, le serveur n'accepte
+    // plus de connexion et laisse finir les requêtes en cours : une vente,
+    // une validation ou un paiement n'est pas coupé au milieu de sa
+    // transaction.
+    if let Err(erreur) = axum::serve(listener, app)
+        .with_graceful_shutdown(signal_d_arret())
+        .await
+    {
         tracing::error!(%erreur, "le serveur s'est arrêté sur une erreur");
         std::process::exit(1);
     }
+
+    // Connexions à PostgreSQL fermées proprement (doc de sqlx 0.9,
+    // `Pool::close` : attend que les connexions empruntées soient rendues).
+    pool.close().await;
+    tracing::info!("serveur arrêté proprement");
+}
+
+/// Attend Ctrl+C, ou SIGTERM (le signal qu'envoient Docker et systemd pour
+/// arrêter un service), comme l'exemple officiel d'axum. L'exemple fait
+/// `expect` si l'écoute d'un signal ne peut pas être installée ; ici, pas de
+/// panique (règle du démarrage, BNF-03) : l'erreur est journalisée et ce
+/// signal-là est ignoré, l'autre reste écouté.
+async fn signal_d_arret() {
+    let ctrl_c = async {
+        if let Err(erreur) = tokio::signal::ctrl_c().await {
+            tracing::error!(%erreur, "écoute de Ctrl+C impossible");
+            std::future::pending::<()>().await;
+        }
+    };
+
+    #[cfg(unix)]
+    let terminaison = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(erreur) => {
+                tracing::error!(%erreur, "écoute de SIGTERM impossible");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminaison = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminaison => {},
+    }
+    tracing::info!("signal d'arrêt reçu : fin des requêtes en cours");
 }
