@@ -675,6 +675,7 @@ pub struct Desactivation {
 /// 4. toutes ses sessions sont fermées, `version_jeton` augmentée : les
 ///    jetons intermédiaires déjà émis tombent aussi ;
 /// 5. pour un administrateur, la fenêtre de réenrôlement est ouverte.
+///
 /// Puis, après le commit, la personne est prévenue par email (NIST SP
 /// 800-63B rév. 4 §4.2.3 : « account recovery SHALL cause a notification to
 /// be sent to the subscriber »).

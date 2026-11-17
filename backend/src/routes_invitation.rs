@@ -77,6 +77,9 @@ fn reponse_erreur_invitation(erreur: ErreurInvitation) -> Response {
 }
 
 /// Seul un responsable invite et gère les invitations (I3).
+// Exception `clippy::result_large_err` : erreur = `Response` d'axum, voir
+// `routes_espace_patient::limite_valide`.
+#[allow(clippy::result_large_err)]
 pub(crate) fn responsable(
     professionnel: &ProfessionnelEnExercice,
 ) -> Result<Responsable<'_>, Response> {

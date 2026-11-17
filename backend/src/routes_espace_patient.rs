@@ -21,6 +21,13 @@ use laaficare_backend::notification::{self, NotificationPatient};
 const LIMITE_PAR_DEFAUT: i64 = 50;
 const LIMITE_MAX: i64 = 100;
 
+// `clippy::result_large_err` (le résultat déplace jusqu'à 128 octets) :
+// l'erreur est la `Response` d'axum (128 octets), aussitôt renvoyée par le
+// handler, qui doit de toute façon produire une `Response`. La mettre dans
+// une boîte ajouterait une allocation sans rien éviter. Exception
+// documentée, comme les deux autres de l'API (routes_invitation.rs,
+// routes_professionnel.rs).
+#[allow(clippy::result_large_err)]
 fn limite_valide(limite: Option<i64>) -> Result<i64, Response> {
     let limite = limite.unwrap_or(LIMITE_PAR_DEFAUT);
     if (1..=LIMITE_MAX).contains(&limite) {

@@ -899,7 +899,9 @@ mod tests {
         // octets.
         let nom_trop_long = "é".repeat(NOM_LONGUEUR_MAX + 1);
 
-        let cas: Vec<(NouvelleStructure, fn(&ErreurStructure) -> bool)> = vec![
+        // Une saisie, et le contrôle de l'erreur attendue.
+        type Cas = (NouvelleStructure, fn(&ErreurStructure) -> bool);
+        let cas: Vec<Cas> = vec![
             (
                 NouvelleStructure {
                     type_structure: TypeStructure::Clinique,

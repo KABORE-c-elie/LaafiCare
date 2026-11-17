@@ -99,7 +99,15 @@ pub async fn controler_exercice(
     session_id: Uuid,
     affectation_id: Uuid,
 ) -> Result<ControleExercice, sqlx::Error> {
-    let ligne: Option<(bool, Option<bool>, Option<Uuid>, Option<String>, Option<String>)> = sqlx::query_as(concat!(
+    // Jeton valide, droit d'exercer, structure, type de structure, rôle.
+    type LigneControle = (
+        bool,
+        Option<bool>,
+        Option<Uuid>,
+        Option<String>,
+        Option<String>,
+    );
+    let ligne: Option<LigneControle> = sqlx::query_as(concat!(
         // `IS NOT DISTINCT FROM` et non `=` : une session sans affectation a
         // `affectation_id` vide, et `= $4` donnerait NULL ; la colonne, lue
         // en `bool`, ferait alors une erreur (500) au lieu d'un refus (401).

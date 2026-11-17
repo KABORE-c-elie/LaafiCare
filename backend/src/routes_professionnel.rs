@@ -241,6 +241,9 @@ fn reponse_erreur_activation(erreur: ErreurActivation) -> Response {
 /// de jetons, d'une session de cette affectation (D3 a : l'ancienne session
 /// est fermée, la nouvelle garde sa date de fin). 404
 /// `affectation_inconnue`, 403 `affectation_non_exercable`.
+// Exception `clippy::result_large_err` (fermeture qui renvoie une `Response`
+// d'axum) : voir `routes_espace_patient::limite_valide`.
+#[allow(clippy::result_large_err)]
 pub async fn activer_affectation(
     professionnel: ProfessionnelConnecte,
     State(state): State<AppState>,

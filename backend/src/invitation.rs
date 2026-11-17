@@ -760,7 +760,8 @@ mod tests {
         let creee = creer(&pool, &sms, r, "70200092", RoleInvitation::Pharmacien)
             .await
             .unwrap();
-        let texte = &sms.0.lock().unwrap()[0].1;
+        // Copie du texte : le verrou est rendu avant l'attente qui suit.
+        let texte = sms.0.lock().unwrap()[0].1.clone();
         assert!(texte.contains("comme pharmacien"), "{texte}");
         accepter(
             &pool,

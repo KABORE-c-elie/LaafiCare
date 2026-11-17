@@ -285,10 +285,10 @@ pub fn verifier_envois(
     environnement: Environnement,
     envois: &[(&'static str, bool)],
 ) -> Result<(), ConfigError> {
-    if environnement == Environnement::Production {
-        if let Some((nature, _)) = envois.iter().find(|(_, simule)| *simule) {
-            return Err(ConfigError::EnvoiSimuleEnProduction(nature));
-        }
+    if environnement == Environnement::Production
+        && let Some((nature, _)) = envois.iter().find(|(_, simule)| *simule)
+    {
+        return Err(ConfigError::EnvoiSimuleEnProduction(nature));
     }
     Ok(())
 }
