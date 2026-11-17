@@ -110,6 +110,8 @@ Chaque choix ci-dessous suit une source reconnue, citée dans le code et détail
 
 **Ce que LaafiCare refuse de révéler.** Taper un numéro ou un email ne dit jamais si la personne est inscrite. Numéro inconnu, mauvais mot de passe ou compte bloqué : la réponse est toujours la même (« Numéro ou mot de passe incorrect. »), et le serveur met le même temps à répondre dans tous les cas. Sinon, n'importe qui pourrait savoir qu'une personne est suivie par LaafiCare, ce qui est déjà une information de santé.
 
+**Le serveur résiste aux abus.** Une demande ne peut pas dépasser 256 Kio (5 Mio pour une pièce justificative) ; les calculs de mots de passe se font à part, un par cœur au plus, sans bloquer les autres utilisateurs ; chaque réponse porte un numéro (`X-Request-ID`) qui permet de retrouver une erreur dans les journaux, où n'apparaît aucune donnée personnelle (ni adresse complète, ni numéro envoyé par l'appelant).
+
 **Ce qui ne s'efface pas.** L'historique des décisions sur une demande de remboursement ou sur un établissement ne peut être ni modifié ni supprimé : c'est la base elle-même qui l'interdit.
 
 **Les règles médicales non négociables** (à venir avec les modules médicaux) : les allergies s'affichent toujours en premier et en rouge ; un résultat d'analyse n'est visible qu'après double validation ; les résultats sensibles ne sont jamais envoyés automatiquement.
