@@ -19,6 +19,7 @@ Les fichiers de code cités sont dans [`backend/src/`](../backend/src/) et [`bac
 9. [Les pièces justificatives](#9-les-pièces-justificatives)
 10. [Les secrets du serveur](#10-les-secrets-du-serveur)
 11. [Ce qui reste à faire avant la mise en service](#11-ce-qui-reste-à-faire-avant-la-mise-en-service)
+12. [Le serveur face aux abus et aux pannes](#12-le-serveur-face-aux-abus-et-aux-pannes)
 
 ---
 
@@ -247,6 +248,14 @@ La clé de chiffrement du second facteur doit être **sauvegardée à part** en 
 - la vérification des requêtes SQL dès la compilation.
 
 La liste complète est dans [`points-ouverts.md`](points-ouverts.md).
+
+## 12. Le serveur face aux abus et aux pannes
+
+Ajouts du 2026-11-17, repris de l'audit technique et adaptés au projet.
+
+- **Taille des demandes limitée.** Une demande envoyée au serveur ne peut pas dépasser 256 Kio, sauf le dépôt d'une pièce justificative (5 Mio). Au-delà, le serveur la refuse sans la lire (413). Cela empêche quelqu'un de faire lire au serveur des fichiers énormes pour l'épuiser. Source : OWASP API Security Top 10 2023, API4 *Unrestricted Resource Consumption* ; documentation d'axum, `DefaultBodyLimit`.
+- **Écoute locale par défaut.** Le serveur n'écoute que sur la machine elle-même (`127.0.0.1`), sauf si la configuration demande explicitement autre chose (`SERVER_HOST`). Une adresse mal écrite empêche le démarrage au lieu d'être remplacée en silence.
+- **Arrêt propre.** À l'arrêt (Ctrl+C, ou le signal de Docker ou de systemd), le serveur n'accepte plus de demande mais termine celles en cours : une vente ou un paiement n'est jamais coupé au milieu de son enregistrement. Source : documentation d'axum, `with_graceful_shutdown`.
 
 ## Sources
 

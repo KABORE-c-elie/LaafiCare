@@ -311,8 +311,6 @@ mod tests {
     #[sqlx::test]
     #[ignore]
     async fn depot_par_la_route_et_limite_de_taille(pool: sqlx::PgPool) {
-        use axum::Router;
-        use axum::routing::{get, post};
         use laaficare_backend::config::CleTotp;
         use laaficare_backend::jwt::{JwtService, SorteJeton};
         use laaficare_backend::session;
@@ -375,27 +373,21 @@ mod tests {
         .await
         .unwrap();
 
-        let app = Router::new()
-            .route("/api/structures/{id}/pieces", get(lister_pieces))
-            .route(
-                "/api/structures/{id}/pieces/{type_piece}",
-                post(deposer_piece).layer(axum::extract::DefaultBodyLimit::max(
-                    piece_justificative::TAILLE_MAX_OCTETS,
-                )),
-            )
-            .with_state(state);
+        // Le routeur du serveur, avec toutes ses couches (limites de taille),
+        // pas une copie.
+        let app = crate::routeur(state);
         let ecoute = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let adresse = ecoute.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(ecoute, app).await.unwrap() });
 
-        // Statut et corps d'une requête, connexion fermée ensuite.
-        let envoyer = |methode: &'static str,
-                       chemin: String,
-                       autorisation: String,
-                       corps: Vec<u8>| async move {
+        // Statut et texte d'une réponse, connexion fermée ensuite.
+        let envoyer_avec = |methode: &'static str,
+                            chemin: String,
+                            entetes: String,
+                            corps: Vec<u8>| async move {
             let mut flux = tokio::net::TcpStream::connect(adresse).await.unwrap();
             let entete = format!(
-                "{methode} {chemin} HTTP/1.1\r\nHost: localhost\r\nAuthorization: {autorisation}\r\n\
+                "{methode} {chemin} HTTP/1.1\r\nHost: localhost\r\n{entetes}\
                  Content-Length: {}\r\nConnection: close\r\n\r\n",
                 corps.len()
             );
@@ -408,6 +400,9 @@ mod tests {
             let statut: u16 = texte.split(' ').nth(1).unwrap().parse().unwrap();
             (statut, texte)
         };
+        let envoyer = |methode: &'static str, chemin: String, autorisation: String, corps: Vec<u8>| {
+            envoyer_avec(methode, chemin, format!("Authorization: {autorisation}\r\n"), corps)
+        };
         let chemin = format!(
             "/api/structures/{structure_id}/pieces/autorisation_ouverture_exploitation?numero=2025-001&date_piece=2025-01-10"
         );
@@ -417,6 +412,27 @@ mod tests {
         let (statut, texte) = envoyer("POST", chemin.clone(), jeton.clone(), trop_grand).await;
         assert_eq!(statut, 413, "{texte}");
         assert!(texte.contains("fichier_trop_grand"), "{texte}");
+
+        // Une pièce d'exactement 5 Mio passe la limite du routeur (256 Kio) :
+        // la limite propre à la route l'emporte.
+        let mut juste = b"%PDF-".to_vec();
+        juste.resize(piece_justificative::TAILLE_MAX_OCTETS, 0);
+        let (statut, texte) = envoyer("POST", chemin.clone(), jeton.clone(), juste).await;
+        assert_eq!(statut, 201, "{}", &texte[..texte.len().min(300)]);
+
+        // Toute autre route : 256 Kio au plus, réponse au format de l'API.
+        let mut gros_json = br#"{"telephone":"70000000","mot_de_passe":""#.to_vec();
+        gros_json.resize(300 * 1024, b'a');
+        gros_json.extend_from_slice(br#""}"#);
+        let (statut, texte) = envoyer_avec(
+            "POST",
+            "/api/patients/connexion".into(),
+            "Content-Type: application/json\r\n".into(),
+            gros_json,
+        )
+        .await;
+        assert_eq!(statut, 413, "{texte}");
+        assert!(texte.contains("\"code\""), "{texte}");
 
         let (statut, texte) = envoyer(
             "POST",

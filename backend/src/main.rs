@@ -16,6 +16,7 @@ mod routes_structure;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use axum::extract::DefaultBodyLimit;
 use axum::{Json, Router, extract::State, http::StatusCode, routing::get, routing::post};
 use serde::Serialize;
 use sqlx::PgPool;
@@ -164,7 +165,67 @@ async fn main() {
         std::process::exit(1);
     }
 
-    let app = Router::new()
+    let app = routeur(AppState {
+        db: pool.clone(),
+        jwt,
+        sms,
+        cle_totp: Arc::new(config.totp_cle_chiffrement),
+        email,
+        url_application_web: Arc::from(config.url_application_web),
+        contact_securite: Arc::from(config.contact_securite),
+        taches_reinitialisation: Arc::new(laaficare_backend::reinitialisation::LimiteTaches::default()),
+    });
+
+    // 127.0.0.1 par défaut (SERVER_HOST, `config.rs`) : cohérent avec
+    // PostgreSQL exposé en local seulement. Une autre adresse est un choix
+    // explicite de la configuration.
+    let adresse = SocketAddr::from((config.server_host, config.server_port));
+    let listener = tokio::net::TcpListener::bind(adresse)
+        .await
+        .unwrap_or_else(|erreur| {
+            tracing::error!(%erreur, %adresse, "impossible d'écouter sur cette adresse");
+            std::process::exit(1)
+        });
+
+    tracing::info!(%adresse, "serveur démarré");
+
+    // Arrêt propre (remédiation de l'audit, reprise le 2026-11-17) : doc
+    // d'axum 0.8.9, `serve::Serve::with_graceful_shutdown`, et exemple
+    // officiel `examples/graceful-shutdown`. Au signal, le serveur n'accepte
+    // plus de connexion et laisse finir les requêtes en cours : une vente,
+    // une validation ou un paiement n'est pas coupé au milieu de sa
+    // transaction.
+    if let Err(erreur) = axum::serve(listener, app)
+        .with_graceful_shutdown(signal_d_arret())
+        .await
+    {
+        tracing::error!(%erreur, "le serveur s'est arrêté sur une erreur");
+        std::process::exit(1);
+    }
+
+    // Connexions à PostgreSQL fermées proprement (doc de sqlx 0.9,
+    // `Pool::close` : attend que les connexions empruntées soient rendues).
+    pool.close().await;
+    tracing::info!("serveur arrêté proprement");
+}
+
+/// Taille maximale du corps d'une requête, pour toutes les routes sauf le
+/// dépôt d'une pièce justificative (remédiation de l'audit, reprise le
+/// 2026-11-17 ; OWASP API Security Top 10 2023, API4 *Unrestricted Resource
+/// Consumption*, « maximum allowed payload size »). Axum applique déjà
+/// 2 Mo par défaut (doc d'axum 0.8.9, `DefaultBodyLimit`) ; la plus grosse
+/// requête JSON de l'API (vente ou inventaire de 100 lignes) fait une dizaine
+/// de Ko : 256 Kio laissent une large marge et réduisent ce qu'un appelant
+/// peut faire lire au serveur. La route des pièces garde sa propre limite de
+/// 5 Mio (`piece_justificative::TAILLE_MAX_OCTETS`) : la couche posée sur la
+/// route est plus près du handler, elle l'emporte (même doc, « … can be
+/// overridden for specific routes »).
+const TAILLE_MAX_CORPS_OCTETS: usize = 256 * 1024;
+
+/// Toutes les routes de l'API et leurs couches. Séparé de `main` pour que
+/// les tests exercent exactement le routeur du serveur.
+pub(crate) fn routeur(state: AppState) -> Router {
+    Router::new()
         .route("/health", get(health))
         .route("/api/assurance-munaseb/remboursements", get(routes_remboursement_munaseb::lister))
         .route(
@@ -257,8 +318,8 @@ async fn main() {
         .route("/api/structures/{id}/pieces", get(routes_structure::lister_pieces))
         .route(
             "/api/structures/{id}/pieces/{type_piece}",
-            // Limite de 5 Mio sur cette seule route (§14) ; les autres
-            // gardent la limite par défaut d'axum (2 Mio).
+            // Limite de 5 Mio sur cette seule route (§14) ; les autres ont
+            // celle du routeur (`TAILLE_MAX_CORPS_OCTETS`, 256 Kio).
             post(routes_structure::deposer_piece).layer(axum::extract::DefaultBodyLimit::max(
                 laaficare_backend::piece_justificative::TAILLE_MAX_OCTETS,
             )),
@@ -331,48 +392,8 @@ async fn main() {
             post(routes_pharmacie::annuler_depense),
         )
         .route("/api/pharmacie/rapport", get(routes_pharmacie::rapport))
-        .with_state(AppState {
-            db: pool.clone(),
-            jwt,
-            sms,
-            cle_totp: Arc::new(config.totp_cle_chiffrement),
-            email,
-            url_application_web: Arc::from(config.url_application_web),
-            contact_securite: Arc::from(config.contact_securite),
-            taches_reinitialisation: Arc::new(laaficare_backend::reinitialisation::LimiteTaches::default()),
-        });
-
-    // 127.0.0.1 par défaut (SERVER_HOST, `config.rs`) : cohérent avec
-    // PostgreSQL exposé en local seulement. Une autre adresse est un choix
-    // explicite de la configuration.
-    let adresse = SocketAddr::from((config.server_host, config.server_port));
-    let listener = tokio::net::TcpListener::bind(adresse)
-        .await
-        .unwrap_or_else(|erreur| {
-            tracing::error!(%erreur, %adresse, "impossible d'écouter sur cette adresse");
-            std::process::exit(1)
-        });
-
-    tracing::info!(%adresse, "serveur démarré");
-
-    // Arrêt propre (remédiation de l'audit, reprise le 2026-11-17) : doc
-    // d'axum 0.8.9, `serve::Serve::with_graceful_shutdown`, et exemple
-    // officiel `examples/graceful-shutdown`. Au signal, le serveur n'accepte
-    // plus de connexion et laisse finir les requêtes en cours : une vente,
-    // une validation ou un paiement n'est pas coupé au milieu de sa
-    // transaction.
-    if let Err(erreur) = axum::serve(listener, app)
-        .with_graceful_shutdown(signal_d_arret())
-        .await
-    {
-        tracing::error!(%erreur, "le serveur s'est arrêté sur une erreur");
-        std::process::exit(1);
-    }
-
-    // Connexions à PostgreSQL fermées proprement (doc de sqlx 0.9,
-    // `Pool::close` : attend que les connexions empruntées soient rendues).
-    pool.close().await;
-    tracing::info!("serveur arrêté proprement");
+        .layer(DefaultBodyLimit::max(TAILLE_MAX_CORPS_OCTETS))
+        .with_state(state)
 }
 
 /// Attend Ctrl+C, ou SIGTERM (le signal qu'envoient Docker et systemd pour
