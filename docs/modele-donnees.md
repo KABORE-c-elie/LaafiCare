@@ -341,6 +341,14 @@ Une ligne par compte professionnel : numéro d'ordre (texte libre, 50 caractère
 
 Facultatif : `feminin`, `masculin`, ou vide tant que la personne ne l'a pas donné. Migration 0035.
 
+### `journal_acces` : qui a accédé aux données d'un patient
+
+Une ligne par accès : patient, affectation (qui, avec quel rôle, dans quel établissement), nature (`scan`, `detail_contrat`, `recherche_identite`, `ouverture_prise_en_charge`, `prolongation_prise_en_charge`, `bris_de_glace`, `lecture_dossier`, `ecriture_dossier`), téléphone montré ou non, prise en charge concernée, date. Écrite **avant** que les données partent, dans la même transaction. **Jamais modifiée ni effacée**, même par un administrateur (triggers, droits retirés au serveur). Le patient la lit. Fichier : [`acces_patient.rs`](../backend/src/acces_patient.rs). Migration 0036.
+
+### `echec_acces_patient` : les essais sans résultat
+
+Une ligne par essai sans résultat (NIP inconnu ou mal formé, recherche par identité sans résultat unique, code de soin faux) : affectation, nature, date, et le patient seulement quand il est connu. **Rien de ce qui a été saisi n'est gardé.** Sert aux limites d'essais. Jamais modifiée ni effacée. Migration 0036.
+
 ---
 
 ## Les migrations, une par une
@@ -382,5 +390,6 @@ Facultatif : `feminin`, `masculin`, ou vide tant que la personne ne l'a pas donn
 | 0033 | Lot saisi au mois seul (`lot_stock.expiration_mois_seul`) : la date enregistrée est alors la veille du mois imprimé (règle prudente) |
 | 0034 | Index (audit technique, repris le 2026-11-17) : clés étrangères vers des lignes effacées par le code (codes de secours d'un second facteur désactivé, jetons d'une session purgée), et requêtes réelles (demandes d'un créateur, pièces d'une structure, délai d'envoi d'un lien, sessions d'une affectation retirée, journaux paginés du stock et des dépenses). Aucune donnée ne change |
 | 0035 | Module médecin, étape 1 : rôle `auxiliaire_pharmacie` (affectations, invitations, auteurs des ventes et des mouvements), profil professionnel (numéro d'ordre, spécialité, vérification par l'équipe, effacée à chaque changement), sexe du patient (facultatif) |
+| 0036 | Journal des accès aux données d'un patient (`journal_acces`) et essais sans résultat (`echec_acces_patient`), jamais modifiés ni effacés |
 
 Une migration déjà appliquée ne change plus jamais : toute évolution passe par une nouvelle migration. Un test vérifie aussi qu'aucun caractère invisible ne s'y glisse ([`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs)).

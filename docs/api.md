@@ -584,7 +584,7 @@ Exemple : `GET /api/assurance-munaseb/remboursements?statut=en_attente&limite=20
 - `suivant` vaut `null` quand la page n'est pas pleine ; sinon, le passer dans `apres` pour la page suivante.
 - `montant_rembourse_fcfa` vaut `null` tant que la demande n'est pas validée. `patient_nom` et `patient_prenom` peuvent être `null`.
 - `numero_carte` (précisé le 2026-11-16, étape 5) : la carte de la **période de la demande**, puisque le numéro change chaque année ; pour une période enregistrée avant l'étape 5, la carte d'origine du contrat, comme avant.
-- L'agent ne voit **jamais** le NIP ni le téléphone du patient.
+- L'agent ne voit **jamais** le NIP ni le téléphone du patient dans les demandes (le téléphone n'est que dans le détail d'un contrat, section 2.14).
 - Une demande créée pendant le parcours des pages peut n'apparaître qu'au rechargement.
 - **Erreurs** : 400 `parametre_invalide` (limite hors bornes, statut inconnu, curseur qui n'est pas un UUID) ; 500 `erreur_interne`.
 
@@ -1347,6 +1347,8 @@ Adhésion d'un patient. Le patient est désigné par son **NIP** (montré par so
 
 La seule recherche de l'agent est le **numéro de carte** (de n'importe quelle année) : il n'existe pas de recherche par NIP.
 
+**Téléphone de l'adhérent** (décision du porteur du 2026-11-17, qui remplace « l'agent ne voit jamais le téléphone ») : `GET /api/assurance-munaseb/contrats/{id}` ajoute le champ `"telephone": "+226…"`, pour enregistrer sans erreur d'identité et pouvoir rappeler l'adhérent. **Chaque affichage est écrit dans le journal des accès**, que le patient lit (section 2.18) ; si l'écriture échoue, la réponse est 500 et rien n'est montré. La recherche par carte, l'adhésion et le renouvellement ne renvoient **pas** ce champ (il est absent). Le NIP n'est jamais renvoyé.
+
 - **Réponse 200** :
 
 ```json
@@ -1588,6 +1590,43 @@ Jeton administrateur. Profils avec un numéro, pas encore vérifiés : `{"profil
 
 Jeton administrateur. Corps : `{"numero_ordre": "…", "specialite": "…" | null}`, **les valeurs que l'équipe a lues et contrôlées**. 204 ; **409 `verification_impossible`** si le profil a changé depuis, n'a pas de numéro, est déjà vérifié ou n'existe pas.
 
+### 2.18 Accès aux données d'un patient : scan du NIP et journal (2026-11-17)
+
+**Règle de base** : le NIP seul, écrit ou scanné, **n'ouvre jamais le dossier**. Le scan renvoie seulement une **fiche d'identité**, dont les champs dépendent du **rôle de l'affectation en exercice** (loi n° 001-2021/AN : données adéquates et non excessives). Le filtrage est fait par le serveur : un champ que le rôle ne doit pas voir est **absent** de la réponse. Le dossier ne s'ouvre que par une prise en charge (code de soin ou CNIB vérifiée) ou un bris de glace (section 2.19).
+
+**Journal des accès** : chaque scan, chaque lecture ou écriture du dossier et chaque affichage du téléphone est écrit **avant** que les données soient renvoyées ; si l'écriture échoue, rien n'est montré (500). Le journal n'est jamais modifié ni effacé, même par un administrateur. Le patient le lit.
+
+#### `POST /api/professionnels/patients/scan`
+
+- **Appelant** : jeton `laaficare:professionnel_en_exercice`.
+- **Corps** : `{"nip": "1000000000000008"}` (dans le corps, jamais dans l'adresse ; espaces autour acceptées).
+- **Réponse 200**, selon le rôle :
+
+| Rôle (type d'établissement) | Champs |
+|---|---|
+| `agent_accueil` (clinique), `medecin`, `infirmier` (clinique) | `nom`, `prenom`, `sexe`, `date_naissance`, `lieu_naissance` |
+| `agent_assurance_munaseb` (MUNASEB) | les mêmes, plus `telephone` |
+| `pharmacien` (pharmacie) | les mêmes que l'accueil, plus `droits_munaseb` : `{"etat": "couvert"}` (`aucun_contrat`, `couvert`, `en_carence`, `expire`, `suspendu`) |
+| `auxiliaire_pharmacie` (pharmacie) | `nom`, `prenom`, `droits_munaseb` |
+
+`sexe` vaut `null` si le patient ne l'a pas donné. Le NIP n'est jamais renvoyé.
+
+- **Erreurs** :
+
+| Code | `code` | Cas |
+|---|---|---|
+| 403 | `acces_refuse` | tout autre rôle (responsable compris), ou un rôle hors de son type d'établissement |
+| 404 | `patient_inconnu` | NIP inconnu **ou** mal formé (jamais distingués) |
+| 429 | `trop_de_demandes` | 5 essais sans résultat en 15 minutes pour cette affectation, ou 60 scans réussis en 15 minutes ; en-tête `Retry-After` (secondes) |
+
+#### `GET /api/patients/journal-acces?limite=&avant=`
+
+- **Appelant** : jeton `laaficare:patient` ; le patient est celui du jeton.
+- **Réponse 200**, le plus récent d'abord : `{"acces": [{"id", "date_acces", "nature", "structure_nom", "role", "professionnel_nom", "professionnel_prenom", "telephone_affiche", "moyen", "motif_categorie", "motif"}], "suivant"}`.
+- `nature` : `scan`, `detail_contrat`, `recherche_identite`, `ouverture_prise_en_charge`, `prolongation_prise_en_charge`, `bris_de_glace`, `lecture_dossier`, `ecriture_dossier`.
+- `moyen`, `motif_categorie`, `motif` : pour un accès sous une prise en charge (section 2.19), sinon `null`.
+- Pagination : `suivant` dans `avant` ; `limite` 1 à 100 (50 par défaut).
+
 ## 3. Codes d'erreur : index
 
 | `code` | HTTP | Routes |
@@ -1647,6 +1686,8 @@ Jeton administrateur. Corps : `{"numero_ordre": "…", "specialite": "…" | nul
 | `cle_idempotence_reutilisee` | 422 | créations de la pharmacie (même clé, autre requête) |
 | `numero_ordre_invalide` | 422 | profil professionnel (section 2.17) |
 | `verification_impossible` | 409 | vérification d'un profil professionnel par l'équipe |
+| `patient_inconnu` | 404 | aussi : scan du NIP (inconnu ou mal formé), section 2.18 |
+| `trop_de_demandes` | 429 | aussi : scan du NIP (avec `Retry-After`) |
 | `erreur_interne` | 500 | toutes |
 
 ---

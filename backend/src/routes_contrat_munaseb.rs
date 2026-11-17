@@ -23,6 +23,7 @@ use crate::erreur_api::{
     CheminApi, JsonApi, ReponseErreur, RequeteApi, reponse_erreur, reponse_erreur_interne,
 };
 use crate::extracteur_jwt::{AgentMunaseb, MembreMunaseb, ResponsableMunaseb};
+use laaficare_backend::acces_patient;
 use laaficare_backend::contrat_assurance_munaseb::{
     self as contrat, Adhesion, DetailContrat, ErreurContratAssuranceMunaseb, Parametres,
     Renouvellement, VersionParametres,
@@ -210,17 +211,26 @@ pub async fn rechercher(
     Ok(Json(relire(&state, contrat_id).await?))
 }
 
-/// `GET /api/assurance-munaseb/contrats/{id}`.
+/// `GET /api/assurance-munaseb/contrats/{id}` : le détail, **avec le
+/// téléphone de l'adhérent** (décision du porteur du 2026-11-17). Chaque
+/// affichage du téléphone est écrit dans le journal des accès, validé
+/// avant la réponse : si l'écriture échoue, rien n'est montré (500).
 pub async fn detail(
-    _agent: AgentMunaseb,
+    AgentMunaseb(agent): AgentMunaseb,
     State(state): State<AppState>,
     CheminApi(contrat_id): CheminApi<Uuid>,
 ) -> Result<Json<DetailContrat>, ReponseErreur> {
-    contrat::detail_contrat(&state.db, contrat_id)
+    let mut detail = contrat::detail_contrat(&state.db, contrat_id)
         .await
         .map_err(|e| reponse_erreur_interne("detail_contrat", &e.to_string()))?
-        .map(Json)
-        .ok_or_else(contrat_inconnu)
+        .ok_or_else(contrat_inconnu)?;
+    detail.telephone = Some(
+        acces_patient::telephone_pour_agent(&state.db, &agent, contrat_id)
+            .await
+            .map_err(|e| reponse_erreur_interne("journal des accès", &e.to_string()))?
+            .ok_or_else(contrat_inconnu)?,
+    );
+    Ok(Json(detail))
 }
 
 /// `POST /api/assurance-munaseb/contrats/{id}/renouvellements` : nouvelle

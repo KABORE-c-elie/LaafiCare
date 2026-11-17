@@ -929,13 +929,19 @@ pub struct PeriodeContrat {
 }
 
 /// Contrat tel que l'agent le voit : nom et prénom du patient, **jamais son
-/// NIP ni son téléphone** (inutiles à l'instruction du dossier, même règle
-/// que les demandes, §12).
+/// NIP**. Le **téléphone** n'est rendu que par la route du détail
+/// (`GET /api/assurance-munaseb/contrats/{id}`), et chaque affichage est
+/// écrit dans le journal des accès (décision du porteur du 2026-11-17, qui
+/// remplace « jamais son téléphone » ; `acces_patient::telephone_pour_agent`).
 #[derive(Debug, Serialize)]
 pub struct DetailContrat {
     pub id: Uuid,
     pub patient_nom: Option<String>,
     pub patient_prenom: Option<String>,
+    /// Absent de la réponse sauf dans le détail du contrat (champ ajouté :
+    /// les réponses existantes ne changent pas).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub telephone: Option<String>,
     pub ufr: String,
     pub universite: String,
     pub num_matricule: String,
@@ -1041,6 +1047,7 @@ pub async fn detail_contrat(
         id: contrat_id,
         patient_nom,
         patient_prenom,
+        telephone: None,
         ufr,
         universite,
         num_matricule,

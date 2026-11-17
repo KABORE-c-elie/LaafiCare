@@ -4,6 +4,7 @@
 //! modules dépendent de `AppState` (défini dans `main.rs`, propre au serveur
 //! HTTP), aucun outil local n'en a besoin.
 
+pub mod acces_patient;
 pub mod adresse_email;
 pub mod affectation;
 pub mod alerte_securite;
@@ -21,6 +22,8 @@ pub mod decision_structure;
 pub mod demande_remboursement_munaseb;
 pub mod email;
 pub mod espace_patient_munaseb;
+#[cfg(test)]
+mod fixtures_medicales;
 pub mod idempotence;
 pub mod intervention_compte;
 pub mod invitation;

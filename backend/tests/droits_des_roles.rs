@@ -154,6 +154,15 @@ async fn ce_que_chaque_role_peut_faire(pool: PgPool) {
         // Dépenses (migration 0032) : même règle.
         "UPDATE depense_pharmacie SET libelle = libelle WHERE false",
         "DELETE FROM depense_pharmacie WHERE false",
+        // Module médecin (migrations 0035, 0036) : le journal des accès et
+        // les essais sans résultat ne se modifient ni ne s'effacent ; un
+        // profil professionnel ne s'efface pas.
+        "UPDATE journal_acces SET nature = nature WHERE false",
+        "DELETE FROM journal_acces WHERE false",
+        "TRUNCATE journal_acces",
+        "UPDATE echec_acces_patient SET nature = nature WHERE false",
+        "DELETE FROM echec_acces_patient WHERE false",
+        "DELETE FROM profil_professionnel WHERE false",
     ] {
         refuse(&mut conn, sql).await;
     }

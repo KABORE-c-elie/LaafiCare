@@ -110,6 +110,16 @@ impl DroitsPatient {
 /// dans PostgreSQL, D9).
 pub async fn droits(pool: &PgPool, compte_id: Uuid) -> Result<DroitsPatient, ErreurEspacePatient> {
     let patient_id = patient_du_compte(pool, compte_id).await?;
+    droits_par_patient(pool, patient_id).await
+}
+
+/// Mêmes droits, pour un patient désigné par son identifiant interne
+/// (fiche d'identité vue par la pharmacie après un scan, module médecin,
+/// décision D12 et « vues par rôle » du 2026-11-17).
+pub async fn droits_par_patient(
+    pool: &PgPool,
+    patient_id: Uuid,
+) -> Result<DroitsPatient, ErreurEspacePatient> {
     let jour = aujourdhui_au_burkina(pool).await?;
     // Numéro de carte (il change chaque année, migration 0028) : celui de la
     // dernière période déjà commencée qui en porte un ; à défaut (première

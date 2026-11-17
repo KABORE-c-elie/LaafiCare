@@ -1,5 +1,6 @@
 mod erreur_api;
 mod extracteur_jwt;
+mod routes_acces_patient;
 mod routes_administrateur;
 mod routes_contrat_munaseb;
 mod routes_espace_patient;
@@ -296,6 +297,15 @@ pub(crate) fn routeur(state: AppState) -> Router {
         .route(
             "/api/patients/moi/sexe",
             axum::routing::put(routes_patient::modifier_sexe),
+        )
+        // Accès aux données d'un patient (module médecin, docs/api.md §2.18).
+        .route(
+            "/api/professionnels/patients/scan",
+            post(routes_acces_patient::scanner),
+        )
+        .route(
+            "/api/patients/journal-acces",
+            get(routes_acces_patient::journal),
         )
         // Profil professionnel (module médecin, docs/api.md §2.17).
         .route(
