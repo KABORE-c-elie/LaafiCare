@@ -10,7 +10,10 @@
 
 use axum::Json;
 use axum::extract::State;
-use axum::http::{HeaderValue, StatusCode, header::RETRY_AFTER};
+use axum::http::{
+    HeaderValue, StatusCode,
+    header::{CACHE_CONTROL, RETRY_AFTER},
+};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -18,11 +21,15 @@ use sqlx::types::Uuid;
 
 use crate::AppState;
 use crate::erreur_api::{
-    JsonApi, ReponseErreur, RequeteApi, reponse_erreur, reponse_erreur_interne,
+    CheminApi, JsonApi, ReponseErreur, RequeteApi, reponse_erreur, reponse_erreur_interne,
 };
 use crate::extracteur_jwt::{PatientAuthentifie, ProfessionnelEnExercice};
 use crate::routes_pharmacie::limite_valide;
-use laaficare_backend::acces_patient::{self, AccesVu, ErreurAcces};
+use laaficare_backend::acces_patient::{self, AccesVu, ErreurAcces, IdentiteRecherchee};
+use laaficare_backend::code_soin::{self, ErreurCodeSoin};
+use laaficare_backend::prise_en_charge::{
+    self, BrisDeGlace, CategorieMotif, Conclusion, Preuve, PriseEnCharge,
+};
 
 /// Traduction des erreurs d'accès, partagée avec la prise en charge et le
 /// dossier. 429 avec `Retry-After` (RFC 6585 §4), comme les autres limites.
@@ -49,10 +56,242 @@ pub(crate) fn reponse_erreur_acces(erreur: ErreurAcces) -> Response {
                 .insert(RETRY_AFTER, HeaderValue::from(reessayer_dans_secs));
             reponse
         }
+        ErreurAcces::CodeSoinInvalide => reponse_erreur(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "code_soin_invalide",
+            erreur.to_string(),
+        )
+        .into_response(),
+        ErreurAcces::TexteInvalide(_) => reponse_erreur(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "donnees_invalides",
+            erreur.to_string(),
+        )
+        .into_response(),
+        ErreurAcces::PriseEnChargeInconnue => reponse_erreur(
+            StatusCode::NOT_FOUND,
+            "prise_en_charge_inconnue",
+            erreur.to_string(),
+        )
+        .into_response(),
+        ErreurAcces::PriseEnChargeExpiree => reponse_erreur(
+            StatusCode::FORBIDDEN,
+            "prise_en_charge_expiree",
+            erreur.to_string(),
+        )
+        .into_response(),
+        ErreurAcces::DejaControle => {
+            reponse_erreur(StatusCode::CONFLICT, "deja_controle", erreur.to_string())
+                .into_response()
+        }
         ErreurAcces::Interne(detail) => {
             reponse_erreur_interne("accès patient", &detail).into_response()
         }
     }
+}
+
+// ---------------------------------------------------------------------
+// Code de soin, recherche par identité, prise en charge, bris de glace
+// (étape 3, docs/api.md §2.19)
+// ---------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct CodeSoinRequete {
+    pub mot_de_passe: String,
+}
+
+/// `POST /api/patients/code-soin` : crée ou remplace le secret du code de
+/// soin (201). Le secret n'est montré qu'ici : `Cache-Control: no-store`
+/// (RFC 9111 §5.2.2.5 : aucun cache ne garde la réponse). 401
+/// `identifiants_invalides` pour un mot de passe faux.
+pub async fn generer_code_soin(
+    patient: PatientAuthentifie,
+    State(state): State<AppState>,
+    JsonApi(corps): JsonApi<CodeSoinRequete>,
+) -> Response {
+    match code_soin::generer(
+        &state.db,
+        state.cle_totp.octets(),
+        patient.compte_id,
+        &corps.mot_de_passe,
+    )
+    .await
+    {
+        Ok(cree) => {
+            let mut reponse = (StatusCode::CREATED, Json(cree)).into_response();
+            reponse
+                .headers_mut()
+                .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            reponse
+        }
+        Err(ErreurCodeSoin::MotDePasseIncorrect) => reponse_erreur(
+            StatusCode::UNAUTHORIZED,
+            "identifiants_invalides",
+            "Mot de passe incorrect.",
+        )
+        .into_response(),
+        Err(ErreurCodeSoin::Interne(detail)) => {
+            reponse_erreur_interne("code de soin", &detail).into_response()
+        }
+    }
+}
+
+/// `POST /api/professionnels/patients/recherche` : un seul patient, jamais
+/// une liste (MD19) ; 200 avec la fiche de l'accueil et le NIP.
+pub async fn rechercher(
+    ProfessionnelEnExercice(exercice): ProfessionnelEnExercice,
+    State(state): State<AppState>,
+    JsonApi(corps): JsonApi<IdentiteRecherchee>,
+) -> Result<Json<Map<String, Value>>, Response> {
+    acces_patient::rechercher_par_identite(&state.db, &exercice, &corps)
+        .await
+        .map(Json)
+        .map_err(reponse_erreur_acces)
+}
+
+#[derive(Deserialize)]
+pub struct OuvertureRequete {
+    pub nip: String,
+    /// Le code de soin donné par le patient, **ou** l'attestation de la
+    /// CNIB vérifiée : exactement l'un des deux.
+    pub code_soin: Option<String>,
+    pub cnib_verifiee: Option<bool>,
+}
+
+/// `POST /api/prises-en-charge` : 201 et la prise en charge ; 422
+/// `donnees_invalides` si ni le code ni l'attestation (ou les deux).
+pub async fn ouvrir(
+    ProfessionnelEnExercice(exercice): ProfessionnelEnExercice,
+    State(state): State<AppState>,
+    JsonApi(corps): JsonApi<OuvertureRequete>,
+) -> Result<(StatusCode, Json<PriseEnCharge>), Response> {
+    let preuve = match (corps.code_soin.as_deref(), corps.cnib_verifiee) {
+        (Some(code), None | Some(false)) => Preuve::CodeSoin(code),
+        (None, Some(true)) => Preuve::CnibVerifiee,
+        _ => {
+            return Err(reponse_erreur(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "donnees_invalides",
+                "Donnez soit le code de soin, soit l'attestation « cnib_verifiee » : true.",
+            )
+            .into_response());
+        }
+    };
+    prise_en_charge::ouvrir(
+        &state.db,
+        state.cle_totp.octets(),
+        &exercice,
+        &corps.nip,
+        preuve,
+    )
+    .await
+    .map(|prise| (StatusCode::CREATED, Json(prise)))
+    .map_err(reponse_erreur_acces)
+}
+
+#[derive(Deserialize)]
+pub struct BrisDeGlaceRequete {
+    pub nip: String,
+    pub motif_categorie: CategorieMotif,
+    pub motif: String,
+}
+
+/// `POST /api/prises-en-charge/bris-de-glace` : médecin ou infirmier ; 201.
+pub async fn briser_la_glace(
+    ProfessionnelEnExercice(exercice): ProfessionnelEnExercice,
+    State(state): State<AppState>,
+    JsonApi(corps): JsonApi<BrisDeGlaceRequete>,
+) -> Result<(StatusCode, Json<PriseEnCharge>), Response> {
+    prise_en_charge::briser_la_glace(
+        &state.db,
+        &exercice,
+        &corps.nip,
+        corps.motif_categorie,
+        &corps.motif,
+    )
+    .await
+    .map(|prise| (StatusCode::CREATED, Json(prise)))
+    .map_err(reponse_erreur_acces)
+}
+
+/// `POST /api/prises-en-charge/{id}/prolonger` : 24 h de plus, pendant une
+/// hospitalisation ; 200.
+pub async fn prolonger(
+    ProfessionnelEnExercice(exercice): ProfessionnelEnExercice,
+    State(state): State<AppState>,
+    CheminApi(prise_en_charge_id): CheminApi<Uuid>,
+) -> Result<Json<PriseEnCharge>, Response> {
+    prise_en_charge::prolonger(&state.db, &exercice, prise_en_charge_id)
+        .await
+        .map(Json)
+        .map_err(reponse_erreur_acces)
+}
+
+#[derive(Deserialize)]
+pub struct PageBrisDeGlace {
+    pub a_controler: Option<bool>,
+    pub limite: Option<i64>,
+    pub avant: Option<Uuid>,
+}
+
+#[derive(Serialize)]
+pub struct ListeBrisDeGlace {
+    pub bris_de_glace: Vec<BrisDeGlace>,
+    pub suivant: Option<Uuid>,
+}
+
+/// `GET /api/structures/bris-de-glace?a_controler=true` : responsable de la
+/// clinique.
+pub async fn lister_bris_de_glace(
+    ProfessionnelEnExercice(exercice): ProfessionnelEnExercice,
+    State(state): State<AppState>,
+    RequeteApi(page): RequeteApi<PageBrisDeGlace>,
+) -> Result<Json<ListeBrisDeGlace>, Response> {
+    let limite = limite_valide(page.limite).map_err(IntoResponse::into_response)?;
+    let bris_de_glace = prise_en_charge::lister_bris_de_glace(
+        &state.db,
+        &exercice,
+        page.a_controler.unwrap_or(false),
+        page.avant,
+        limite,
+    )
+    .await
+    .map_err(reponse_erreur_acces)?;
+    let suivant = if bris_de_glace.len() as i64 == limite {
+        bris_de_glace.last().map(|b| b.id)
+    } else {
+        None
+    };
+    Ok(Json(ListeBrisDeGlace {
+        bris_de_glace,
+        suivant,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct ControleRequete {
+    pub conclusion: Conclusion,
+    pub commentaire: Option<String>,
+}
+
+/// `POST /api/structures/bris-de-glace/{id}/controler` : 204 ; 409
+/// `deja_controle`.
+pub async fn controler(
+    ProfessionnelEnExercice(exercice): ProfessionnelEnExercice,
+    State(state): State<AppState>,
+    CheminApi(prise_en_charge_id): CheminApi<Uuid>,
+    JsonApi(corps): JsonApi<ControleRequete>,
+) -> Result<StatusCode, Response> {
+    prise_en_charge::controler(
+        &state.db,
+        &exercice,
+        prise_en_charge_id,
+        corps.conclusion,
+        corps.commentaire.as_deref(),
+    )
+    .await
+    .map(|()| StatusCode::NO_CONTENT)
+    .map_err(reponse_erreur_acces)
 }
 
 #[derive(Deserialize)]

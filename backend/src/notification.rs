@@ -18,12 +18,16 @@ use sqlx::types::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypeNotification {
     RemboursementStatut,
+    /// Bris de glace sur le dossier du patient (module médecin, MD2,
+    /// migration 0037).
+    AccesUrgence,
 }
 
 impl TypeNotification {
     fn as_str(self) -> &'static str {
         match self {
             TypeNotification::RemboursementStatut => "remboursement_statut",
+            TypeNotification::AccesUrgence => "acces_urgence",
         }
     }
 }
@@ -66,6 +70,11 @@ pub async fn creer(
 #[derive(Debug, serde::Serialize, sqlx::FromRow)]
 pub struct NotificationPatient {
     pub id: Uuid,
+    /// `remboursement_statut` ou `acces_urgence` (champ ajouté le
+    /// 2026-11-17 : l'application sait quel écran ouvrir).
+    #[sqlx(rename = "type")]
+    #[serde(rename = "type")]
+    pub type_: String,
     pub titre: String,
     pub message: String,
     pub lu: bool,
@@ -84,7 +93,7 @@ pub async fn lister_pour_patient(
     limite: i64,
 ) -> Result<(Vec<NotificationPatient>, i64), sqlx::Error> {
     let notifications = sqlx::query_as(
-        "SELECT n.id, n.titre, n.message, n.lu, n.date_creation, n.demande_remboursement_id AS demande_id \
+        "SELECT n.id, n.type, n.titre, n.message, n.lu, n.date_creation, n.demande_remboursement_id AS demande_id \
          FROM notification n JOIN compte c ON c.utilisateur_id = n.utilisateur_id \
          WHERE c.id = $1 AND c.type_compte = 'patient' AND ($2::uuid IS NULL OR n.id < $2) \
          ORDER BY n.id DESC LIMIT $3",

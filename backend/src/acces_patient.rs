@@ -127,6 +127,21 @@ pub enum ErreurAcces {
     PatientInconnu,
     #[error("Trop d'essais. Réessayez plus tard.")]
     TropDEssais { reessayer_dans_secs: u64 },
+    /// Code de soin faux, déjà utilisé, ou patient sans code de soin.
+    #[error("Code de soin incorrect.")]
+    CodeSoinInvalide,
+    /// Motif d'un bris de glace ou commentaire d'un contrôle : vide ou trop
+    /// long (le message nomme le champ).
+    #[error("{0}")]
+    TexteInvalide(String),
+    /// Prise en charge inexistante ou d'un autre établissement : jamais
+    /// distinguées (OWASP API1:2023).
+    #[error("Prise en charge inconnue.")]
+    PriseEnChargeInconnue,
+    #[error("Cette prise en charge est terminée : ouvrez-en une nouvelle.")]
+    PriseEnChargeExpiree,
+    #[error("Ce bris de glace a déjà été contrôlé.")]
+    DejaControle,
     #[error("erreur interne : {0}")]
     Interne(String),
 }
@@ -225,6 +240,28 @@ pub async fn controler_echecs(
     .fetch_one(&mut **tx)
     .await?;
     trop(nombre, attente, ECHECS_MAX)
+}
+
+/// Réussites de cette nature par l'affectation dans la fenêtre des scans :
+/// au plus `SCANS_MAX` (collecte en masse, OWASP API4:2023). À appeler après
+/// `controler_echecs`, qui a verrouillé l'affectation.
+async fn controler_reussites(
+    tx: &mut Transaction<'_, Postgres>,
+    acteur: &Acteur,
+    nature: NatureAcces,
+) -> Result<(), ErreurAcces> {
+    let (nombre, attente): (i64, Option<i64>) = sqlx::query_as(
+        "SELECT count(*), \
+                ceil(extract(epoch FROM min(date_acces) + make_interval(mins => $3) - now()))::bigint \
+         FROM journal_acces \
+         WHERE affectation_id = $1 AND nature = $2 AND date_acces > now() - make_interval(mins => $3)",
+    )
+    .bind(acteur.affectation_id)
+    .bind(nature.as_str())
+    .bind(FENETRE_SCANS_MINUTES)
+    .fetch_one(&mut **tx)
+    .await?;
+    trop(nombre, attente, SCANS_MAX)
 }
 
 /// Patient du NIP, `None` pour un NIP mal formé ou inconnu (jamais
@@ -347,17 +384,7 @@ pub async fn scanner(
     let acteur = Acteur::from(exercice);
     let mut tx = pool.begin().await?;
     controler_echecs(&mut tx, &acteur, NatureEchec::Scan).await?;
-    let (scans, attente): (i64, Option<i64>) = sqlx::query_as(
-        "SELECT count(*), \
-                ceil(extract(epoch FROM min(date_acces) + make_interval(mins => $2) - now()))::bigint \
-         FROM journal_acces \
-         WHERE affectation_id = $1 AND nature = 'scan' AND date_acces > now() - make_interval(mins => $2)",
-    )
-    .bind(acteur.affectation_id)
-    .bind(FENETRE_SCANS_MINUTES)
-    .fetch_one(&mut *tx)
-    .await?;
-    trop(scans, attente, SCANS_MAX)?;
+    controler_reussites(&mut tx, &acteur, NatureAcces::Scan).await?;
 
     let Some(patient_id) = patient_du_nip(&mut tx, nip_saisi).await? else {
         enregistrer_echec(tx, &acteur, NatureEchec::Scan, None).await?;
@@ -389,6 +416,76 @@ pub async fn scanner(
     // Le journal est validé avant que la fiche ne quitte le serveur.
     tx.commit().await?;
     Ok(fiche(vue, &identite, droits.as_deref()))
+}
+
+// ---------------------------------------------------------------------
+// Recherche par identité (MD19) : patient sans téléphone ni carte
+// ---------------------------------------------------------------------
+
+/// Ce que l'accueil saisit, lu sur la pièce d'identité.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct IdentiteRecherchee {
+    pub nom: String,
+    pub prenom: String,
+    pub date_naissance: NaiveDate,
+    pub lieu_naissance: String,
+}
+
+/// Recherche d'un patient par nom, prénom, date et lieu de naissance
+/// **exacts** (MD19 : seules les majuscules et les espaces autour sont
+/// ignorées, jamais les accents ni l'orthographe). Elle ne renvoie **qu'une
+/// seule personne, jamais une liste** : zéro ou plusieurs résultats
+/// répondent `PatientInconnu`, comme un NIP inconnu, et comptent comme un
+/// échec (5 en 15 minutes par affectation). Chaque recherche réussie est
+/// écrite dans le journal. Réservée à l'accueil, au médecin et à
+/// l'infirmier d'une clinique. Rend la fiche de l'accueil et le **NIP**,
+/// pour ouvrir ensuite une prise en charge (CNIB vérifiée).
+pub async fn rechercher_par_identite(
+    pool: &PgPool,
+    exercice: &Exercice,
+    saisie: &IdentiteRecherchee,
+) -> Result<Map<String, Value>, ErreurAcces> {
+    if !matches!(
+        vue_scan(exercice),
+        Some(VueScan::Accueil | VueScan::Soignant)
+    ) {
+        return Err(ErreurAcces::RoleNonAutorise);
+    }
+    let acteur = Acteur::from(exercice);
+    let mut tx = pool.begin().await?;
+    controler_echecs(&mut tx, &acteur, NatureEchec::RechercheIdentite).await?;
+    controler_reussites(&mut tx, &acteur, NatureAcces::RechercheIdentite).await?;
+    // Deux lignes au plus suffisent à savoir s'il y en a exactement une.
+    let trouves: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT p.id, p.nip FROM patient p JOIN utilisateur u ON u.id = p.utilisateur_id \
+         WHERE lower(btrim(u.nom)) = lower(btrim($1)) AND lower(btrim(u.prenom)) = lower(btrim($2)) \
+           AND p.date_naissance = $3 AND lower(btrim(p.lieu_naissance)) = lower(btrim($4)) \
+         LIMIT 2",
+    )
+    .bind(&saisie.nom)
+    .bind(&saisie.prenom)
+    .bind(saisie.date_naissance)
+    .bind(&saisie.lieu_naissance)
+    .fetch_all(&mut *tx)
+    .await?;
+    let [(patient_id, nip)] = trouves.as_slice() else {
+        enregistrer_echec(tx, &acteur, NatureEchec::RechercheIdentite, None).await?;
+        return Err(ErreurAcces::PatientInconnu);
+    };
+    ecrire_journal(
+        &mut tx,
+        &acteur,
+        *patient_id,
+        NatureAcces::RechercheIdentite,
+        false,
+        None,
+    )
+    .await?;
+    let identite = identite(&mut tx, *patient_id).await?;
+    let mut fiche = fiche(VueScan::Accueil, &identite, None);
+    fiche.insert("nip".into(), json!(nip));
+    tx.commit().await?;
+    Ok(fiche)
 }
 
 // ---------------------------------------------------------------------
@@ -470,7 +567,7 @@ pub async fn journal_du_patient(
     sqlx::query_as(
         "SELECT j.id, j.date_acces, j.nature, s.nom AS structure_nom, j.role, \
                 u.nom AS professionnel_nom, u.prenom AS professionnel_prenom, j.telephone_affiche, \
-                NULL::text AS moyen, NULL::text AS motif_categorie, NULL::text AS motif \
+                pc.moyen, pc.motif_categorie, pc.motif \
          FROM compte cp \
          JOIN patient p ON p.utilisateur_id = cp.utilisateur_id \
          JOIN journal_acces j ON j.patient_id = p.id \
@@ -478,6 +575,7 @@ pub async fn journal_du_patient(
          JOIN affectation a ON a.id = j.affectation_id \
          JOIN compte c ON c.id = a.compte_id \
          JOIN utilisateur u ON u.id = c.utilisateur_id \
+         LEFT JOIN prise_en_charge pc ON pc.id = j.prise_en_charge_id \
          WHERE cp.id = $1 AND cp.type_compte = 'patient' AND ($2::uuid IS NULL OR j.id < $2) \
          ORDER BY j.id DESC LIMIT $3",
     )

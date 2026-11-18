@@ -163,6 +163,13 @@ async fn ce_que_chaque_role_peut_faire(pool: PgPool) {
         "UPDATE echec_acces_patient SET nature = nature WHERE false",
         "DELETE FROM echec_acces_patient WHERE false",
         "DELETE FROM profil_professionnel WHERE false",
+        // Prises en charge, prolongations et contrôles (migration 0037).
+        "UPDATE prise_en_charge SET fin = fin WHERE false",
+        "DELETE FROM prise_en_charge WHERE false",
+        "UPDATE prolongation_prise_en_charge SET nouvelle_fin = nouvelle_fin WHERE false",
+        "DELETE FROM prolongation_prise_en_charge WHERE false",
+        "UPDATE controle_bris_de_glace SET conclusion = conclusion WHERE false",
+        "DELETE FROM controle_bris_de_glace WHERE false",
     ] {
         refuse(&mut conn, sql).await;
     }

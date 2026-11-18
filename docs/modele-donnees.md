@@ -349,6 +349,18 @@ Une ligne par accès : patient, affectation (qui, avec quel rôle, dans quel ét
 
 Une ligne par essai sans résultat (NIP inconnu ou mal formé, recherche par identité sans résultat unique, code de soin faux) : affectation, nature, date, et le patient seulement quand il est connu. **Rien de ce qui a été saisi n'est gardé.** Sert aux limites d'essais. Jamais modifiée ni effacée. Migration 0036.
 
+### `code_soin_patient` : le secret du code de soin
+
+Une ligne par compte patient : secret chiffré (AES-256-GCM), nonce, version de la clé, dernier pas de temps accepté (un code ne sert qu'une fois). Remplacée quand le patient crée un nouveau code. Fichier : [`code_soin.rs`](../backend/src/code_soin.rs). Migration 0037.
+
+### `prise_en_charge` : l'établissement qui soigne
+
+Une ligne par prise en charge : patient, affectation qui l'a ouverte (donc l'établissement), moyen (`code_soin`, `cnib_verifiee`, `bris_de_glace`), motif (catégorie et texte, obligatoires pour un bris de glace seulement), début et fin (24 heures). Un bris de glace n'est possible que pour un médecin ou un infirmier, garanti par la base. **Jamais modifiée ni effacée.** Fichier : [`prise_en_charge.rs`](../backend/src/prise_en_charge.rs). Migration 0037.
+
+### `prolongation_prise_en_charge` et `controle_bris_de_glace`
+
+Une prolongation de 24 heures pendant une hospitalisation (médecin ou infirmier du même établissement), et le contrôle d'un bris de glace par le responsable (justifié ou non, avec un commentaire), un seul par bris de glace. Jamais modifiés ni effacés. Migration 0037.
+
 ---
 
 ## Les migrations, une par une
@@ -391,5 +403,6 @@ Une ligne par essai sans résultat (NIP inconnu ou mal formé, recherche par ide
 | 0034 | Index (audit technique, repris le 2026-11-17) : clés étrangères vers des lignes effacées par le code (codes de secours d'un second facteur désactivé, jetons d'une session purgée), et requêtes réelles (demandes d'un créateur, pièces d'une structure, délai d'envoi d'un lien, sessions d'une affectation retirée, journaux paginés du stock et des dépenses). Aucune donnée ne change |
 | 0035 | Module médecin, étape 1 : rôle `auxiliaire_pharmacie` (affectations, invitations, auteurs des ventes et des mouvements), profil professionnel (numéro d'ordre, spécialité, vérification par l'équipe, effacée à chaque changement), sexe du patient (facultatif) |
 | 0036 | Journal des accès aux données d'un patient (`journal_acces`) et essais sans résultat (`echec_acces_patient`), jamais modifiés ni effacés |
+| 0037 | Code de soin du patient (`code_soin_patient`), prises en charge, prolongations et contrôles des bris de glace (jamais modifiés ni effacés) ; notification `acces_urgence` |
 
 Une migration déjà appliquée ne change plus jamais : toute évolution passe par une nouvelle migration. Un test vérifie aussi qu'aucun caractère invisible ne s'y glisse ([`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs)).

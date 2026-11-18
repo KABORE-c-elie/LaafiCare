@@ -307,6 +307,32 @@ pub(crate) fn routeur(state: AppState) -> Router {
             "/api/patients/journal-acces",
             get(routes_acces_patient::journal),
         )
+        // Prise en charge (module médecin, docs/api.md §2.19).
+        .route(
+            "/api/patients/code-soin",
+            post(routes_acces_patient::generer_code_soin),
+        )
+        .route(
+            "/api/professionnels/patients/recherche",
+            post(routes_acces_patient::rechercher),
+        )
+        .route("/api/prises-en-charge", post(routes_acces_patient::ouvrir))
+        .route(
+            "/api/prises-en-charge/bris-de-glace",
+            post(routes_acces_patient::briser_la_glace),
+        )
+        .route(
+            "/api/prises-en-charge/{id}/prolonger",
+            post(routes_acces_patient::prolonger),
+        )
+        .route(
+            "/api/structures/bris-de-glace",
+            get(routes_acces_patient::lister_bris_de_glace),
+        )
+        .route(
+            "/api/structures/bris-de-glace/{id}/controler",
+            post(routes_acces_patient::controler),
+        )
         // Profil professionnel (module médecin, docs/api.md §2.17).
         .route(
             "/api/professionnels/profil",

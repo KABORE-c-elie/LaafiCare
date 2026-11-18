@@ -80,16 +80,22 @@ fn chiffrer_secret(
     compte_id: Uuid,
     secret: &[u8],
 ) -> Result<(Vec<u8>, Vec<u8>), ErreurTotp> {
+    chiffrer_avec(cle, compte_id.as_bytes(), secret)
+}
+
+/// Même chiffrement, avec une donnée associée choisie par l'appelant : le
+/// code de soin du patient (`code_soin.rs`) y met une étiquette en plus de
+/// l'identifiant du compte, pour qu'un secret du second facteur recopié dans
+/// sa table ne se déchiffre pas (séparation des usages d'une même clé).
+pub(crate) fn chiffrer_avec(
+    cle: &[u8; 32],
+    aad: &[u8],
+    secret: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>), ErreurTotp> {
     let chiffreur = Aes256Gcm::new_from_slice(cle).map_err(interne)?;
     let nonce = Nonce::<Aes256Gcm>::try_generate().map_err(interne)?;
     let chiffre = chiffreur
-        .encrypt(
-            &nonce,
-            Payload {
-                msg: secret,
-                aad: compte_id.as_bytes(),
-            },
-        )
+        .encrypt(&nonce, Payload { msg: secret, aad })
         .map_err(interne)?;
     Ok((chiffre, nonce.to_vec()))
 }
@@ -113,23 +119,27 @@ fn dechiffrer_secret(
     chiffre: &[u8],
     nonce: &[u8],
 ) -> Result<Secret, ErreurTotp> {
+    dechiffrer_avec(cle, compte_id.as_bytes(), chiffre, nonce)
+}
+
+/// Déchiffrement avec la donnée associée de `chiffrer_avec`.
+pub(crate) fn dechiffrer_avec(
+    cle: &[u8; 32],
+    aad: &[u8],
+    chiffre: &[u8],
+    nonce: &[u8],
+) -> Result<Secret, ErreurTotp> {
     let chiffreur = Aes256Gcm::new_from_slice(cle).map_err(interne)?;
     let nonce = Nonce::<Aes256Gcm>::try_from(nonce).map_err(interne)?;
     let clair = Zeroizing::new(
         chiffreur
-            .decrypt(
-                &nonce,
-                Payload {
-                    msg: chiffre,
-                    aad: compte_id.as_bytes(),
-                },
-            )
+            .decrypt(&nonce, Payload { msg: chiffre, aad })
             .map_err(interne)?,
     );
     Ok(Secret::new(Box::from(clair.as_slice())))
 }
 
-fn verifier_version_cle(version_cle: i16) -> Result<(), ErreurTotp> {
+pub(crate) fn verifier_version_cle(version_cle: i16) -> Result<(), ErreurTotp> {
     if version_cle != VERSION_CLE {
         return Err(ErreurTotp::Interne(format!(
             "version de clé TOTP inconnue : {version_cle}"
@@ -147,7 +157,7 @@ fn verifier_version_cle(version_cle: i16) -> Result<(), ErreurTotp> {
 /// doc `totp-rs` : certaines applications reviennent silencieusement à
 /// SHA-1). Tolérance d'un pas avant et après (Z3, NIST : dérive d'horloge
 /// dans les deux sens), soit environ 90 s.
-fn parametres() -> Builder {
+pub(crate) fn parametres() -> Builder {
     Builder::new()
         .with_algorithm(Algorithm::SHA1)
         .with_digits(6)
@@ -155,11 +165,11 @@ fn parametres() -> Builder {
         .with_skew(1)
 }
 
-fn totp_depuis(secret: Secret) -> Result<Totp, ErreurTotp> {
+pub(crate) fn totp_depuis(secret: Secret) -> Result<Totp, ErreurTotp> {
     parametres().with_secret(secret).build().map_err(interne)
 }
 
-fn maintenant() -> Result<u64, ErreurTotp> {
+pub(crate) fn maintenant() -> Result<u64, ErreurTotp> {
     // `check_current` de la crate panique si l'horloge est avant 1970 : on
     // lit l'heure ici pour transformer ce cas en erreur.
     SystemTime::now()
@@ -172,7 +182,7 @@ fn maintenant() -> Result<u64, ErreurTotp> {
 /// `Totp::check` : « return the matched step »). La crate ne refuse pas un
 /// code déjà utilisé (« it is the caller's responsibility ») : c'est le rôle
 /// de `dernier_pas`.
-fn pas_valide(totp: &Totp, code: &str, instant: u64) -> Result<i64, ErreurTotp> {
+pub(crate) fn pas_valide(totp: &Totp, code: &str, instant: u64) -> Result<i64, ErreurTotp> {
     let pas = totp.check(code, instant).ok_or(ErreurTotp::Refuse)?;
     i64::try_from(pas).map_err(interne)
 }

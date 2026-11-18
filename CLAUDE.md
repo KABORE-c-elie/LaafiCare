@@ -702,3 +702,10 @@ Aucun cycle avec `session::renouveler`, qui ne verrouille ni structure ni affect
 - **limites** : 5 essais sans résultat par affectation en 15 min (BF-01), 60 scans réussis en 15 min (valeur proposée, à valider), 429 avec `Retry-After` ; affectation verrouillée en tête de transaction ;
 - **journal des accès** (`journal_acces`) : écrit dans la même transaction, **avant** la réponse (validée avant l'envoi) ; jamais modifié ni effacé (triggers, droits retirés) ; aucune purge (MD6, CIL) ; lu par le patient (`GET /api/patients/journal-acces`, MD4, MD5) ;
 - **téléphone de l'adhérent** rendu par le seul `GET /api/assurance-munaseb/contrats/{id}` (`DetailContrat.telephone`, absent ailleurs), tracé (`telephone_pour_agent`).
+
+**Étape 3 (fait)** — migration 0037, `code_soin.rs`, `prise_en_charge.rs`, `docs/api.md` §2.19 :
+- **code de soin** : TOTP 6 chiffres par patient, paramètres et chiffrement du TOTP administrateur (`totp::chiffrer_avec`, donnée associée `laaficare:code_soin:` + compte) ; mot de passe exigé pour le créer ; un code ne sert qu'une fois ; écran mobile plus tard ;
+- **prise en charge** (MD1, MD3) : ouverte par l'accueil, le médecin ou l'infirmier d'une clinique, ou le pharmacien, avec le code de soin ou l'attestation CNIB ; 24 h, prolongeable de 24 h (hospitalisation, médecin ou infirmier) ; valable pour son établissement seulement (`en_cours`, 404 ailleurs, 403 terminée) ; limites : 5 échecs par affectation et **5 codes faux par patient** en 15 min ;
+- **bris de glace** (MD2) : médecin ou infirmier (CHECK en base), catégorie (liste proposée) et motif obligatoires ; notification `acces_urgence` après validation, texte minimal ; contrôle unique par le responsable de la clinique ;
+- **recherche par identité** (MD19) : exacte, une seule personne ou 404, jamais une liste ; limites ; rend le NIP ;
+- **ordre des verrous** : affectation, puis patient, puis code de soin. Les traces (`prise_en_charge`, prolongations, contrôles) ne se modifient ni ne s'effacent ; aucun `FOR UPDATE` sur elles (le serveur n'a pas le droit d'`UPDATE`).

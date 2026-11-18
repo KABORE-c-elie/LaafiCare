@@ -251,6 +251,18 @@ Résumé :
 | POST, GET | `/api/pharmacie/depenses` | jeton en exercice, **responsable** d'une pharmacie seulement ; POST avec `Idempotency-Key` facultatif | fonctionne (section 2.16) |
 | POST | `/api/pharmacie/depenses/{id}/annuler` | même appelant | fonctionne (section 2.16) |
 | GET | `/api/pharmacie/rapport` | même appelant | fonctionne (section 2.16) |
+| PUT | `/api/patients/moi/sexe` | jeton `laaficare:patient` | fonctionne (section 2.2.7) |
+| GET, PUT | `/api/professionnels/profil` | jeton professionnel, avec ou sans affectation | fonctionne (section 2.17) |
+| GET | `/api/administrateurs/profils-professionnels` | jeton administrateur | fonctionne (section 2.17) |
+| POST | `/api/administrateurs/profils-professionnels/{compte_id}/verifier` | jeton administrateur | fonctionne (section 2.17) |
+| POST | `/api/professionnels/patients/scan` | jeton en exercice : accueil, médecin, infirmier, agent MUNASEB, pharmacien, auxiliaire | fonctionne (section 2.18) |
+| GET | `/api/patients/journal-acces` | jeton `laaficare:patient` | fonctionne (section 2.18) |
+| POST | `/api/patients/code-soin` | jeton `laaficare:patient` | fonctionne (section 2.19) |
+| POST | `/api/professionnels/patients/recherche` | jeton en exercice : accueil, médecin, infirmier d'une clinique | fonctionne (section 2.19) |
+| POST | `/api/prises-en-charge` | jeton en exercice : accueil, médecin, infirmier d'une clinique ; pharmacien | fonctionne (section 2.19) |
+| POST | `/api/prises-en-charge/bris-de-glace`, `/api/prises-en-charge/{id}/prolonger` | jeton en exercice : médecin ou infirmier d'une clinique | fonctionne (section 2.19) |
+| GET | `/api/structures/bris-de-glace` | jeton en exercice : responsable d'une clinique | fonctionne (section 2.19) |
+| POST | `/api/structures/bris-de-glace/{id}/controler` | même appelant | fonctionne (section 2.19) |
 
 > **Routes MUNASEB rebranchées (étape 3.9).** Un agent se connecte par la connexion professionnelle (section 2.4), puis active son affectation `agent_assurance_munaseb` (section 2.6). Les routes de remboursement n'acceptent qu'un jeton `laaficare:professionnel_en_exercice` : tout autre jeton est refusé en 401. Avec un jeton de la bonne sorte, elles répondent **403 `acces_refuse`** si l'affectation n'est pas celle d'un agent MUNASEB, est désactivée, ou si la MUNASEB n'est plus validée ou sous licence. **Testable dans Postman de bout en bout** : la structure MUNASEB se crée (section 2.8), l'équipe la valide (section 2.9), le responsable invite un agent (section 2.10), et l'agent enregistre les contrats (section 2.14).
 
@@ -1242,10 +1254,11 @@ Libellés conseillés : `en_attente` « Reçue », `en_cours` « En cours de tra
 
 #### `GET /api/patients/notifications?limite=&avant=`
 
-- **Réponse 200** : `{"notifications": [{"id", "titre", "message", "lu", "date_creation", "demande_id"}], "non_lues": 3, "suivant": "…" | null}`.
+- **Réponse 200** : `{"notifications": [{"id", "type", "titre", "message", "lu", "date_creation", "demande_id"}], "non_lues": 3, "suivant": "…" | null}`.
+  - `type` (ajouté le 2026-11-17) : `remboursement_statut` ou `acces_urgence`.
   - Les plus récentes d'abord ; `limite` de 1 à 100 (50 par défaut) ; `avant` = `suivant`.
   - `non_lues` : le nombre total de notifications non lues, pour le badge.
-  - `demande_id` : la demande concernée, à ouvrir avec la route de détail.
+  - `demande_id` : la demande concernée, à ouvrir avec la route de détail ; `null` pour une notification d'**accès d'urgence** à son dossier (bris de glace, depuis le 2026-11-17, section 2.19) : l'application ouvre alors le journal des accès (section 2.18).
 - Les textes restent minimaux : ni montant, ni type d'acte, ni motif.
 
 #### `POST /api/patients/notifications/{id}/lue` et `POST /api/patients/notifications/lues`
@@ -1627,6 +1640,54 @@ Jeton administrateur. Corps : `{"numero_ordre": "…", "specialite": "…" | nul
 - `moyen`, `motif_categorie`, `motif` : pour un accès sous une prise en charge (section 2.19), sinon `null`.
 - Pagination : `suivant` dans `avant` ; `limite` 1 à 100 (50 par défaut).
 
+### 2.19 Prise en charge, code de soin, bris de glace (2026-11-17)
+
+**Modèle d'accès (décision MD1 du porteur)** : le dossier ne s'ouvre que sous une **prise en charge** de l'établissement de l'affectation, encore en cours. Elle est ouverte :
+- avec le **code de soin** du patient (moyen préféré : il prouve que le patient est là) ;
+- ou après **vérification de sa CNIB** par le professionnel (attestation tracée, le numéro n'est jamais enregistré) ;
+- ou par un **bris de glace** en urgence (médecin ou infirmier seulement, motif obligatoire, contrôlé ensuite par le responsable, patient averti).
+
+Une prise en charge dure **24 heures** ; un médecin ou un infirmier la **prolonge** de 24 heures pendant une hospitalisation. Elle ne vaut que pour **son établissement**. Rien ne se modifie ni ne s'efface. Chaque ouverture, prolongation et bris de glace est écrit dans le journal des accès (section 2.18).
+
+Objet rendu : `{"id", "moyen": "code_soin" | "cnib_verifiee" | "bris_de_glace", "debut", "fin"}` (`fin` : fin effective, prolongations comprises). L'`id` sert aux routes du dossier (section 2.20).
+
+#### `POST /api/patients/code-soin` (jeton patient)
+
+Crée ou remplace le secret du **code de soin** : un code à 6 chiffres qui change toutes les 30 secondes (TOTP, RFC 6238), que le téléphone calcule **sans réseau**.
+
+- **Corps** : `{"mot_de_passe": "…"}` (exigé, compté dans le verrouillage).
+- **Réponse 201** (en-tête `Cache-Control: no-store`) : `{"cle_base32", "url_otpauth", "algorithme": "SHA1", "chiffres": 6, "periode_secondes": 30}`. **Montrée une seule fois** : l'application la garde dans le stockage sécurisé du téléphone. Une nouvelle demande remplace l'ancien secret.
+- **Erreurs** : 401 `identifiants_invalides` (mot de passe faux, compte verrouillé).
+
+#### `POST /api/professionnels/patients/recherche` (accueil, médecin, infirmier d'une clinique)
+
+Patient sans téléphone ni carte (décision MD19). **Corps** : `{"nom", "prenom", "date_naissance": "1995-04-12", "lieu_naissance"}`, comparés **exactement** (seules les majuscules et les espaces autour sont ignorées). **Réponse 200** : la fiche de l'accueil (section 2.18) et `"nip"`. **Une seule personne, jamais une liste** : aucun résultat ou plusieurs (homonymes) → 404 `patient_inconnu`. 5 échecs en 15 minutes par affectation, puis 429. Chaque recherche réussie est au journal. Autre rôle : 403.
+
+#### `POST /api/prises-en-charge` (accueil, médecin, infirmier d'une clinique ; pharmacien d'une pharmacie)
+
+- **Corps** : `{"nip", "code_soin": "123456"}` **ou** `{"nip", "cnib_verifiee": true}` (exactement l'un des deux, sinon 422 `donnees_invalides`).
+- **Réponse 201** : la prise en charge.
+- **Erreurs** : 403 `acces_refuse` (auxiliaire, agent MUNASEB, responsable…) ; 404 `patient_inconnu` ; 422 `code_soin_invalide` (code faux, déjà utilisé, ou patient sans code de soin) ; 429 `trop_de_demandes` (5 essais sans résultat par affectation en 15 minutes ; et **5 codes faux par patient** en 15 minutes, tous établissements confondus).
+
+#### `POST /api/prises-en-charge/bris-de-glace` (médecin ou infirmier d'une clinique)
+
+- **Corps** : `{"nip", "motif_categorie": "patient_inconscient" | "urgence_vitale" | "patient_incapable_de_communiquer" | "autre", "motif": "…"}` (motif obligatoire, 1 000 caractères au plus).
+- **Réponse 201** : la prise en charge (`moyen` : `bris_de_glace`).
+- Le patient reçoit une **notification** (`type` `acces_urgence`, texte sans établissement ni motif : « Votre dossier médical a été ouvert en urgence. Consultez le journal des accès. »).
+- **Erreurs** : 403 `acces_refuse` (pharmacien, accueil, tout autre rôle) ; 404 `patient_inconnu` ; 422 `donnees_invalides` (motif vide ou trop long, catégorie inconnue).
+
+#### `POST /api/prises-en-charge/{id}/prolonger` (médecin ou infirmier de l'établissement)
+
+24 heures de plus, à partir de la fin effective. **Réponse 200** : la prise en charge. **Erreurs** : 403 `acces_refuse` ; 403 `prise_en_charge_expiree` ; 404 `prise_en_charge_inconnue` (inexistante ou d'un autre établissement).
+
+#### `GET /api/structures/bris-de-glace?a_controler=true&limite=&avant=` (responsable d'une clinique)
+
+`{"bris_de_glace": [{"id", "debut", "role", "professionnel_nom", "professionnel_prenom", "motif_categorie", "motif", "patient_nom", "patient_prenom", "conclusion", "commentaire", "date_controle"}], "suivant"}`. `a_controler=true` : seulement ceux pas encore contrôlés.
+
+#### `POST /api/structures/bris-de-glace/{id}/controler` (responsable d'une clinique)
+
+**Corps** : `{"conclusion": "justifie" | "injustifie", "commentaire": "…" | null}`. **Réponse 204**. **Erreurs** : 404 `prise_en_charge_inconnue` (autre établissement, ou pas un bris de glace) ; 409 `deja_controle` (un seul contrôle).
+
 ## 3. Codes d'erreur : index
 
 | `code` | HTTP | Routes |
@@ -1687,7 +1748,11 @@ Jeton administrateur. Corps : `{"numero_ordre": "…", "specialite": "…" | nul
 | `numero_ordre_invalide` | 422 | profil professionnel (section 2.17) |
 | `verification_impossible` | 409 | vérification d'un profil professionnel par l'équipe |
 | `patient_inconnu` | 404 | aussi : scan du NIP (inconnu ou mal formé), section 2.18 |
-| `trop_de_demandes` | 429 | aussi : scan du NIP (avec `Retry-After`) |
+| `trop_de_demandes` | 429 | aussi : scan du NIP, recherche par identité, ouverture d'une prise en charge (avec `Retry-After`) |
+| `code_soin_invalide` | 422 | ouverture d'une prise en charge par le code de soin |
+| `prise_en_charge_inconnue` | 404 | prolongation, contrôle d'un bris de glace, dossier (inexistante ou d'un autre établissement) |
+| `prise_en_charge_expiree` | 403 | prolongation, dossier (prise en charge terminée) |
+| `deja_controle` | 409 | contrôle d'un bris de glace |
 | `erreur_interne` | 500 | toutes |
 
 ---
