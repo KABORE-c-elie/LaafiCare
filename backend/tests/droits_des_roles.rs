@@ -864,3 +864,149 @@ async fn parcours_pharmacie_avec_le_role_du_serveur(proprietaire: PgPool) {
         (0, 0, 900)
     );
 }
+
+/// Module médecin avec le seul rôle du serveur (migrations 0035 à 0038) :
+/// scan, code de soin, prise en charge, bris de glace et son contrôle,
+/// prolongation, dossier, ordonnance, journal. Prouve que les droits retirés
+/// (aucun `UPDATE` ni `DELETE` sur les traces) ne bloquent aucun parcours.
+#[sqlx::test]
+#[ignore]
+async fn parcours_medecin_avec_le_role_du_serveur(proprietaire: PgPool) {
+    use laaficare_backend::affectation::Exercice;
+    use laaficare_backend::dossier_medical::{self as dossier, NouvelleAllergie, NouvelleLigne};
+    use laaficare_backend::prise_en_charge::{self as pec, CategorieMotif, Conclusion, Preuve};
+    use laaficare_backend::{acces_patient, code_soin, nip};
+
+    const CLE: [u8; 32] = [5; 32];
+    let nip = nip::generer(&proprietaire).await.unwrap();
+    let hachage = laaficare_backend::mot_de_passe::hacher_async("Soin-2026!")
+        .await
+        .unwrap();
+    let compte_patient: Uuid = sqlx::query_scalar(
+        "WITH u AS (INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('OUEDRAOGO', 'Awa', '+22670048001') RETURNING id), \
+              p AS (INSERT INTO patient (utilisateur_id, nip, date_naissance, lieu_naissance) \
+                    SELECT id, $1, '1995-04-12', 'Koudougou' FROM u) \
+         INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) SELECT id, 'patient', $2 FROM u RETURNING id",
+    )
+    .bind(&nip)
+    .bind(hachage.as_str())
+    .fetch_one(&proprietaire)
+    .await
+    .unwrap();
+    let createur: Uuid = sqlx::query_scalar(
+        "WITH u AS (INSERT INTO utilisateur (nom, prenom, telephone) VALUES ('SANOU', 'Ali', '+22670048002') RETURNING id) \
+         INSERT INTO compte (utilisateur_id, type_compte, mot_de_passe_hash) SELECT id, 'professionnel', 'x' FROM u RETURNING id",
+    )
+    .fetch_one(&proprietaire)
+    .await
+    .unwrap();
+    let clinique: Uuid = sqlx::query_scalar(
+        "INSERT INTO structure (type_structure, nom, telephone, telephone_urgence, region, email, commune, province, \
+                                latitude, longitude, createur_compte_id, statut) \
+         VALUES ('clinique', 'Clinique fictive', '+22670000000', '+22670000000', 'Région fictive', 'c@example.org', \
+                 'Commune fictive', 'Province fictive', 12.3714, -1.5197, $1, 'validee') RETURNING id",
+    )
+    .bind(createur)
+    .fetch_one(&proprietaire)
+    .await
+    .unwrap();
+    let exercice = |role: &'static str| {
+        let proprietaire = proprietaire.clone();
+        async move {
+            let affectation_id: Uuid = sqlx::query_scalar(
+                "INSERT INTO affectation (compte_id, structure_id, role) VALUES ($1, $2, $3) RETURNING id",
+            )
+            .bind(createur)
+            .bind(clinique)
+            .bind(role)
+            .fetch_one(&proprietaire)
+            .await
+            .unwrap();
+            Exercice {
+                compte_id: createur,
+                affectation_id,
+                structure_id: clinique,
+                type_structure: "clinique".into(),
+                role: role.into(),
+            }
+        }
+    };
+    let medecin = exercice("medecin").await;
+    let responsable = exercice("responsable").await;
+
+    let serveur = pool_du_serveur(&proprietaire).await;
+    acces_patient::scanner(&serveur, &medecin, &nip)
+        .await
+        .unwrap();
+    assert!(
+        acces_patient::scanner(&serveur, &medecin, "0")
+            .await
+            .is_err()
+    );
+    let premier = code_soin::generer(&serveur, &CLE, compte_patient, "Soin-2026!")
+        .await
+        .unwrap();
+    // Remplacer le code de soin (suppression puis insertion) est permis.
+    let cree = code_soin::generer(&serveur, &CLE, compte_patient, "Soin-2026!")
+        .await
+        .unwrap();
+    assert_ne!(cree.cle_base32, premier.cle_base32);
+    let code = totp_rs::Builder::new()
+        .with_secret(totp_rs::Secret::try_from_base32(&cree.cle_base32).unwrap())
+        .build()
+        .unwrap()
+        .generate_current()
+        .to_string();
+    let prise = pec::ouvrir(&serveur, &CLE, &medecin, &nip, Preuve::CodeSoin(&code))
+        .await
+        .unwrap();
+    pec::prolonger(&serveur, &medecin, prise.id).await.unwrap();
+    let bris = pec::briser_la_glace(
+        &serveur,
+        &medecin,
+        &nip,
+        CategorieMotif::UrgenceVitale,
+        "Test fictif",
+    )
+    .await
+    .unwrap();
+    pec::controler(&serveur, &responsable, bris.id, Conclusion::Justifie, None)
+        .await
+        .unwrap();
+    dossier::ajouter_allergie(
+        &serveur,
+        &medecin,
+        prise.id,
+        &NouvelleAllergie {
+            substance: "Arachide".into(),
+            dci_id: None,
+            reaction: None,
+        },
+    )
+    .await
+    .unwrap();
+    dossier::prescrire(
+        &serveur,
+        &medecin,
+        prise.id,
+        &dossier::NouvelleOrdonnance {
+            consultation_id: None,
+            lignes: vec![NouvelleLigne {
+                medicament_id: None,
+                denomination: Some("Hors catalogue fictif".into()),
+                posologie: "1 par jour".into(),
+                quantite: 5,
+                duree_jours: None,
+            }],
+            depassement_allergie_motif: None,
+        },
+    )
+    .await
+    .unwrap();
+    let lu = dossier::lire(&serveur, &medecin, prise.id).await.unwrap();
+    assert_eq!(lu["allergies"][0]["substance"], "Arachide");
+    let journal = acces_patient::journal_du_patient(&serveur, compte_patient, None, 50)
+        .await
+        .unwrap();
+    assert!(journal.len() >= 6, "{}", journal.len());
+}

@@ -1670,7 +1670,7 @@ Patient sans téléphone ni carte (décision MD19). **Corps** : `{"nom", "prenom
 
 - **Corps** : `{"nip", "code_soin": "123456"}` **ou** `{"nip", "cnib_verifiee": true}` (exactement l'un des deux, sinon 422 `donnees_invalides`).
 - **Réponse 201** : la prise en charge.
-- **Erreurs** : 403 `acces_refuse` (auxiliaire, agent MUNASEB, responsable…) ; 404 `patient_inconnu` ; 422 `code_soin_invalide` (code faux, déjà utilisé, ou patient sans code de soin) ; 429 `trop_de_demandes` (5 essais sans résultat par affectation en 15 minutes ; et **5 codes faux par patient** en 15 minutes, tous établissements confondus).
+- **Erreurs** : 403 `acces_refuse` (auxiliaire, agent MUNASEB, responsable…) ; 404 `patient_inconnu` ; 422 `code_soin_invalide` (code faux, déjà utilisé, ou patient sans code de soin) ; 429 `trop_de_demandes` (5 essais sans résultat par affectation en 15 minutes ; **5 codes faux par patient** en 15 minutes, tous établissements confondus ; 60 ouvertures réussies par affectation en 15 minutes). Le bris de glace a la même limite de 60.
 
 #### `POST /api/prises-en-charge/bris-de-glace` (médecin ou infirmier d'une clinique)
 

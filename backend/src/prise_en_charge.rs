@@ -174,6 +174,11 @@ pub async fn ouvrir(
     };
     let mut tx = pool.begin().await?;
     acces_patient::controler_echecs(&mut tx, &acteur, nature_echec).await?;
+    // L'attestation CNIB est déclarative : le nombre d'ouvertures réussies
+    // est limité comme les scans (relecture de sécurité du 2026-11-17 ;
+    // OWASP API4:2023), et chacune reste au journal.
+    acces_patient::controler_reussites(&mut tx, &acteur, NatureAcces::OuverturePriseEnCharge)
+        .await?;
     let Some(patient_id) = acces_patient::patient_du_nip(&mut tx, nip).await? else {
         acces_patient::enregistrer_echec(tx, &acteur, nature_echec, None).await?;
         return Err(ErreurAcces::PatientInconnu);
@@ -256,6 +261,8 @@ pub async fn briser_la_glace(
     let acteur = Acteur::from(exercice);
     let mut tx = pool.begin().await?;
     acces_patient::controler_echecs(&mut tx, &acteur, NatureEchec::Scan).await?;
+    // Même limite que les ouvertures (relecture de sécurité du 2026-11-17).
+    acces_patient::controler_reussites(&mut tx, &acteur, NatureAcces::BrisDeGlace).await?;
     let Some(patient_id) = acces_patient::patient_du_nip(&mut tx, nip).await? else {
         acces_patient::enregistrer_echec(tx, &acteur, NatureEchec::Scan, None).await?;
         return Err(ErreurAcces::PatientInconnu);
@@ -590,6 +597,33 @@ pub(crate) mod tests {
         .await
         .unwrap();
         assert_eq!(ouvertures, 3);
+
+        // Ouvertures réussies limitées par affectation (attestation CNIB
+        // déclarative) ; même limite pour les bris de glace.
+        for nature in ["ouverture_prise_en_charge", "bris_de_glace"] {
+            let medecin = exercice(&pool, clinique, "medecin").await;
+            sqlx::query(
+                "INSERT INTO journal_acces (patient_id, affectation_id, structure_id, role, nature) \
+                 SELECT $1, $2, $3, 'medecin', $4 FROM generate_series(1, $5)",
+            )
+            .bind(autre.patient_id)
+            .bind(medecin.affectation_id)
+            .bind(clinique)
+            .bind(nature)
+            .bind(acces_patient::SCANS_MAX as i32)
+            .execute(&pool)
+            .await
+            .unwrap();
+            let refus = if nature == "bris_de_glace" {
+                briser_la_glace(&pool, &medecin, &autre.nip, CategorieMotif::Autre, "Test").await
+            } else {
+                ouvrir(&pool, &CLE, &medecin, &autre.nip, Preuve::CnibVerifiee).await
+            };
+            assert!(
+                matches!(refus, Err(ErreurAcces::TropDEssais { .. })),
+                "{nature} : {refus:?}"
+            );
+        }
     }
 
     /// Bris de glace : médecin ou infirmier, motif obligatoire ; jamais le

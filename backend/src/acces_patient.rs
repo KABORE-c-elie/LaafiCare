@@ -245,7 +245,7 @@ pub async fn controler_echecs(
 /// Réussites de cette nature par l'affectation dans la fenêtre des scans :
 /// au plus `SCANS_MAX` (collecte en masse, OWASP API4:2023). À appeler après
 /// `controler_echecs`, qui a verrouillé l'affectation.
-async fn controler_reussites(
+pub(crate) async fn controler_reussites(
     tx: &mut Transaction<'_, Postgres>,
     acteur: &Acteur,
     nature: NatureAcces,
