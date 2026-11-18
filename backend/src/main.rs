@@ -3,6 +3,7 @@ mod extracteur_jwt;
 mod routes_acces_patient;
 mod routes_administrateur;
 mod routes_contrat_munaseb;
+mod routes_dossier;
 mod routes_espace_patient;
 mod routes_invitation;
 mod routes_membres;
@@ -328,6 +329,35 @@ pub(crate) fn routeur(state: AppState) -> Router {
         .route(
             "/api/structures/bris-de-glace",
             get(routes_acces_patient::lister_bris_de_glace),
+        )
+        // Dossier médical, toujours sous une prise en charge (docs/api.md §2.20).
+        .route(
+            "/api/prises-en-charge/{id}/dossier",
+            get(routes_dossier::lire),
+        )
+        .route(
+            "/api/prises-en-charge/{id}/allergies",
+            post(routes_dossier::ajouter_allergie),
+        )
+        .route(
+            "/api/prises-en-charge/{id}/allergies/{allergie_id}/retirer",
+            post(routes_dossier::retirer_allergie),
+        )
+        .route(
+            "/api/prises-en-charge/{id}/antecedents",
+            post(routes_dossier::ajouter_antecedent),
+        )
+        .route(
+            "/api/prises-en-charge/{id}/consultations",
+            post(routes_dossier::creer_consultation),
+        )
+        .route(
+            "/api/prises-en-charge/{id}/consultations/{consultation_id}/ajouts",
+            post(routes_dossier::ajouter_a_consultation),
+        )
+        .route(
+            "/api/prises-en-charge/{id}/ordonnances",
+            post(routes_dossier::prescrire),
         )
         .route(
             "/api/structures/bris-de-glace/{id}/controler",

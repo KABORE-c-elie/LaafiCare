@@ -709,3 +709,9 @@ Aucun cycle avec `session::renouveler`, qui ne verrouille ni structure ni affect
 - **bris de glace** (MD2) : médecin ou infirmier (CHECK en base), catégorie (liste proposée) et motif obligatoires ; notification `acces_urgence` après validation, texte minimal ; contrôle unique par le responsable de la clinique ;
 - **recherche par identité** (MD19) : exacte, une seule personne ou 404, jamais une liste ; limites ; rend le NIP ;
 - **ordre des verrous** : affectation, puis patient, puis code de soin. Les traces (`prise_en_charge`, prolongations, contrôles) ne se modifient ni ne s'effacent ; aucun `FOR UPDATE` sur elles (le serveur n'a pas le droit d'`UPDATE`).
+
+**Étape 4 (fait)** — migration 0038, `dossier_medical.rs`, `routes_dossier.rs`, `docs/api.md` §2.20 :
+- **toujours sous une prise en charge en cours** de l'établissement (`/api/prises-en-charge/{id}/…`), jamais par le NIP ; chaque lecture et écriture au journal, dans la transaction, avant la réponse ;
+- **vues** (`dossier_medical::vue`) : complète (médecin, infirmier d'une clinique) ; pharmacie (pharmacien : identité, allergies, ordonnances sans lien vers la consultation, antécédents médicamenteux ; jamais consultation, diagnostic ni examen) ; tout autre rôle 403 ; réponse construite champ par champ, allergies en premier ;
+- **écritures** : allergies et antécédents (médecin, infirmier) ; retrait d'allergie, consultation, ajout, ordonnance (médecin) ; rien ne se modifie ni ne s'efface (MD14) ; clés composites (prise en charge, établissement, patient) ;
+- **contrôle d'allergie** (BF-03, MD15, MD16) : par DCI, 409 `alerte_allergie` avec `conflits` (lecture tracée) ; dépassement avec motif, tracé ligne par ligne ; avertissements (lignes hors catalogue, allergies sans DCI) ; aucune durée de validité (MD17) ; aucune demande MUNASEB (MD18).

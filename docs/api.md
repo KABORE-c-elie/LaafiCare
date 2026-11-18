@@ -263,6 +263,9 @@ Résumé :
 | POST | `/api/prises-en-charge/bris-de-glace`, `/api/prises-en-charge/{id}/prolonger` | jeton en exercice : médecin ou infirmier d'une clinique | fonctionne (section 2.19) |
 | GET | `/api/structures/bris-de-glace` | jeton en exercice : responsable d'une clinique | fonctionne (section 2.19) |
 | POST | `/api/structures/bris-de-glace/{id}/controler` | même appelant | fonctionne (section 2.19) |
+| GET | `/api/prises-en-charge/{id}/dossier` | jeton en exercice : médecin, infirmier (dossier complet) ; pharmacien (vue pharmacie) | fonctionne (section 2.20) |
+| POST | `/api/prises-en-charge/{id}/allergies`, `/antecedents` | médecin ou infirmier | fonctionne (section 2.20) |
+| POST | `/api/prises-en-charge/{id}/allergies/{allergie_id}/retirer`, `/consultations`, `/consultations/{consultation_id}/ajouts`, `/ordonnances` | médecin | fonctionne (section 2.20) |
 
 > **Routes MUNASEB rebranchées (étape 3.9).** Un agent se connecte par la connexion professionnelle (section 2.4), puis active son affectation `agent_assurance_munaseb` (section 2.6). Les routes de remboursement n'acceptent qu'un jeton `laaficare:professionnel_en_exercice` : tout autre jeton est refusé en 401. Avec un jeton de la bonne sorte, elles répondent **403 `acces_refuse`** si l'affectation n'est pas celle d'un agent MUNASEB, est désactivée, ou si la MUNASEB n'est plus validée ou sous licence. **Testable dans Postman de bout en bout** : la structure MUNASEB se crée (section 2.8), l'équipe la valide (section 2.9), le responsable invite un agent (section 2.10), et l'agent enregistre les contrats (section 2.14).
 
@@ -1688,6 +1691,43 @@ Patient sans téléphone ni carte (décision MD19). **Corps** : `{"nom", "prenom
 
 **Corps** : `{"conclusion": "justifie" | "injustifie", "commentaire": "…" | null}`. **Réponse 204**. **Erreurs** : 404 `prise_en_charge_inconnue` (autre établissement, ou pas un bris de glace) ; 409 `deja_controle` (un seul contrôle).
 
+### 2.20 Dossier médical (2026-11-17)
+
+Toutes ces routes passent par une **prise en charge en cours de l'établissement de l'affectation** (`{id}`, section 2.19), **jamais par le NIP**. Chaque lecture et chaque écriture est écrite dans le journal des accès avant la réponse. Erreurs communes : 403 `acces_refuse` (rôle sans droit), 404 `prise_en_charge_inconnue` (inexistante ou d'un autre établissement), 403 `prise_en_charge_expiree`, 422 `donnees_invalides` (le message nomme le champ). **Rien ne se modifie ni ne s'efface** : une allergie se retire, une consultation se corrige par un ajout.
+
+#### `GET /api/prises-en-charge/{id}/dossier`
+
+La réponse dépend du rôle ; un champ que le rôle ne doit pas voir est **absent**. Les **allergies viennent en premier** : l'application les affiche en priorité, en rouge, avec un texte (règle du modèle et WCAG 2.2, 1.4.1).
+
+- **Médecin, infirmier** (clinique) : `{"allergies", "patient", "allergies_retirees", "antecedents", "consultations", "ordonnances"}`.
+- **Pharmacien** (pharmacie, sous une prise en charge ouverte par la pharmacie) : `{"allergies", "patient", "antecedents_medicamenteux", "ordonnances"}`. **Jamais** les consultations, les diagnostics, les examens ni le lien d'une ordonnance vers sa consultation.
+- **Accueil, auxiliaire, agent MUNASEB, responsable** : 403 `acces_refuse`.
+
+Contenu :
+- `allergies` : `[{"id", "substance", "dci_id", "dci_nom", "reaction", "date_saisie"}]` (actives) ; `allergies_retirees` : les mêmes, avec `motif_retrait` et `date_retrait` ;
+- `patient` : `{"nom", "prenom", "sexe", "date_naissance", "lieu_naissance"}` ;
+- `antecedents` : `[{"id", "type_antecedent": "medical" | "chirurgical" | "familial" | "medicamenteux", "description", "date_debut", "date_saisie"}]` ;
+- `consultations` : `[{"id", "motif", "examen", "diagnostic", "date_consultation", "structure_nom", "medecin_nom", "medecin_prenom", "ajouts": [{"texte", "date_ajout", "medecin_nom", "medecin_prenom"}]}]` ;
+- `ordonnances` : `[{"id", "consultation_id" (vue complète seulement), "date_emission", "structure_nom", "medecin_nom", "medecin_prenom", "lignes": [{"rang", "medicament_id", "denomination", "forme", "dosage", "hors_catalogue", "posologie", "quantite", "duree_jours", "alerte_allergie_depassee"}]}]`. **Aucune durée de validité** n'est imposée (en attente de l'Ordre) : la date est toujours rendue.
+
+#### Écritures
+
+| Route | Qui | Corps | Réponse |
+|---|---|---|---|
+| `POST /api/prises-en-charge/{id}/allergies` | médecin, infirmier | `{"substance", "dci_id": "…" \| null, "reaction": "…" \| null}` (`dci_id` : une DCI du catalogue, pour le contrôle des ordonnances) | 201, l'allergie |
+| `POST /api/prises-en-charge/{id}/allergies/{allergie_id}/retirer` | médecin | `{"motif"}` | 204 ; 404 `allergie_inconnue` ; 409 `deja_retiree` |
+| `POST /api/prises-en-charge/{id}/antecedents` | médecin, infirmier | `{"type_antecedent", "description", "date_debut": null}` | 201, l'antécédent |
+| `POST /api/prises-en-charge/{id}/consultations` | médecin | `{"motif", "examen": null, "diagnostic": null}` (texte libre) | 201, `{"id", "date_consultation"}` |
+| `POST /api/prises-en-charge/{id}/consultations/{consultation_id}/ajouts` | médecin | `{"texte"}` | 204 ; 404 `consultation_inconnue` |
+| `POST /api/prises-en-charge/{id}/ordonnances` | médecin | voir ci-dessous | 201 |
+
+#### Ordonnance et contrôle d'allergie
+
+- **Corps** : `{"consultation_id": null, "lignes": [{"medicament_id": "…", "posologie": "1 comprimé matin et soir", "quantite": 10, "duree_jours": 5}], "depassement_allergie_motif": null}`. Chaque ligne a **soit** `medicament_id` (catalogue national), **soit** `denomination` (hors catalogue, permis, sans contrôle possible). 1 à 50 lignes ; quantité 1 à 10 000 ; durée 1 à 365 jours ou `null`.
+- **Alerte bloquante** (CDC, BF-03) : si une DCI d'un médicament prescrit est celle d'une **allergie active** du patient, la réponse est **409 `alerte_allergie`**, rien n'est créé, avec `"conflits": [{"rang", "medicament_id", "allergie_id", "substance"}]`. Pour prescrire quand même, le médecin renvoie la même ordonnance avec `"depassement_allergie_motif"` : chaque dépassement est tracé, et la ligne porte `"alerte_allergie_depassee": true`.
+- **Réponse 201** : l'ordonnance, plus `"avertissements": {"lignes_hors_catalogue": [2], "allergies_non_comparees": ["Arachide"]}` : ce qui n'a pas pu être comparé (lignes hors catalogue, allergies sans DCI). L'application doit les afficher.
+- **Erreurs** : 404 `medicament_inconnu`, 404 `consultation_inconnue` (d'un autre patient), 409 `alerte_allergie`.
+
 ## 3. Codes d'erreur : index
 
 | `code` | HTTP | Routes |
@@ -1753,6 +1793,10 @@ Patient sans téléphone ni carte (décision MD19). **Corps** : `{"nom", "prenom
 | `prise_en_charge_inconnue` | 404 | prolongation, contrôle d'un bris de glace, dossier (inexistante ou d'un autre établissement) |
 | `prise_en_charge_expiree` | 403 | prolongation, dossier (prise en charge terminée) |
 | `deja_controle` | 409 | contrôle d'un bris de glace |
+| `alerte_allergie` | 409 | ordonnance (avec `conflits`), section 2.20 |
+| `allergie_inconnue`, `consultation_inconnue` | 404 | dossier médical |
+| `deja_retiree` | 409 | retrait d'une allergie |
+| `medicament_inconnu` | 404 | aussi : ordonnance |
 | `erreur_interne` | 500 | toutes |
 
 ---

@@ -361,6 +361,17 @@ Une ligne par prise en charge : patient, affectation qui l'a ouverte (donc l'ét
 
 Une prolongation de 24 heures pendant une hospitalisation (médecin ou infirmier du même établissement), et le contrôle d'un bris de glace par le responsable (justifié ou non, avec un commentaire), un seul par bris de glace. Jamais modifiés ni effacés. Migration 0037.
 
+### Le dossier médical : `allergie`, `retrait_allergie`, `antecedent`, `consultation`, `ajout_consultation`, `ordonnance`, `ligne_ordonnance`, `depassement_alerte_allergie`
+
+Chaque ligne est rattachée au **patient**, à la **prise en charge** sous laquelle elle a été écrite et à l'**affectation** qui l'a écrite (qui, avec quel rôle, dans quel établissement). La base garantit que le patient de l'acte est celui de la prise en charge, et que l'établissement est le même.
+
+- **allergie** : substance (texte), DCI du catalogue (facultative), réaction ; écrite par un médecin ou un infirmier. **retrait_allergie** : un retrait par allergie, par un médecin, avec un motif (une allergie redéclarée est une nouvelle ligne).
+- **antecedent** : type (`medical`, `chirurgical`, `familial`, `medicamenteux`), description, date de début facultative.
+- **consultation** : motif, examen, diagnostic (texte libre), par un médecin ; **ajout_consultation** : les corrections.
+- **ordonnance** : par un médecin, consultation facultative du même patient ; **ligne_ordonnance** : médicament du catalogue **ou** nom hors catalogue, posologie, quantité, durée ; **depassement_alerte_allergie** : une ligne par allergie dépassée, avec le motif.
+
+**Rien ne se modifie ni ne s'efface** (triggers, droits retirés au serveur). Fichier : [`dossier_medical.rs`](../backend/src/dossier_medical.rs). Migration 0038.
+
 ---
 
 ## Les migrations, une par une
@@ -404,5 +415,6 @@ Une prolongation de 24 heures pendant une hospitalisation (médecin ou infirmier
 | 0035 | Module médecin, étape 1 : rôle `auxiliaire_pharmacie` (affectations, invitations, auteurs des ventes et des mouvements), profil professionnel (numéro d'ordre, spécialité, vérification par l'équipe, effacée à chaque changement), sexe du patient (facultatif) |
 | 0036 | Journal des accès aux données d'un patient (`journal_acces`) et essais sans résultat (`echec_acces_patient`), jamais modifiés ni effacés |
 | 0037 | Code de soin du patient (`code_soin_patient`), prises en charge, prolongations et contrôles des bris de glace (jamais modifiés ni effacés) ; notification `acces_urgence` |
+| 0038 | Dossier médical : allergies (et leurs retraits), antécédents, consultations (et leurs ajouts), ordonnances, lignes et dépassements d'alerte d'allergie ; jamais modifiés ni effacés |
 
 Une migration déjà appliquée ne change plus jamais : toute évolution passe par une nouvelle migration. Un test vérifie aussi qu'aucun caractère invisible ne s'y glisse ([`tests/caracteres_migrations.rs`](../backend/tests/caracteres_migrations.rs)).

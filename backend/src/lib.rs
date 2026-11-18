@@ -21,6 +21,7 @@ pub mod contrat_assurance_munaseb;
 pub mod db;
 pub mod decision_structure;
 pub mod demande_remboursement_munaseb;
+pub mod dossier_medical;
 pub mod email;
 pub mod espace_patient_munaseb;
 #[cfg(test)]

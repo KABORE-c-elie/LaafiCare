@@ -170,6 +170,22 @@ async fn ce_que_chaque_role_peut_faire(pool: PgPool) {
         "DELETE FROM prolongation_prise_en_charge WHERE false",
         "UPDATE controle_bris_de_glace SET conclusion = conclusion WHERE false",
         "DELETE FROM controle_bris_de_glace WHERE false",
+        // Dossier médical (migration 0038) : rien ne se modifie ni ne
+        // s'efface.
+        "UPDATE allergie SET substance = substance WHERE false",
+        "DELETE FROM allergie WHERE false",
+        "DELETE FROM retrait_allergie WHERE false",
+        "UPDATE antecedent SET description = description WHERE false",
+        "DELETE FROM antecedent WHERE false",
+        "UPDATE consultation SET diagnostic = diagnostic WHERE false",
+        "DELETE FROM consultation WHERE false",
+        "DELETE FROM ajout_consultation WHERE false",
+        "UPDATE ordonnance SET date_emission = date_emission WHERE false",
+        "DELETE FROM ordonnance WHERE false",
+        "UPDATE ligne_ordonnance SET quantite = quantite WHERE false",
+        "DELETE FROM ligne_ordonnance WHERE false",
+        "DELETE FROM depassement_alerte_allergie WHERE false",
+        "TRUNCATE consultation",
     ] {
         refuse(&mut conn, sql).await;
     }
